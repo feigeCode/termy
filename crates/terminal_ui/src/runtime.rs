@@ -652,9 +652,9 @@ pub fn keystroke_to_input(keystroke: &Keystroke) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_TERM, TerminalRuntimeConfig, pty_env_overrides, resolve_shell_path};
     #[cfg(target_os = "windows")]
     use super::quote_shell_program_if_needed;
+    use super::{DEFAULT_TERM, TerminalRuntimeConfig, pty_env_overrides, resolve_shell_path};
 
     #[test]
     fn env_overrides_set_term_by_default() {

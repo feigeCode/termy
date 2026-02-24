@@ -4,20 +4,23 @@ use crate::text_input::{TextInputAlignment, TextInputElement, TextInputProvider,
 use gpui::{
     AnyElement, AsyncApp, Context, FocusHandle, Font, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render,
-    Rgba, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, TextAlign,
-    WeakEntity, Window, deferred, div, prelude::FluentBuilder, px,
+    Rgba, ScrollAnchor, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, TextAlign, WeakEntity, Window, deferred, div, prelude::FluentBuilder, px,
 };
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SIDEBAR_WIDTH: f32 = 220.0;
 const NUMERIC_INPUT_WIDTH: f32 = 220.0;
 const NUMERIC_INPUT_HEIGHT: f32 = 34.0;
 const NUMERIC_STEP_BUTTON_SIZE: f32 = 24.0;
 const SETTINGS_CONFIG_WATCH_INTERVAL_MS: u64 = 750;
+const SETTINGS_SEARCH_NAV_THROTTLE_MS: u64 = 110;
+const SETTING_HIGHLIGHT_DURATION_MS: u64 = 900;
+const SETTING_HIGHLIGHT_TICK_MS: u64 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditableField {
@@ -63,6 +66,174 @@ enum SettingsSection {
     Advanced,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SearchableSetting {
+    key: &'static str,
+    section: SettingsSection,
+    title: &'static str,
+    description: &'static str,
+    keywords: &'static [&'static str],
+}
+
+const SEARCHABLE_SETTINGS: &[SearchableSetting] = &[
+    SearchableSetting {
+        key: "theme",
+        section: SettingsSection::Appearance,
+        title: "Theme",
+        description: "Current color scheme name",
+        keywords: &["color", "scheme", "appearance"],
+    },
+    SearchableSetting {
+        key: "background-blur",
+        section: SettingsSection::Appearance,
+        title: "Background Blur",
+        description: "Enable blur effect for transparent backgrounds",
+        keywords: &["blur", "transparent", "window"],
+    },
+    SearchableSetting {
+        key: "background-opacity",
+        section: SettingsSection::Appearance,
+        title: "Background Opacity",
+        description: "Window transparency (0-100%)",
+        keywords: &["opacity", "transparency", "window"],
+    },
+    SearchableSetting {
+        key: "font-family",
+        section: SettingsSection::Appearance,
+        title: "Font Family",
+        description: "Font family used in terminal UI",
+        keywords: &["font", "typeface", "text"],
+    },
+    SearchableSetting {
+        key: "font-size",
+        section: SettingsSection::Appearance,
+        title: "Font Size",
+        description: "Terminal font size in pixels",
+        keywords: &["font", "size", "text", "zoom"],
+    },
+    SearchableSetting {
+        key: "padding-x",
+        section: SettingsSection::Appearance,
+        title: "Horizontal Padding",
+        description: "Left and right terminal padding",
+        keywords: &["padding", "spacing", "left", "right"],
+    },
+    SearchableSetting {
+        key: "padding-y",
+        section: SettingsSection::Appearance,
+        title: "Vertical Padding",
+        description: "Top and bottom terminal padding",
+        keywords: &["padding", "spacing", "top", "bottom"],
+    },
+    SearchableSetting {
+        key: "cursor-blink",
+        section: SettingsSection::Terminal,
+        title: "Cursor Blink",
+        description: "Enable blinking cursor animation",
+        keywords: &["cursor", "blink", "animation"],
+    },
+    SearchableSetting {
+        key: "cursor-style",
+        section: SettingsSection::Terminal,
+        title: "Cursor Style",
+        description: "Shape of the terminal cursor",
+        keywords: &["cursor", "block", "line"],
+    },
+    SearchableSetting {
+        key: "shell",
+        section: SettingsSection::Terminal,
+        title: "Shell",
+        description: "Executable for new sessions",
+        keywords: &["shell", "bash", "zsh", "fish"],
+    },
+    SearchableSetting {
+        key: "term",
+        section: SettingsSection::Terminal,
+        title: "TERM",
+        description: "Terminal type for child apps",
+        keywords: &["term", "terminal type", "env"],
+    },
+    SearchableSetting {
+        key: "colorterm",
+        section: SettingsSection::Terminal,
+        title: "COLORTERM",
+        description: "Color support advertisement",
+        keywords: &["colorterm", "color", "env"],
+    },
+    SearchableSetting {
+        key: "scrollback-history",
+        section: SettingsSection::Terminal,
+        title: "Scrollback History",
+        description: "Lines to keep in buffer",
+        keywords: &["scrollback", "history", "buffer", "lines"],
+    },
+    SearchableSetting {
+        key: "scroll-multiplier",
+        section: SettingsSection::Terminal,
+        title: "Scroll Multiplier",
+        description: "Mouse wheel scroll speed",
+        keywords: &["scroll", "speed", "mouse", "wheel"],
+    },
+    SearchableSetting {
+        key: "palette-keybinds",
+        section: SettingsSection::Terminal,
+        title: "Show Keybindings in Palette",
+        description: "Display keyboard shortcuts in command palette",
+        keywords: &["palette", "keybindings", "shortcuts", "command"],
+    },
+    SearchableSetting {
+        key: "use-tabs",
+        section: SettingsSection::Tabs,
+        title: "Enable Tabs",
+        description: "Show compact tab strip",
+        keywords: &["tabs", "tab bar", "strip"],
+    },
+    SearchableSetting {
+        key: "title-mode",
+        section: SettingsSection::Tabs,
+        title: "Title Mode",
+        description: "How tab titles are determined",
+        keywords: &[
+            "tab", "title", "mode", "smart", "shell", "explicit", "static",
+        ],
+    },
+    SearchableSetting {
+        key: "shell-integration",
+        section: SettingsSection::Tabs,
+        title: "Shell Integration",
+        description: "Export TERMY_* env vars for shell hooks",
+        keywords: &["shell", "integration", "env", "hooks", "tab"],
+    },
+    SearchableSetting {
+        key: "fallback-title",
+        section: SettingsSection::Tabs,
+        title: "Fallback Title",
+        description: "Default when no other source available",
+        keywords: &["fallback", "title", "tab"],
+    },
+    SearchableSetting {
+        key: "working-directory",
+        section: SettingsSection::Advanced,
+        title: "Working Directory",
+        description: "Initial directory for new sessions",
+        keywords: &["working directory", "cwd", "startup", "path"],
+    },
+    SearchableSetting {
+        key: "window-width",
+        section: SettingsSection::Advanced,
+        title: "Default Width",
+        description: "Window width on startup",
+        keywords: &["window", "width", "startup", "size"],
+    },
+    SearchableSetting {
+        key: "window-height",
+        section: SettingsSection::Advanced,
+        title: "Default Height",
+        description: "Window height on startup",
+        keywords: &["window", "height", "startup", "size"],
+    },
+];
+
 pub struct SettingsWindow {
     active_section: SettingsSection,
     config: AppConfig,
@@ -71,6 +242,16 @@ pub struct SettingsWindow {
     available_font_families: Vec<String>,
     focus_handle: FocusHandle,
     active_input: Option<ActiveTextInput>,
+    content_scroll_handle: ScrollHandle,
+    setting_scroll_anchors: HashMap<&'static str, ScrollAnchor>,
+    sidebar_search_state: TextInputState,
+    sidebar_search_active: bool,
+    sidebar_search_selecting: bool,
+    search_navigation_last_target: Option<&'static str>,
+    search_navigation_last_jump_at: Option<Instant>,
+    setting_highlight_key: Option<&'static str>,
+    setting_highlight_started_at: Option<Instant>,
+    setting_highlight_token: u64,
     colors: TerminalColors,
 }
 
@@ -84,6 +265,8 @@ impl SettingsWindow {
         available_font_families.sort_unstable_by_key(|font| font.to_ascii_lowercase());
         available_font_families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
         let colors = TerminalColors::from_theme(&config.theme, &config.colors);
+        let content_scroll_handle = ScrollHandle::new();
+        let setting_scroll_anchors = Self::build_setting_scroll_anchors(&content_scroll_handle);
         let view = Self {
             active_section: SettingsSection::Appearance,
             config,
@@ -92,6 +275,16 @@ impl SettingsWindow {
             available_font_families,
             focus_handle: cx.focus_handle(),
             active_input: None,
+            content_scroll_handle,
+            setting_scroll_anchors,
+            sidebar_search_state: TextInputState::new(String::new()),
+            sidebar_search_active: false,
+            sidebar_search_selecting: false,
+            search_navigation_last_target: None,
+            search_navigation_last_jump_at: None,
+            setting_highlight_key: None,
+            setting_highlight_started_at: None,
+            setting_highlight_token: 0,
             colors,
         };
 
@@ -137,6 +330,276 @@ impl SettingsWindow {
         let mut hasher = DefaultHasher::new();
         contents.hash(&mut hasher);
         Some(hasher.finish())
+    }
+
+    fn build_setting_scroll_anchors(
+        content_scroll_handle: &ScrollHandle,
+    ) -> HashMap<&'static str, ScrollAnchor> {
+        SEARCHABLE_SETTINGS
+            .iter()
+            .map(|setting| {
+                (
+                    setting.key,
+                    ScrollAnchor::for_handle(content_scroll_handle.clone()),
+                )
+            })
+            .collect()
+    }
+
+    fn settings_section_label(section: SettingsSection) -> &'static str {
+        match section {
+            SettingsSection::Appearance => "Appearance",
+            SettingsSection::Terminal => "Terminal",
+            SettingsSection::Tabs => "Tabs",
+            SettingsSection::Advanced => "Advanced",
+        }
+    }
+
+    fn searchable_setting_by_key(key: &'static str) -> Option<&'static SearchableSetting> {
+        SEARCHABLE_SETTINGS
+            .iter()
+            .find(|setting| setting.key == key)
+    }
+
+    fn setting_search_score(
+        setting: &SearchableSetting,
+        query: &str,
+        terms: &[&str],
+    ) -> Option<i32> {
+        let title = setting.title.to_ascii_lowercase();
+        let description = setting.description.to_ascii_lowercase();
+        let section = Self::settings_section_label(setting.section).to_ascii_lowercase();
+        let keywords = setting.keywords.join(" ").to_ascii_lowercase();
+        let haystack = format!("{title} {description} {section} {keywords}");
+
+        if !terms.iter().all(|term| haystack.contains(term)) {
+            return None;
+        }
+
+        let mut score = 0;
+        if title == query {
+            score += 150;
+        }
+        if title.starts_with(query) {
+            score += 95;
+        } else if title.contains(query) {
+            score += 60;
+        }
+        if description.contains(query) {
+            score += 24;
+        }
+        if section.contains(query) {
+            score += 18;
+        }
+        if keywords.contains(query) {
+            score += 30;
+        }
+
+        for term in terms {
+            if title.starts_with(term) {
+                score += 20;
+            } else if title.contains(term) {
+                score += 10;
+            }
+            if keywords.contains(term) {
+                score += 8;
+            }
+        }
+
+        Some(score.max(1))
+    }
+
+    fn sidebar_search_results(&self, limit: usize) -> Vec<&'static SearchableSetting> {
+        let query = self.sidebar_search_state.text().trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        let mut matches: Vec<(i32, &'static SearchableSetting)> = SEARCHABLE_SETTINGS
+            .iter()
+            .filter_map(|setting| {
+                Self::setting_search_score(setting, &query, &terms).map(|score| (score, setting))
+            })
+            .collect();
+
+        matches.sort_by(|(left_score, left_setting), (right_score, right_setting)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left_setting.title.cmp(right_setting.title))
+        });
+
+        matches
+            .into_iter()
+            .map(|(_, setting)| setting)
+            .take(limit)
+            .collect()
+    }
+
+    fn wrap_setting_with_scroll_anchor(
+        &self,
+        setting_key: &'static str,
+        content: AnyElement,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("setting-{setting_key}")))
+            .anchor_scroll(self.setting_scroll_anchors.get(setting_key).cloned())
+            .child(content)
+            .into_any_element()
+    }
+
+    fn blur_sidebar_search(&mut self) {
+        self.sidebar_search_active = false;
+        self.sidebar_search_selecting = false;
+        self.search_navigation_last_target = None;
+        self.search_navigation_last_jump_at = None;
+    }
+
+    fn start_setting_highlight(&mut self, setting_key: &'static str, cx: &mut Context<Self>) {
+        self.setting_highlight_key = Some(setting_key);
+        self.setting_highlight_started_at = Some(Instant::now());
+        self.setting_highlight_token = self.setting_highlight_token.wrapping_add(1);
+        let token = self.setting_highlight_token;
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                smol::Timer::after(Duration::from_millis(SETTING_HIGHLIGHT_TICK_MS)).await;
+
+                let keep_animating = cx.update(|cx| {
+                    this.update(cx, |view, cx| {
+                        if view.setting_highlight_token != token {
+                            return false;
+                        }
+
+                        let done = match view.setting_highlight_started_at {
+                            Some(started_at) => {
+                                started_at.elapsed()
+                                    >= Duration::from_millis(SETTING_HIGHLIGHT_DURATION_MS)
+                            }
+                            None => true,
+                        };
+
+                        if done {
+                            view.setting_highlight_key = None;
+                            view.setting_highlight_started_at = None;
+                        }
+
+                        cx.notify();
+                        !done
+                    })
+                    .unwrap_or(false)
+                });
+
+                if !keep_animating {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn setting_highlight_intensity(&self, setting_key: &'static str) -> f32 {
+        if self.setting_highlight_key != Some(setting_key) {
+            return 0.0;
+        }
+        let Some(started_at) = self.setting_highlight_started_at else {
+            return 0.0;
+        };
+
+        let elapsed = started_at.elapsed().as_secs_f32();
+        let duration = Duration::from_millis(SETTING_HIGHLIGHT_DURATION_MS).as_secs_f32();
+        if duration <= f32::EPSILON {
+            return 0.0;
+        }
+
+        let t = (elapsed / duration).clamp(0.0, 1.0);
+        (1.0 - t).powf(2.0)
+    }
+
+    fn apply_setting_highlight_bg(&self, base: Rgba, intensity: f32) -> Rgba {
+        if intensity <= f32::EPSILON {
+            return base;
+        }
+
+        let mut overlay = self.accent();
+        overlay.a = (0.22 * intensity).clamp(0.0, 1.0);
+        Self::composite_over(overlay, base)
+    }
+
+    fn apply_setting_highlight_border(&self, base: Rgba, intensity: f32) -> Rgba {
+        if intensity <= f32::EPSILON {
+            return base;
+        }
+
+        let mut overlay = self.accent();
+        overlay.a = (0.82 * intensity).clamp(0.0, 1.0);
+        Self::composite_over(overlay, base)
+    }
+
+    fn jump_to_setting(
+        &mut self,
+        setting_key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(setting) = Self::searchable_setting_by_key(setting_key) else {
+            return;
+        };
+
+        self.active_section = setting.section;
+        self.active_input = None;
+        self.sidebar_search_active = true;
+        self.sidebar_search_selecting = false;
+        self.start_setting_highlight(setting_key, cx);
+        if !self.focus_handle.is_focused(window) {
+            self.focus_handle.focus(window, cx);
+        }
+
+        if let Some(anchor) = self.setting_scroll_anchors.get(setting_key).cloned() {
+            cx.on_next_frame(window, move |_, window, cx| {
+                anchor.scroll_to(window, cx);
+                cx.notify();
+            });
+        }
+
+        cx.notify();
+    }
+
+    fn jump_to_first_search_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(first) = self.sidebar_search_results(1).into_iter().next() {
+            self.jump_to_setting(first.key, window, cx);
+        }
+    }
+
+    fn refresh_search_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_search_active
+            && self.active_input.is_none()
+            && !self.sidebar_search_state.text().trim().is_empty()
+        {
+            let Some(first) = self.sidebar_search_results(1).into_iter().next() else {
+                self.search_navigation_last_target = None;
+                self.search_navigation_last_jump_at = None;
+                cx.notify();
+                return;
+            };
+
+            let now = Instant::now();
+            let within_throttle = self.search_navigation_last_jump_at.is_some_and(|last| {
+                now.duration_since(last) < Duration::from_millis(SETTINGS_SEARCH_NAV_THROTTLE_MS)
+            });
+            if self.search_navigation_last_target == Some(first.key) && within_throttle {
+                cx.notify();
+                return;
+            }
+
+            self.search_navigation_last_target = Some(first.key);
+            self.search_navigation_last_jump_at = Some(now);
+            self.jump_to_setting(first.key, window, cx);
+        } else {
+            self.search_navigation_last_target = None;
+            self.search_navigation_last_jump_at = None;
+            cx.notify();
+        }
     }
 
     fn apply_runtime_config(&mut self, config: AppConfig) -> bool {
@@ -298,7 +761,7 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .child(
-                div().px_5().pt_10().pb_4().child(
+                div().px_5().pt_10().pb_2().child(
                     div()
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -306,6 +769,7 @@ impl SettingsWindow {
                         .child("SETTINGS"),
                 ),
             )
+            .child(self.render_sidebar_search(cx))
             .child(
                 div()
                     .flex()
@@ -317,6 +781,122 @@ impl SettingsWindow {
                     .child(self.render_sidebar_item("Tabs", SettingsSection::Tabs, cx))
                     .child(self.render_sidebar_item("Advanced", SettingsSection::Advanced, cx)),
             )
+    }
+
+    fn render_sidebar_search(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let query_text = self.sidebar_search_state.text().to_string();
+        let has_query = !query_text.trim().is_empty();
+        let is_active = self.sidebar_search_active;
+        let text_secondary = self.text_secondary();
+        let text_muted = self.text_muted();
+        let bg_input = self.bg_input();
+        let border_color = self.border_color();
+        let accent = self.accent();
+
+        let search_content = if is_active {
+            let font = Font {
+                family: self.config.font_family.clone().into(),
+                ..Font::default()
+            };
+            TextInputElement::new(
+                cx.entity(),
+                self.focus_handle.clone(),
+                font,
+                px(13.0),
+                text_secondary.into(),
+                self.accent_with_alpha(0.3).into(),
+                TextInputAlignment::Left,
+            )
+            .into_any_element()
+        } else if has_query {
+            div()
+                .text_sm()
+                .text_color(text_secondary)
+                .child(query_text.clone())
+                .into_any_element()
+        } else {
+            div()
+                .text_sm()
+                .text_color(text_muted)
+                .child("Search settings...")
+                .into_any_element()
+        };
+
+        let search_container = div().id("settings-sidebar-search").px_3().pb_3().child(
+            div()
+                .id("settings-sidebar-search-input")
+                .h(px(36.0))
+                .px_3()
+                .rounded_lg()
+                .bg(bg_input)
+                .border_1()
+                .border_color(if is_active {
+                    accent.into()
+                } else {
+                    border_color
+                })
+                .overflow_hidden()
+                .cursor_text()
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(20.0))
+                        .overflow_hidden()
+                        .child(search_content),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        view.active_input = None;
+                        view.sidebar_search_active = true;
+
+                        let index = view
+                            .sidebar_search_state
+                            .character_index_for_point(event.position);
+                        if event.modifiers.shift {
+                            view.sidebar_search_state.select_to_utf16(index);
+                        } else {
+                            view.sidebar_search_state.set_cursor_utf16(index);
+                        }
+                        view.sidebar_search_selecting = true;
+                        view.focus_handle.focus(window, cx);
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
+                    if !view.sidebar_search_selecting || !event.dragging() {
+                        return;
+                    }
+                    let index = view
+                        .sidebar_search_state
+                        .character_index_for_point(event.position);
+                    view.sidebar_search_state.select_to_utf16(index);
+                    cx.notify();
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                        if view.sidebar_search_selecting {
+                            view.sidebar_search_selecting = false;
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                        if view.sidebar_search_selecting {
+                            view.sidebar_search_selecting = false;
+                            cx.notify();
+                        }
+                    }),
+                ),
+        );
+
+        search_container
     }
 
     fn render_sidebar_item(
@@ -380,6 +960,7 @@ impl SettingsWindow {
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.active_section = section;
                 view.active_input = None;
+                view.blur_sidebar_search();
                 cx.notify();
             }))
     }
@@ -557,6 +1138,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.blur_sidebar_search();
         self.active_input = Some(ActiveTextInput::new(
             field,
             self.editable_field_value(field),
@@ -789,23 +1371,29 @@ impl SettingsWindow {
 
     fn render_setting_row(
         &self,
+        search_key: &'static str,
         id: &'static str,
         title: &'static str,
         description: &'static str,
         checked: bool,
         cx: &mut Context<Self>,
         on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-    ) -> impl IntoElement {
-        div()
+    ) -> AnyElement {
+        let highlight_intensity = self.setting_highlight_intensity(search_key);
+        let bg_card = self.apply_setting_highlight_bg(self.bg_card(), highlight_intensity);
+        let border_color =
+            self.apply_setting_highlight_border(self.border_color(), highlight_intensity);
+
+        let row = div()
             .flex()
             .items_center()
             .justify_between()
             .py_3()
             .px_4()
             .rounded_lg()
-            .bg(self.bg_card())
+            .bg(bg_card)
             .border_1()
-            .border_color(self.border_color())
+            .border_color(border_color)
             .child(
                 div()
                     .flex()
@@ -825,7 +1413,9 @@ impl SettingsWindow {
                             .child(description),
                     ),
             )
-            .child(self.render_switch(id, checked, cx, on_toggle))
+            .child(self.render_switch(id, checked, cx, on_toggle));
+
+        self.wrap_setting_with_scroll_anchor(search_key, row.into_any_element())
     }
 
     fn render_switch(
@@ -869,12 +1459,13 @@ impl SettingsWindow {
 
     fn render_editable_row(
         &mut self,
+        search_key: &'static str,
         field: EditableField,
         title: &'static str,
         description: &'static str,
         display_value: String,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let is_numeric = Self::is_numeric_field(field);
         let is_active = self
             .active_input
@@ -883,6 +1474,7 @@ impl SettingsWindow {
         let is_theme_field = field == EditableField::Theme;
         let is_font_field = field == EditableField::FontFamily;
         let accent_inner_border = is_numeric || is_theme_field || is_font_field;
+        let highlight_intensity = self.setting_highlight_intensity(search_key);
         let theme_suggestions = if is_theme_field && is_active {
             let query = self
                 .active_input
@@ -915,9 +1507,10 @@ impl SettingsWindow {
         let text_secondary = self.text_secondary();
         let hover_bg = self.bg_hover();
         let input_bg = self.bg_input();
-        let border_color = self.border_color();
+        let border_color =
+            self.apply_setting_highlight_border(self.border_color(), highlight_intensity);
         let accent = self.accent();
-        let bg_card = self.bg_card();
+        let bg_card = self.apply_setting_highlight_bg(self.bg_card(), highlight_intensity);
         let text_primary = self.text_primary();
         let text_muted = self.text_muted();
 
@@ -1076,7 +1669,7 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
-        div()
+        let row = div()
             .id(SharedString::from(format!("editable-row-{field:?}")))
             .flex()
             .items_start()
@@ -1202,10 +1795,13 @@ impl SettingsWindow {
                             } else {
                                 border_color
                             })
+                            .overflow_hidden()
                             .child(value_element),
                     )
                     .when_some(dropdown, |s, dropdown| s.child(dropdown)),
-            )
+            );
+
+        self.wrap_setting_with_scroll_anchor(search_key, row.into_any_element())
     }
 
     fn handle_key_down(
@@ -1224,12 +1820,68 @@ impl SettingsWindow {
             return;
         }
 
-        if self.active_input.is_none() {
+        let cmd_only = event.keystroke.modifiers.secondary()
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.function;
+
+        if self.active_input.is_none() && !self.sidebar_search_active {
+            return;
+        }
+
+        if self.sidebar_search_active && self.active_input.is_none() {
+            if cmd_only && event.keystroke.key.eq_ignore_ascii_case("a") {
+                self.sidebar_search_state.select_all();
+                cx.notify();
+                return;
+            }
+
+            match event.keystroke.key.as_str() {
+                "enter" => self.jump_to_first_search_result(window, cx),
+                "escape" => {
+                    self.blur_sidebar_search();
+                    cx.notify();
+                }
+                "backspace" => {
+                    self.sidebar_search_state.delete_backward();
+                    self.refresh_search_navigation(window, cx);
+                }
+                "delete" => {
+                    self.sidebar_search_state.delete_forward();
+                    self.refresh_search_navigation(window, cx);
+                }
+                "left" => {
+                    self.sidebar_search_state.move_left();
+                    cx.notify();
+                }
+                "right" => {
+                    self.sidebar_search_state.move_right();
+                    cx.notify();
+                }
+                "home" => {
+                    self.sidebar_search_state.move_to_start();
+                    cx.notify();
+                }
+                "end" => {
+                    self.sidebar_search_state.move_to_end();
+                    cx.notify();
+                }
+                _ => {}
+            }
             return;
         }
 
         let active_field = self.active_input.as_ref().map(|input| input.field);
         let allow_text_editing = active_field.is_some_and(Self::uses_text_input_for_field);
+
+        if cmd_only
+            && event.keystroke.key.eq_ignore_ascii_case("a")
+            && let Some(input) = self.active_input.as_mut()
+        {
+            input.state.select_all();
+            cx.notify();
+            return;
+        }
 
         match event.keystroke.key.as_str() {
             "enter" => {
@@ -1315,10 +1967,12 @@ impl SettingsWindow {
         }
     }
 
-    fn render_cursor_style_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_cursor_style_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.config.cursor_style;
-        let bg_card = self.bg_card();
-        let border_color = self.border_color();
+        let highlight_intensity = self.setting_highlight_intensity("cursor-style");
+        let bg_card = self.apply_setting_highlight_bg(self.bg_card(), highlight_intensity);
+        let border_color =
+            self.apply_setting_highlight_border(self.border_color(), highlight_intensity);
         let text_primary = self.text_primary();
         let text_muted = self.text_muted();
         let text_secondary = self.text_secondary();
@@ -1327,7 +1981,7 @@ impl SettingsWindow {
         let switch_off_bg = self.bg_input();
         let selected_text = self.contrasting_text_for_fill(accent, bg_card);
 
-        div()
+        let row = div()
             .flex()
             .items_center()
             .justify_between()
@@ -1417,13 +2071,17 @@ impl SettingsWindow {
                                 cx.notify();
                             }))
                     }),
-            )
+            );
+
+        self.wrap_setting_with_scroll_anchor("cursor-style", row.into_any_element())
     }
 
-    fn render_tab_title_mode_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tab_title_mode_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.config.tab_title.mode;
-        let bg_card = self.bg_card();
-        let border_color = self.border_color();
+        let highlight_intensity = self.setting_highlight_intensity("title-mode");
+        let bg_card = self.apply_setting_highlight_bg(self.bg_card(), highlight_intensity);
+        let border_color =
+            self.apply_setting_highlight_border(self.border_color(), highlight_intensity);
         let text_primary = self.text_primary();
         let text_muted = self.text_muted();
         let text_secondary = self.text_secondary();
@@ -1432,7 +2090,7 @@ impl SettingsWindow {
         let switch_off_bg = self.bg_input();
         let selected_text = self.contrasting_text_for_fill(accent, bg_card);
 
-        div()
+        let row = div()
             .flex()
             .items_center()
             .justify_between()
@@ -1578,7 +2236,9 @@ impl SettingsWindow {
                                 cx.notify();
                             }))
                     }),
-            )
+            );
+
+        self.wrap_setting_with_scroll_anchor("title-mode", row.into_any_element())
     }
 
     fn render_appearance_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1597,6 +2257,7 @@ impl SettingsWindow {
             .child(self.render_section_header("Appearance", "Customize the look and feel"))
             .child(self.render_group_header("THEME"))
             .child(self.render_editable_row(
+                "theme",
                 EditableField::Theme,
                 "Theme",
                 "Current color scheme name",
@@ -1605,6 +2266,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("WINDOW"))
             .child(self.render_setting_row(
+                "background-blur",
                 "blur-toggle",
                 "Background Blur",
                 "Enable blur effect for transparent backgrounds",
@@ -1619,6 +2281,7 @@ impl SettingsWindow {
                 },
             ))
             .child(self.render_editable_row(
+                "background-opacity",
                 EditableField::BackgroundOpacity,
                 "Background Opacity",
                 "Window transparency (0-100%)",
@@ -1627,6 +2290,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("FONT"))
             .child(self.render_editable_row(
+                "font-family",
                 EditableField::FontFamily,
                 "Font Family",
                 "Font family used in terminal UI",
@@ -1634,6 +2298,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "font-size",
                 EditableField::FontSize,
                 "Font Size",
                 "Terminal font size in pixels",
@@ -1642,6 +2307,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("PADDING"))
             .child(self.render_editable_row(
+                "padding-x",
                 EditableField::PaddingX,
                 "Horizontal Padding",
                 "Left and right terminal padding",
@@ -1649,6 +2315,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "padding-y",
                 EditableField::PaddingY,
                 "Vertical Padding",
                 "Top and bottom terminal padding",
@@ -1681,6 +2348,7 @@ impl SettingsWindow {
             .child(self.render_section_header("Terminal", "Configure terminal behavior"))
             .child(self.render_group_header("CURSOR"))
             .child(self.render_setting_row(
+                "cursor-blink",
                 "cursor-blink-toggle",
                 "Cursor Blink",
                 "Enable blinking cursor animation",
@@ -1694,6 +2362,7 @@ impl SettingsWindow {
             .child(self.render_cursor_style_row(cx))
             .child(self.render_group_header("SHELL"))
             .child(self.render_editable_row(
+                "shell",
                 EditableField::Shell,
                 "Shell",
                 "Executable for new sessions",
@@ -1701,6 +2370,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "term",
                 EditableField::Term,
                 "TERM",
                 "Terminal type for child apps",
@@ -1708,6 +2378,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "colorterm",
                 EditableField::Colorterm,
                 "COLORTERM",
                 "Color support advertisement",
@@ -1716,6 +2387,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("SCROLLING"))
             .child(self.render_editable_row(
+                "scrollback-history",
                 EditableField::ScrollbackHistory,
                 "Scrollback History",
                 "Lines to keep in buffer",
@@ -1723,6 +2395,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "scroll-multiplier",
                 EditableField::ScrollMultiplier,
                 "Scroll Multiplier",
                 "Mouse wheel scroll speed",
@@ -1731,6 +2404,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("UI"))
             .child(self.render_setting_row(
+                "palette-keybinds",
                 "palette-keybinds-toggle",
                 "Show Keybindings in Palette",
                 "Display keyboard shortcuts in command palette",
@@ -1759,6 +2433,7 @@ impl SettingsWindow {
             .child(self.render_section_header("Tabs", "Configure tab behavior and titles"))
             .child(self.render_group_header("TAB BAR"))
             .child(self.render_setting_row(
+                "use-tabs",
                 "use-tabs-toggle",
                 "Enable Tabs",
                 "Show compact tab strip",
@@ -1772,6 +2447,7 @@ impl SettingsWindow {
             .child(self.render_group_header("TAB TITLES"))
             .child(self.render_tab_title_mode_row(cx))
             .child(self.render_setting_row(
+                "shell-integration",
                 "shell-integration-toggle",
                 "Shell Integration",
                 "Export TERMY_* env vars for shell hooks",
@@ -1787,6 +2463,7 @@ impl SettingsWindow {
                 },
             ))
             .child(self.render_editable_row(
+                "fallback-title",
                 EditableField::TabFallbackTitle,
                 "Fallback Title",
                 "Default when no other source available",
@@ -1819,6 +2496,7 @@ impl SettingsWindow {
             .child(self.render_section_header("Advanced", "Advanced configuration options"))
             .child(self.render_group_header("STARTUP"))
             .child(self.render_editable_row(
+                "working-directory",
                 EditableField::WorkingDirectory,
                 "Working Directory",
                 "Initial directory for new sessions",
@@ -1827,6 +2505,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("WINDOW"))
             .child(self.render_editable_row(
+                "window-width",
                 EditableField::WindowWidth,
                 "Default Width",
                 "Window width on startup",
@@ -1834,6 +2513,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
+                "window-height",
                 EditableField::WindowHeight,
                 "Default Height",
                 "Window height on startup",
@@ -1890,19 +2570,135 @@ impl SettingsWindow {
 
 impl TextInputProvider for SettingsWindow {
     fn text_input_state(&self) -> Option<&TextInputState> {
-        self.active_input
+        let settings_input = self
+            .active_input
             .as_ref()
-            .and_then(|input| Self::uses_text_input_for_field(input.field).then_some(&input.state))
+            .and_then(|input| Self::uses_text_input_for_field(input.field).then_some(&input.state));
+
+        settings_input.or_else(|| {
+            self.sidebar_search_active
+                .then_some(&self.sidebar_search_state)
+        })
     }
 
     fn text_input_state_mut(&mut self) -> Option<&mut TextInputState> {
-        self.active_input.as_mut().and_then(|input| {
+        let settings_input = self.active_input.as_mut().and_then(|input| {
             Self::uses_text_input_for_field(input.field).then_some(&mut input.state)
-        })
+        });
+
+        if settings_input.is_some() {
+            settings_input
+        } else if self.sidebar_search_active {
+            Some(&mut self.sidebar_search_state)
+        } else {
+            None
+        }
     }
 }
 
-crate::impl_text_input_handler!(SettingsWindow);
+impl gpui::EntityInputHandler for SettingsWindow {
+    fn text_for_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        adjusted_range: &mut Option<std::ops::Range<usize>>,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Option<String> {
+        let state = TextInputProvider::text_input_state(self)?;
+        Some(state.text_for_range(range, adjusted_range))
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::UTF16Selection> {
+        let state = TextInputProvider::text_input_state(self)?;
+        Some(state.selected_text_range())
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        let state = TextInputProvider::text_input_state(self)?;
+        state.marked_text_range_utf16()
+    }
+
+    fn unmark_text(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) {
+        if let Some(state) = TextInputProvider::text_input_state_mut(self) {
+            state.unmark_text();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<std::ops::Range<usize>>,
+        text: &str,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut changed = false;
+        if let Some(state) = TextInputProvider::text_input_state_mut(self) {
+            state.replace_text_in_range(range, text);
+            changed = true;
+        }
+
+        if changed {
+            self.refresh_search_navigation(window, cx);
+        }
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<std::ops::Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<std::ops::Range<usize>>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut changed = false;
+        if let Some(state) = TextInputProvider::text_input_state_mut(self) {
+            state.replace_and_mark_text_in_range(range, new_text, new_selected_range);
+            changed = true;
+        }
+
+        if changed {
+            self.refresh_search_navigation(window, cx);
+        }
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: std::ops::Range<usize>,
+        element_bounds: gpui::Bounds<gpui::Pixels>,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        let state = TextInputProvider::text_input_state(self)?;
+        Some(state.bounds_for_range(range_utf16, element_bounds))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        point: gpui::Point<gpui::Pixels>,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Option<usize> {
+        let state = TextInputProvider::text_input_state(self)?;
+        Some(state.character_index_for_point(point))
+    }
+
+    fn accepts_text_input(
+        &self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        TextInputProvider::text_input_state(self).is_some()
+    }
+}
 
 impl Render for SettingsWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1912,8 +2708,10 @@ impl Render for SettingsWindow {
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
             .on_any_mouse_down(cx.listener(|view, _event: &MouseDownEvent, _window, cx| {
-                if view.active_input.is_some() {
-                    view.cancel_active_input(cx);
+                if view.active_input.is_some() || view.sidebar_search_active {
+                    view.active_input = None;
+                    view.blur_sidebar_search();
+                    cx.notify();
                 }
             }))
             .flex()
@@ -1927,6 +2725,7 @@ impl Render for SettingsWindow {
                     .flex_1()
                     .h_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.content_scroll_handle)
                     .overflow_x_hidden()
                     .p_6()
                     .child(self.render_content(cx)),

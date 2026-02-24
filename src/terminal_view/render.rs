@@ -1005,7 +1005,9 @@ impl Render for TerminalView {
             cell_size,
             cols: terminal_size.cols as usize,
             rows: terminal_size.rows as usize,
-            clear_bg: gpui::Hsla::transparent_black(),
+            // Clear with the surface background each frame to avoid stale pixel artifacts
+            // (for example dark seams) when default-bg cells are not explicitly repainted.
+            clear_bg: terminal_surface_bg_hsla,
             default_bg: terminal_surface_bg_hsla,
             cursor_color: colors.cursor.into(),
             selection_bg: selection_bg.into(),

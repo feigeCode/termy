@@ -457,6 +457,7 @@ impl TerminalView {
         self.font_size = px(clamped);
         // Force cell size recalc so terminal grid reflows at the new zoom.
         self.cell_size = None;
+        self.clear_tab_title_width_cache();
         cx.notify();
     }
 
@@ -1462,10 +1463,10 @@ impl TerminalView {
         let mut changed = false;
         if event.button == MouseButton::Left && self.tab_strip.drag.is_some() {
             self.commit_tab_drag(cx);
-        } else if self.finish_tab_drag() {
+        } else if self.reset_tab_drag_state() {
             changed = true;
         }
-        if self.tab_strip.hovered_tab.take().is_some() || self.tab_strip.hovered_tab_close.take().is_some() {
+        if self.clear_tab_hover_state() {
             changed = true;
         }
         if changed {
@@ -1521,7 +1522,7 @@ impl TerminalView {
             self.commit_tab_drag(cx);
         }
 
-        if self.tab_strip.hovered_tab.take().is_some() || self.tab_strip.hovered_tab_close.take().is_some() {
+        if self.clear_tab_hover_state() {
             cx.notify();
         }
 
@@ -1739,131 +1740,6 @@ mod tests {
         assert_eq!(
             TerminalView::command_palette_mode_for_action(CommandAction::OpenConfig),
             None
-        );
-    }
-
-    #[test]
-    fn titlebar_window_move_requires_armed_and_dragging() {
-        assert!(!TerminalView::should_start_titlebar_window_move(
-            false, true, false
-        ));
-        assert!(!TerminalView::should_start_titlebar_window_move(
-            true, false, false
-        ));
-        assert!(TerminalView::should_start_titlebar_window_move(
-            true, true, false
-        ));
-    }
-
-    #[test]
-    fn titlebar_window_move_does_not_start_during_tab_drag() {
-        assert!(!TerminalView::should_start_titlebar_window_move(
-            true, true, true
-        ));
-    }
-
-    #[test]
-    fn titlebar_move_arm_state_transitions_on_mouse_down() {
-        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(true, 1));
-        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(
-            false, 2
-        ));
-        assert!(TerminalView::titlebar_move_armed_after_mouse_down(false, 1));
-    }
-
-    #[test]
-    fn titlebar_single_click_non_interactive_arms_window_move() {
-        assert!(TerminalView::titlebar_move_armed_after_mouse_down(false, 1));
-    }
-
-    #[test]
-    fn titlebar_single_click_interactive_does_not_arm_window_move() {
-        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(true, 1));
-    }
-
-    #[test]
-    fn titlebar_double_click_non_interactive_does_not_arm_window_move() {
-        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(
-            false, 2
-        ));
-    }
-
-    #[test]
-    fn titlebar_move_arm_state_transitions_on_mouse_up() {
-        assert!(!TerminalView::titlebar_move_armed_after_mouse_up());
-    }
-
-    #[test]
-    fn unified_titlebar_tab_shell_hit_test_detects_tabs_and_respects_y_bounds() {
-        let widths = [100.0, 120.0];
-        let scroll_offset_x = 0.0;
-        let tab_y = TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT - 1.0;
-
-        assert!(TerminalView::unified_titlebar_tab_shell_hit_test(
-            TAB_HORIZONTAL_PADDING + 20.0,
-            tab_y,
-            widths,
-            scroll_offset_x
-        ));
-        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
-            TAB_HORIZONTAL_PADDING + 240.0,
-            tab_y,
-            widths,
-            scroll_offset_x
-        ));
-        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
-            TAB_HORIZONTAL_PADDING + 20.0,
-            TOP_STRIP_CONTENT_OFFSET_Y,
-            widths,
-            scroll_offset_x
-        ));
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_prefers_horizontal_axis() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(48.0, 12.0),
-            -48.0
-        );
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_prefers_vertical_axis_when_dominant() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(12.0, 48.0),
-            -48.0
-        );
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_preserves_small_non_zero_trackpad_deltas() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(0.2, -0.4),
-            0.4
-        );
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_returns_zero_only_for_zero_input() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(0.0, 0.0),
-            0.0
-        );
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_falls_back_to_vertical_axis_for_zero_horizontal() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(0.0, -30.0),
-            30.0
-        );
-    }
-
-    #[test]
-    fn tab_strip_scroll_delta_falls_back_to_horizontal_axis_for_zero_vertical() {
-        assert_eq!(
-            TerminalView::tab_strip_scroll_delta_from_pixels(12.0, 0.0),
-            -12.0
         );
     }
 

@@ -123,6 +123,8 @@ const SEARCH_BUTTON_TEXT_ALPHA: f32 = 0.70;
 const SEARCH_BUTTON_HOVER_BG_ALPHA: f32 = 0.20;
 const SEARCH_INPUT_SELECTION_ALPHA: f32 = 0.30;
 
+type TabId = u64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CellPos {
     col: usize,
@@ -171,6 +173,7 @@ impl TerminalScrollbarMarkerCache {
 }
 
 struct TerminalTab {
+    id: TabId,
     terminal: Terminal,
     manual_title: Option<String>,
     explicit_title: Option<String>,
@@ -185,7 +188,7 @@ struct TerminalTab {
 }
 
 impl TerminalTab {
-    fn new(terminal: Terminal, predicted_prompt_title: Option<String>) -> Self {
+    fn new(id: TabId, terminal: Terminal, predicted_prompt_title: Option<String>) -> Self {
         let title = predicted_prompt_title
             .as_deref()
             .unwrap_or(DEFAULT_TAB_TITLE)
@@ -197,6 +200,7 @@ impl TerminalTab {
             TerminalView::tab_display_width_for_text_px_with_max(title_text_width, TAB_MAX_WIDTH);
 
         Self {
+            id,
             terminal,
             manual_title: None,
             explicit_title: predicted_prompt_title,
@@ -464,6 +468,7 @@ pub(crate) fn initial_window_background_appearance(
 /// The main terminal view component
 pub struct TerminalView {
     tabs: Vec<TerminalTab>,
+    next_tab_id: TabId,
     active_tab: usize,
     renaming_tab: Option<usize>,
     rename_input: InlineInputState,
@@ -520,7 +525,6 @@ pub struct TerminalView {
     inline_input_selecting: bool,
     terminal_scroll_accumulator_y: f32,
     input_scroll_suppress_until: Option<Instant>,
-    titlebar_move_armed: bool,
     terminal_scrollbar_visibility: TerminalScrollbarVisibility,
     terminal_scrollbar_style: TerminalScrollbarStyle,
     terminal_scrollbar_visibility_controller: ScrollbarVisibilityController,
@@ -945,7 +949,8 @@ impl TerminalView {
         .expect("Failed to create terminal");
 
         let mut view = Self {
-            tabs: vec![TerminalTab::new(terminal, startup_predicted_title)],
+            tabs: vec![TerminalTab::new(1, terminal, startup_predicted_title)],
+            next_tab_id: 2,
             active_tab: 0,
             renaming_tab: None,
             rename_input: InlineInputState::new(String::new()),
@@ -1002,7 +1007,6 @@ impl TerminalView {
             inline_input_selecting: false,
             terminal_scroll_accumulator_y: 0.0,
             input_scroll_suppress_until: None,
-            titlebar_move_armed: false,
             terminal_scrollbar_visibility: config.terminal_scrollbar_visibility,
             terminal_scrollbar_style: config.terminal_scrollbar_style,
             terminal_scrollbar_visibility_controller: ScrollbarVisibilityController::default(),
@@ -1046,6 +1050,8 @@ impl TerminalView {
 
     fn apply_runtime_config(&mut self, config: AppConfig, cx: &mut Context<Self>) -> bool {
         keybindings::install_keybindings(cx, &config);
+        let previous_font_family = self.font_family.clone();
+        let previous_font_size = self.font_size;
         self.theme_id = config.theme.clone();
         self.colors = TerminalColors::from_theme(&config.theme, &config.colors);
         self.inactive_tab_scrollback = config.inactive_tab_scrollback;
@@ -1068,6 +1074,9 @@ impl TerminalView {
         self.cursor_blink = config.cursor_blink;
         self.cursor_blink_visible = true;
         self.cell_size = None;
+        if self.font_family != previous_font_family || self.font_size != previous_font_size {
+            self.clear_tab_title_width_cache();
+        }
         self.background_opacity = config.background_opacity;
         self.background_blur = config.background_blur;
         self.padding_x = config.padding_x.max(0.0);

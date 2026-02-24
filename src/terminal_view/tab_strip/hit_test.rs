@@ -79,6 +79,32 @@ mod tests {
     }
 
     #[test]
+    fn shell_hit_test_detects_tabs_and_respects_y_bounds() {
+        let widths = [100.0, 120.0];
+        let scroll_offset_x = 0.0;
+        let tab_y = TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT - 1.0;
+
+        assert!(TerminalView::unified_titlebar_tab_shell_hit_test(
+            TAB_HORIZONTAL_PADDING + 20.0,
+            tab_y,
+            widths,
+            scroll_offset_x
+        ));
+        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
+            TAB_HORIZONTAL_PADDING + 240.0,
+            tab_y,
+            widths,
+            scroll_offset_x
+        ));
+        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
+            TAB_HORIZONTAL_PADDING + 20.0,
+            TOP_STRIP_CONTENT_OFFSET_Y,
+            widths,
+            scroll_offset_x
+        ));
+    }
+
+    #[test]
     fn interactive_hit_test_detects_tab_shell() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
         let x = geometry.row_start_x + TAB_HORIZONTAL_PADDING + 12.0;

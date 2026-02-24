@@ -3,7 +3,6 @@ use super::super::tabs::{TabDropMarkerSide, TabStripOverflowState};
 use super::super::*;
 use super::layout::TabStripGeometry;
 use gpui::{Hsla, TextRun};
-use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 struct TabStripPalette {
@@ -49,17 +48,24 @@ struct TabItemRenderInput {
 
 impl TerminalView {
     fn measure_tab_title_width(
+        &mut self,
         window: &Window,
         font_family: &SharedString,
+        font_family_key: &str,
         title: &str,
-        width_cache: &mut HashMap<String, f32>,
     ) -> f32 {
         if title.is_empty() {
             return 0.0;
         }
 
-        if let Some(width) = width_cache.get(title) {
-            return *width;
+        let font_size_px = 12.0f32;
+        let font_size_bits = font_size_px.to_bits();
+        if let Some(width) =
+            self.tab_strip
+                .title_width_cache
+                .get(title, font_family_key, font_size_bits)
+        {
+            return width;
         }
 
         let run = TextRun {
@@ -81,23 +87,27 @@ impl TerminalView {
         };
         let shaped = window
             .text_system()
-            .shape_line(title.to_string().into(), px(12.0), &[run], None);
+            .shape_line(title.to_string().into(), px(font_size_px), &[run], None);
         let width: f32 = shaped.x_for_index(title.len()).into();
         let width = width.max(0.0);
-        width_cache.insert(title.to_string(), width);
+        self.tab_strip
+            .title_width_cache
+            .insert(title, font_family_key, font_size_bits, width);
         width
     }
 
     fn measure_tab_title_widths(
-        &self,
+        &mut self,
         window: &Window,
         font_family: &SharedString,
-        width_cache: &mut HashMap<String, f32>,
+        font_family_key: &str,
     ) -> Vec<f32> {
-        self.tabs
-            .iter()
-            .map(|tab| Self::measure_tab_title_width(window, font_family, &tab.title, width_cache))
-            .collect()
+        let mut widths = Vec::with_capacity(self.tabs.len());
+        for index in 0..self.tabs.len() {
+            let title = self.tabs[index].title.clone();
+            widths.push(self.measure_tab_title_width(window, font_family, font_family_key, &title));
+        }
+        widths
     }
 
     fn resolve_tab_strip_palette(&self, colors: &TerminalColors, tabbar_bg: gpui::Rgba) -> TabStripPalette {
@@ -356,18 +366,7 @@ impl TerminalView {
             )
             .on_mouse_move(
                 cx.listener(move |this, _event: &MouseMoveEvent, _window, cx| {
-                    let mut hover_changed = false;
-                    if this.tab_strip.hovered_tab != Some(hover_tab_index) {
-                        this.tab_strip.hovered_tab = Some(hover_tab_index);
-                        hover_changed = true;
-                    }
-                    if this.tab_strip.hovered_tab_close != Some(hover_tab_index) {
-                        this.tab_strip.hovered_tab_close = Some(hover_tab_index);
-                        hover_changed = true;
-                    }
-                    if hover_changed {
-                        cx.notify();
-                    }
+                    this.on_tab_close_mouse_move(hover_tab_index, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -391,35 +390,13 @@ impl TerminalView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                    this.switch_tab(switch_tab_index, cx);
-                    this.begin_tab_drag(switch_tab_index);
-                    if event.click_count == 2 {
-                        this.begin_rename_tab(switch_tab_index, cx);
-                    }
+                    this.on_tab_mouse_down(switch_tab_index, event.click_count, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_mouse_move(
                 cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                    let mut hovered_changed = if this.tab_strip.hovered_tab != Some(hover_tab_index) {
-                        this.tab_strip.hovered_tab = Some(hover_tab_index);
-                        true
-                    } else {
-                        false
-                    };
-                    if this.tab_strip.hovered_tab_close.take().is_some() {
-                        hovered_changed = true;
-                    }
-                    let drag_changed = if event.dragging() {
-                        let (pointer_x, viewport_width) =
-                            this.tab_strip_pointer_x_from_window_x(window, event.position.x);
-                        this.update_tab_drag_preview(pointer_x, viewport_width, cx)
-                    } else {
-                        false
-                    };
-                    if hovered_changed && !drag_changed {
-                        cx.notify();
-                    }
+                    this.on_tab_mouse_move(hover_tab_index, event, window, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -497,8 +474,8 @@ impl TerminalView {
         state: &TabStripRenderState,
         palette: &TabStripPalette,
         font_family: &SharedString,
+        font_family_key: &str,
         colors: &TerminalColors,
-        title_width_cache: &mut HashMap<String, f32>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut tabs_scroll_content = div()
@@ -512,22 +489,7 @@ impl TerminalView {
             .items_end()
             .gap(px(TAB_ITEM_GAP))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                let hovered_changed = this.tab_strip.hovered_tab.take().is_some()
-                    || this.tab_strip.hovered_tab_close.take().is_some();
-                let drag_changed = if event.dragging() {
-                    let (pointer_x, viewport_width) =
-                        this.tab_strip_pointer_x_from_window_x(window, event.position.x);
-                    this.update_tab_drag_preview(pointer_x, viewport_width, cx)
-                } else {
-                    if this.tab_strip.drag.is_some() {
-                        this.commit_tab_drag(cx);
-                        return;
-                    }
-                    false
-                };
-                if hovered_changed && !drag_changed {
-                    cx.notify();
-                }
+                this.on_tabs_content_mouse_move(event, window, cx);
             }));
 
         tabs_scroll_content = tabs_scroll_content.child(
@@ -539,8 +501,10 @@ impl TerminalView {
         );
 
         for index in 0..self.tabs.len() {
-            let tab = &self.tabs[index];
-            let tab_width = tab.display_width;
+            let (tab_width, tab_title) = {
+                let tab = &self.tabs[index];
+                (tab.display_width, tab.title.clone())
+            };
             let is_active = index == self.active_tab;
             let is_hovered = self.tab_strip.hovered_tab == Some(index);
             let show_tab_close = Self::tab_shows_close(
@@ -556,12 +520,12 @@ impl TerminalView {
             } else {
                 0.0
             };
-            let available_text_px = Self::tab_title_text_area_width(tab.display_width, close_slot_width);
+            let available_text_px = Self::tab_title_text_area_width(tab_width, close_slot_width);
             let label = Self::format_tab_label_for_render_measured(
-                &tab.title,
+                &tab_title,
                 available_text_px,
                 |candidate| {
-                    Self::measure_tab_title_width(window, font_family, candidate, title_width_cache)
+                    self.measure_tab_title_width(window, font_family, font_family_key, candidate)
                 },
             );
 
@@ -670,22 +634,7 @@ impl TerminalView {
             .h_full()
             .on_scroll_wheel(cx.listener(Self::handle_tab_strip_action_rail_scroll_wheel))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                let hovered_changed = this.tab_strip.hovered_tab.take().is_some()
-                    || this.tab_strip.hovered_tab_close.take().is_some();
-                if !event.dragging() {
-                    if hovered_changed {
-                        cx.notify();
-                    }
-                    return;
-                }
-
-                let (pointer_x, viewport_width) =
-                    this.tab_strip_pointer_x_from_window_x(window, event.position.x);
-                if !this.update_tab_drag_preview(pointer_x, viewport_width, cx)
-                    && hovered_changed
-                {
-                    cx.notify();
-                }
+                this.on_action_rail_mouse_move(event, window, cx);
             }))
             .child(
                 div()
@@ -722,9 +671,9 @@ impl TerminalView {
         tabbar_bg: gpui::Rgba,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut title_width_cache = HashMap::new();
+        let font_family_key = font_family.to_string();
         let measured_title_widths =
-            self.measure_tab_title_widths(window, font_family, &mut title_width_cache);
+            self.measure_tab_title_widths(window, font_family, font_family_key.as_str());
         self.sync_tab_title_text_widths(&measured_title_widths);
 
         let state = self.build_tab_strip_render_state(window);
@@ -734,8 +683,8 @@ impl TerminalView {
             &state,
             &palette,
             font_family,
+            font_family_key.as_str(),
             colors,
-            &mut title_width_cache,
             cx,
         );
 

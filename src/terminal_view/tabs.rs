@@ -14,6 +14,83 @@ pub(super) struct TabStripOverflowState {
 }
 
 impl TerminalView {
+    fn clear_tab_hover_fields(
+        hovered_tab: &mut Option<usize>,
+        hovered_tab_close: &mut Option<usize>,
+    ) -> bool {
+        let hovered_tab_changed = hovered_tab.take().is_some();
+        let hovered_close_changed = hovered_tab_close.take().is_some();
+        hovered_tab_changed || hovered_close_changed
+    }
+
+    fn reset_tab_rename_fields(
+        renaming_tab: &mut Option<usize>,
+        rename_input: &mut InlineInputState,
+        inline_input_selecting: &mut bool,
+    ) -> bool {
+        let was_renaming = renaming_tab.take().is_some();
+        let had_text = !rename_input.text().is_empty();
+        let was_selecting = *inline_input_selecting;
+        rename_input.clear();
+        *inline_input_selecting = false;
+        was_renaming || had_text || was_selecting
+    }
+
+    fn allocate_tab_id(&mut self) -> TabId {
+        let id = self.next_tab_id;
+        self.next_tab_id = self.next_tab_id.checked_add(1).expect("tab id overflow");
+        id
+    }
+
+    fn tab_index_for_id_in_order(
+        tab_ids: impl IntoIterator<Item = TabId>,
+        tab_id: TabId,
+    ) -> Option<usize> {
+        tab_ids
+            .into_iter()
+            .enumerate()
+            .find_map(|(index, candidate)| (candidate == tab_id).then_some(index))
+    }
+
+    pub(super) fn index_for_tab_id(&self, tab_id: TabId) -> Option<usize> {
+        Self::tab_index_for_id_in_order(self.tabs.iter().map(|tab| tab.id), tab_id)
+    }
+
+    pub(super) fn clear_tab_title_width_cache(&mut self) {
+        self.tab_strip.title_width_cache.clear();
+    }
+
+    pub(super) fn invalidate_tab_title_width_cache_for_title(&mut self, title: &str) {
+        self.tab_strip.title_width_cache.invalidate_title(title);
+    }
+
+    pub(super) fn clear_tab_hover_state(&mut self) -> bool {
+        Self::clear_tab_hover_fields(
+            &mut self.tab_strip.hovered_tab,
+            &mut self.tab_strip.hovered_tab_close,
+        )
+    }
+
+    pub(super) fn reset_tab_rename_state(&mut self) -> bool {
+        Self::reset_tab_rename_fields(
+            &mut self.renaming_tab,
+            &mut self.rename_input,
+            &mut self.inline_input_selecting,
+        )
+    }
+
+    pub(super) fn reset_tab_drag_state(&mut self) -> bool {
+        self.finish_tab_drag()
+    }
+
+    pub(super) fn reset_tab_interaction_state(&mut self) -> bool {
+        let rename_changed = self.reset_tab_rename_state();
+        let hover_changed = self.clear_tab_hover_state();
+        let drag_changed = self.reset_tab_drag_state();
+        self.clear_selection();
+        rename_changed || hover_changed || drag_changed
+    }
+
     pub(super) fn tab_strip_fixed_content_width(&self) -> f32 {
         let tabs_width: f32 = self.tabs.iter().map(|tab| tab.display_width).sum();
         let gaps = TAB_ITEM_GAP * self.tabs.len().saturating_sub(1) as f32;
@@ -614,17 +691,12 @@ impl TerminalView {
         let predicted_title =
             Self::predicted_prompt_seed_title(&self.tab_title, predicted_prompt_cwd.as_deref());
 
-        self.tabs.push(TerminalTab::new(terminal, predicted_title));
+        let tab_id = self.allocate_tab_id();
+        self.tabs.push(TerminalTab::new(tab_id, terminal, predicted_title));
         self.active_tab = self.tabs.len() - 1;
         self.refresh_tab_title(self.active_tab);
         self.mark_tab_strip_layout_dirty();
-        self.renaming_tab = None;
-        self.rename_input.clear();
-        self.inline_input_selecting = false;
-        self.tab_strip.hovered_tab = None;
-        self.tab_strip.hovered_tab_close = None;
-        self.finish_tab_drag();
-        self.clear_selection();
+        self.reset_tab_interaction_state();
         self.scroll_active_tab_into_view();
         cx.notify();
     }
@@ -645,9 +717,7 @@ impl TerminalView {
 
         match self.renaming_tab {
             Some(editing) if editing == index => {
-                self.renaming_tab = None;
-                self.rename_input.clear();
-                self.inline_input_selecting = false;
+                self.reset_tab_rename_state();
             }
             Some(editing) if editing > index => {
                 self.renaming_tab = Some(editing - 1);
@@ -665,7 +735,7 @@ impl TerminalView {
             Some(hovered) if hovered > index => Some(hovered - 1),
             value => value,
         };
-        self.finish_tab_drag();
+        self.reset_tab_drag_state();
 
         self.clear_selection();
         self.scroll_active_tab_into_view();
@@ -692,7 +762,7 @@ impl TerminalView {
             self.switch_tab(index, cx);
         }
 
-        self.finish_tab_drag();
+        self.reset_tab_drag_state();
         self.renaming_tab = Some(index);
         self.rename_input.set_text(self.tabs[index].title.clone());
         self.reset_cursor_blink_phase();
@@ -727,10 +797,8 @@ impl TerminalView {
                 .set_scrollback_history(self.terminal_runtime.scrollback_history);
         }
 
-        self.renaming_tab = None;
-        self.rename_input.clear();
-        self.inline_input_selecting = false;
-        self.finish_tab_drag();
+        self.reset_tab_rename_state();
+        self.reset_tab_drag_state();
         self.clear_selection();
         self.scroll_active_tab_into_view();
         cx.notify();
@@ -747,10 +815,8 @@ impl TerminalView {
             .filter(|title| !title.is_empty());
         self.refresh_tab_title(index);
 
-        self.renaming_tab = None;
-        self.rename_input.clear();
-        self.inline_input_selecting = false;
-        self.finish_tab_drag();
+        self.reset_tab_rename_state();
+        self.reset_tab_drag_state();
         cx.notify();
     }
 
@@ -759,10 +825,8 @@ impl TerminalView {
             return;
         }
 
-        self.renaming_tab = None;
-        self.rename_input.clear();
-        self.inline_input_selecting = false;
-        self.finish_tab_drag();
+        self.reset_tab_rename_state();
+        self.reset_tab_drag_state();
         cx.notify();
     }
 }
@@ -780,6 +844,49 @@ mod tests {
             (actual - expected).abs() < 0.0001,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn clear_tab_hover_fields_clears_both_slots_and_reports_change() {
+        let mut hovered_tab = Some(2);
+        let mut hovered_tab_close = Some(4);
+        assert!(TerminalView::clear_tab_hover_fields(
+            &mut hovered_tab,
+            &mut hovered_tab_close
+        ));
+        assert_eq!(hovered_tab, None);
+        assert_eq!(hovered_tab_close, None);
+        assert!(!TerminalView::clear_tab_hover_fields(
+            &mut hovered_tab,
+            &mut hovered_tab_close
+        ));
+    }
+
+    #[test]
+    fn reset_tab_rename_fields_clears_text_focus_and_selection() {
+        let mut renaming_tab = Some(1);
+        let mut rename_input = InlineInputState::new("rename me".to_string());
+        let mut inline_input_selecting = true;
+        assert!(TerminalView::reset_tab_rename_fields(
+            &mut renaming_tab,
+            &mut rename_input,
+            &mut inline_input_selecting
+        ));
+        assert_eq!(renaming_tab, None);
+        assert!(rename_input.text().is_empty());
+        assert!(!inline_input_selecting);
+    }
+
+    #[test]
+    fn reset_tab_rename_fields_is_noop_when_state_is_already_clear() {
+        let mut renaming_tab = None;
+        let mut rename_input = InlineInputState::new(String::new());
+        let mut inline_input_selecting = false;
+        assert!(!TerminalView::reset_tab_rename_fields(
+            &mut renaming_tab,
+            &mut rename_input,
+            &mut inline_input_selecting
+        ));
     }
 
     #[test]
@@ -863,6 +970,24 @@ mod tests {
         assert_eq!(TerminalView::remap_index_after_move(1, 3, 1), 2);
         assert_eq!(TerminalView::remap_index_after_move(2, 3, 1), 3);
         assert_eq!(TerminalView::remap_index_after_move(4, 3, 1), 4);
+    }
+
+    #[test]
+    fn tab_index_for_id_follows_reordered_tab_sequence() {
+        let tab_ids: [TabId; 4] = [11, 13, 17, 19];
+        assert_eq!(TerminalView::tab_index_for_id_in_order(tab_ids, 17), Some(2));
+
+        // Simulate drag reorder 17 -> slot 1
+        let reordered: [TabId; 4] = [11, 17, 13, 19];
+        assert_eq!(TerminalView::tab_index_for_id_in_order(reordered, 17), Some(1));
+    }
+
+    #[test]
+    fn tab_index_for_id_returns_none_after_tab_close() {
+        let tab_ids: [TabId; 4] = [11, 13, 17, 19];
+        let after_close: [TabId; 3] = [11, 13, 19];
+        assert_eq!(TerminalView::tab_index_for_id_in_order(tab_ids, 17), Some(2));
+        assert_eq!(TerminalView::tab_index_for_id_in_order(after_close, 17), None);
     }
 
     #[test]

@@ -201,12 +201,17 @@ fn extract_local_path_from_file_url(_: &str) -> Option<String> {
 }
 
 fn canonicalize_path_to_file_url(token: &str) -> Option<String> {
-    if let Some(cached) = lookup_cached_file_url(token) {
+    let normalized_key = strip_line_col_suffix(token);
+    if normalized_key.is_empty() {
+        return None;
+    }
+
+    if let Some(cached) = lookup_cached_file_url(normalized_key) {
         return cached;
     }
 
-    let resolved = canonicalize_path_to_file_url_uncached(token);
-    store_cached_file_url(token, resolved.clone());
+    let resolved = canonicalize_path_to_file_url_uncached(normalized_key);
+    store_cached_file_url(normalized_key, resolved.clone());
     resolved
 }
 
@@ -264,9 +269,9 @@ fn canonicalize_path_to_file_url_uncached(token: &str) -> Option<String> {
     let path = canonical[2..].trim_start_matches('/');
 
     if path.is_empty() {
-        Some(format!("file:///{drive}/"))
+        Some(format!("file:///{drive}:/"))
     } else {
-        Some(format!("file:///{drive}/{path}"))
+        Some(format!("file:///{drive}:/{path}"))
     }
 }
 

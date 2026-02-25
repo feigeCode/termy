@@ -48,8 +48,10 @@ rfd = "0.15"
 
 # JSON parsing
 serde_json = "1.0"
+
+# File I/O
 tempfile = "3"
-fs2 = "0.4"
+fs4 = { version = "0.8", features = ["sync"] }
 
 # Termy Workspace Crates
 termy_auto_update = { path = "crates/auto_update" }

@@ -6,7 +6,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use fs2::FileExt;
+use fs4::FileExt;
 use termy_config_core::{Rgb8, canonical_color_key, parse_theme_id};
 
 use super::ConfigIoError;
@@ -66,10 +66,6 @@ fn update_config_contents<R>(
             source,
         })
         .map_err(|error| error.to_string())?;
-
-    let (updated, result) = updater(&existing)?;
-    write_atomic(&config_path, &updated).map_err(|error| error.to_string())?;
-    notify_config_changed();
     config_lock_file.unlock().map_err(|source| {
         format!(
             "Failed to unlock config file '{}': {}",
@@ -77,6 +73,11 @@ fn update_config_contents<R>(
             source
         )
     })?;
+    drop(config_lock_file);
+
+    let (updated, result) = updater(&existing)?;
+    write_atomic(&config_path, &updated).map_err(|error| error.to_string())?;
+    notify_config_changed();
     process_lock_file.unlock().map_err(|source| {
         format!(
             "Failed to unlock config lock file '{}': {}",

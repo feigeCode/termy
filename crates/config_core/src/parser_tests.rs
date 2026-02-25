@@ -25,8 +25,8 @@ fn from_contents_with_report_captures_diagnostics() {
          font_size = 12\n",
     );
 
-    assert_eq!(report.config.font_size, 12.0);
-    assert_eq!(report.diagnostics.len(), 6);
+    assert_eq!(report.config.font_size, AppConfig::default().font_size);
+    assert_eq!(report.diagnostics.len(), 4);
     assert_eq!(
         report.diagnostics[0].kind,
         ConfigDiagnosticKind::InvalidSyntax
@@ -43,13 +43,25 @@ fn from_contents_with_report_captures_diagnostics() {
         report.diagnostics[3].kind,
         ConfigDiagnosticKind::InvalidValue
     );
-    assert_eq!(
-        report.diagnostics[4].kind,
-        ConfigDiagnosticKind::InvalidValue
+}
+
+#[test]
+fn non_color_sections_do_not_mutate_root_keys() {
+    let defaults = AppConfig::default();
+    let report = parse_report(
+        "[tab_title]\n\
+         font_size = 18\n\
+         cursor_blink = false\n\
+         [unknown]\n\
+         font_size = 20\n",
     );
+
+    assert_eq!(report.config.font_size, defaults.font_size);
+    assert_eq!(report.config.cursor_blink, defaults.cursor_blink);
+    assert_eq!(report.diagnostics.len(), 1);
     assert_eq!(
-        report.diagnostics[5].kind,
-        ConfigDiagnosticKind::DuplicateRootKey
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::UnknownSection
     );
 }
 
@@ -354,6 +366,9 @@ fn numeric_keys_parse_table_driven() {
         parse("scrollback_history = 200000\n").scrollback_history,
         100_000
     );
+
+    assert_eq!(parse("font_size = inf\n").font_size, defaults.font_size);
+    assert_eq!(parse("padding_x = NaN\n").padding_x, defaults.padding_x);
 }
 
 #[test]

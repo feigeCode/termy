@@ -65,6 +65,7 @@ impl AppConfig {
         let mut diagnostics = Vec::new();
         let mut tab_title_priority_overridden = false;
         let mut in_colors_section = false;
+        let mut in_non_root_section = false;
         let mut seen_root_keys: HashMap<RootKey, usize> = HashMap::new();
 
         for (line_number, line) in contents.lines().enumerate() {
@@ -77,6 +78,7 @@ impl AppConfig {
             if line.starts_with('[') && line.ends_with(']') {
                 let section = line[1..line.len() - 1].trim().to_ascii_lowercase();
                 in_colors_section = section == "colors";
+                in_non_root_section = true;
                 if !VALID_SECTIONS.iter().any(|valid| *valid == section) {
                     diagnostics.push(ConfigDiagnostic {
                         line_number,
@@ -84,6 +86,10 @@ impl AppConfig {
                         message: format!("Unknown section '[{}]'", section),
                     });
                 }
+                continue;
+            }
+
+            if in_non_root_section && !in_colors_section {
                 continue;
             }
 
@@ -608,7 +614,13 @@ fn parse_positive_f32_field(
     key: &str,
     value: &str,
 ) -> Option<f32> {
-    let parsed = parse_f32_field(diagnostics, line_number, key, value, "a positive number")?;
+    let parsed = parse_finite_f32_field(
+        diagnostics,
+        line_number,
+        key,
+        value,
+        "a positive number",
+    )?;
     if parsed > 0.0 {
         Some(parsed)
     } else {
@@ -623,7 +635,7 @@ fn parse_non_negative_f32_field(
     key: &str,
     value: &str,
 ) -> Option<f32> {
-    let parsed = parse_f32_field(diagnostics, line_number, key, value, "a number >= 0")?;
+    let parsed = parse_finite_f32_field(diagnostics, line_number, key, value, "a number >= 0")?;
     if parsed >= 0.0 {
         Some(parsed)
     } else {

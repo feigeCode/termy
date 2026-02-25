@@ -186,6 +186,24 @@ define_commands!(
             CommandPaletteVisibility::Always
         ))
     ),
+    (
+        MoveTabLeft,
+        TERMINAL_CONTEXT,
+        Some(palette(
+            "Move Tab Left",
+            "reorder tab left",
+            CommandPaletteVisibility::Always
+        ))
+    ),
+    (
+        MoveTabRight,
+        TERMINAL_CONTEXT,
+        Some(palette(
+            "Move Tab Right",
+            "reorder tab right",
+            CommandPaletteVisibility::Always
+        ))
+    ),
     (MinimizeWindow, TERMINAL_CONTEXT, None),
     (
         RenameTab,
@@ -423,6 +441,16 @@ mod tests {
             entries
                 .iter()
                 .any(|entry| entry.action == CommandAction::CloseTab)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.action == CommandAction::MoveTabLeft)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.action == CommandAction::MoveTabRight)
         );
         assert!(
             entries

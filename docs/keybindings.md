@@ -101,6 +101,8 @@ Related UI option:
 
 - `new_tab`
 - `close_tab`
+- `move_tab_left`
+- `move_tab_right`
 - `minimize_window`
 - `rename_tab`
 - `app_info`

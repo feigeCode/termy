@@ -1,6 +1,22 @@
 use super::*;
 
 impl TerminalView {
+    fn adjacent_tab_reorder_target(
+        active_tab: usize,
+        tab_count: usize,
+        to_right: bool,
+    ) -> Option<usize> {
+        if tab_count <= 1 || active_tab >= tab_count {
+            return None;
+        }
+
+        if to_right {
+            (active_tab + 1 < tab_count).then_some(active_tab + 1)
+        } else {
+            active_tab.checked_sub(1)
+        }
+    }
+
     fn remap_index_after_move(index: usize, from: usize, to: usize) -> usize {
         if index == from {
             return to;
@@ -42,6 +58,26 @@ impl TerminalView {
         self.scroll_active_tab_into_view();
         cx.notify();
         true
+    }
+
+    pub(crate) fn move_active_tab_left(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(target_index) =
+            Self::adjacent_tab_reorder_target(self.active_tab, self.tabs.len(), false)
+        else {
+            return false;
+        };
+
+        self.reorder_tab(self.active_tab, target_index, cx)
+    }
+
+    pub(crate) fn move_active_tab_right(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(target_index) =
+            Self::adjacent_tab_reorder_target(self.active_tab, self.tabs.len(), true)
+        else {
+            return false;
+        };
+
+        self.reorder_tab(self.active_tab, target_index, cx)
     }
 
     pub(crate) fn add_tab(&mut self, cx: &mut Context<Self>) {
@@ -207,6 +243,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adjacent_tab_reorder_target_moves_middle_tab_left_and_right() {
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(2, 5, false), Some(1));
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(2, 5, true), Some(3));
+    }
+
+    #[test]
+    fn adjacent_tab_reorder_target_is_none_for_edges() {
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(0, 5, false), None);
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(4, 5, true), None);
+    }
+
+    #[test]
+    fn adjacent_tab_reorder_target_is_none_for_invalid_or_singleton_state() {
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(0, 0, false), None);
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(0, 1, true), None);
+        assert_eq!(TerminalView::adjacent_tab_reorder_target(5, 3, true), None);
+    }
+
+    #[test]
     fn remap_index_after_move_handles_move_to_right() {
         assert_eq!(TerminalView::remap_index_after_move(1, 1, 3), 3);
         assert_eq!(TerminalView::remap_index_after_move(2, 1, 3), 1);
@@ -220,5 +275,11 @@ mod tests {
         assert_eq!(TerminalView::remap_index_after_move(1, 3, 1), 2);
         assert_eq!(TerminalView::remap_index_after_move(2, 3, 1), 3);
         assert_eq!(TerminalView::remap_index_after_move(4, 3, 1), 4);
+    }
+
+    #[test]
+    fn remap_index_after_move_keeps_moved_tab_active() {
+        assert_eq!(TerminalView::remap_index_after_move(2, 2, 1), 1);
+        assert_eq!(TerminalView::remap_index_after_move(2, 2, 3), 3);
     }
 }

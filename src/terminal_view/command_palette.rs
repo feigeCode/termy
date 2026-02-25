@@ -523,6 +523,8 @@ impl TerminalView {
             | CommandAction::NativeSdkExample
             | CommandAction::RestartApp
             | CommandAction::RenameTab
+            | CommandAction::MoveTabLeft
+            | CommandAction::MoveTabRight
             | CommandAction::CheckForUpdates
             | CommandAction::ToggleCommandPalette
             | CommandAction::Copy

@@ -1009,6 +1009,12 @@ impl TerminalView {
             }
             CommandAction::NewTab => self.add_tab(cx),
             CommandAction::CloseTab => self.close_active_tab(cx),
+            CommandAction::MoveTabLeft => {
+                self.move_active_tab_left(cx);
+            }
+            CommandAction::MoveTabRight => {
+                self.move_active_tab_right(cx);
+            }
             CommandAction::MinimizeWindow => {}
             CommandAction::Copy => {
                 if let Some(selected) = self.selected_text() {
@@ -1598,6 +1604,24 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.execute_command_action(CommandAction::CloseTab, true, window, cx);
+    }
+
+    pub(super) fn handle_move_tab_left_action(
+        &mut self,
+        _: &commands::MoveTabLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::MoveTabLeft, true, window, cx);
+    }
+
+    pub(super) fn handle_move_tab_right_action(
+        &mut self,
+        _: &commands::MoveTabRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::MoveTabRight, true, window, cx);
     }
 
     pub(super) fn handle_minimize_window_action(

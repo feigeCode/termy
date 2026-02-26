@@ -934,10 +934,6 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn command_palette_query(&self) -> &str {
-        self.command_palette_input().text()
-    }
-
     pub(super) fn command_palette_query_changed(&mut self, cx: &mut Context<Self>) {
         self.refresh_command_palette_matches(true, cx);
         cx.notify();

@@ -1,9 +1,8 @@
 use super::*;
 use gpui::point;
 use state::{
-    command_palette_max_scroll_for_count, command_palette_next_scroll_y,
-    command_palette_target_scroll_y, ordered_theme_ids_for_palette, CommandPaletteItem,
-    CommandPaletteItemKind,
+    command_palette_next_scroll_y, command_palette_target_scroll_y,
+    ordered_theme_ids_for_palette, CommandPaletteItem, CommandPaletteItemKind,
 };
 
 mod render;
@@ -88,22 +87,21 @@ impl TerminalView {
             .collect()
     }
 
-    fn initialize_command_palette_mode(
+    fn apply_command_palette_mode_setup(
         &mut self,
         mode: CommandPaletteMode,
         animate_selection: bool,
         cx: &mut Context<Self>,
     ) {
-        self.command_palette.set_mode(mode);
         let items = self.command_palette_items_for_mode(mode);
         self.command_palette.set_items(items);
         self.inline_input_selecting = false;
 
-        let len = self.command_palette.filtered_len();
-        if len == 0 {
+        let item_count = self.command_palette.filtered_len();
+        if item_count == 0 {
             self.command_palette.reset_scroll_animation_state();
         } else if animate_selection {
-            self.animate_command_palette_to_selected(len, cx);
+            self.animate_command_palette_to_selected(item_count, cx);
         }
 
         self.reset_cursor_blink_phase();
@@ -116,7 +114,8 @@ impl TerminalView {
         animate_selection: bool,
         cx: &mut Context<Self>,
     ) {
-        self.initialize_command_palette_mode(mode, animate_selection, cx);
+        self.command_palette.set_mode(mode);
+        self.apply_command_palette_mode_setup(mode, animate_selection, cx);
     }
 
     pub(super) fn open_command_palette_in_mode(
@@ -125,11 +124,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.command_palette.open(mode);
-        let items = self.command_palette_items_for_mode(mode);
-        self.command_palette.set_items(items);
-        self.inline_input_selecting = false;
-        self.reset_cursor_blink_phase();
-        cx.notify();
+        self.apply_command_palette_mode_setup(mode, false, cx);
     }
 
     pub(super) fn open_command_palette(&mut self, cx: &mut Context<Self>) {
@@ -151,8 +146,7 @@ impl TerminalView {
         animate_selection: bool,
         cx: &mut Context<Self>,
     ) {
-        let query = self.command_palette_query().to_string();
-        self.command_palette.refilter(&query);
+        self.command_palette.refilter_current_query();
         let len = self.command_palette.filtered_len();
 
         if len == 0 {
@@ -175,8 +169,7 @@ impl TerminalView {
             return;
         }
 
-        self.command_palette
-            .set_scroll_max_y(command_palette_max_scroll_for_count(item_count));
+        self.command_palette.set_scroll_max_y_for_count(item_count);
 
         let scroll_handle = self.command_palette.base_scroll_handle();
         let offset = scroll_handle.offset();
@@ -189,13 +182,12 @@ impl TerminalView {
         };
 
         if (target_y - current_y).abs() <= f32::EPSILON {
-            self.command_palette.set_scroll_target_y(None);
-            self.command_palette.set_scroll_animating(false);
-            self.command_palette.set_scroll_last_tick(None);
+            self.command_palette.clear_scroll_target_y();
+            self.command_palette.stop_scroll_animation();
             return;
         }
 
-        self.command_palette.set_scroll_target_y(Some(target_y));
+        self.command_palette.set_scroll_target_y(target_y);
         self.start_command_palette_scroll_animation(cx);
     }
 
@@ -203,8 +195,7 @@ impl TerminalView {
         if self.command_palette.is_scroll_animating() {
             return;
         }
-        self.command_palette.set_scroll_animating(true);
-        self.command_palette.set_scroll_last_tick(Some(Instant::now()));
+        self.command_palette.start_scroll_animation(Instant::now());
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
@@ -237,8 +228,7 @@ impl TerminalView {
         }
 
         let Some(target_y) = self.command_palette.scroll_target_y() else {
-            self.command_palette.set_scroll_animating(false);
-            self.command_palette.set_scroll_last_tick(None);
+            self.command_palette.stop_scroll_animation();
             return false;
         };
 
@@ -250,20 +240,14 @@ impl TerminalView {
             .max(self.command_palette.scroll_max_y())
             .max(0.0);
         let now = Instant::now();
-        let dt = self
-            .command_palette
-            .scroll_last_tick()
-            .map(|last: Instant| (now - last).as_secs_f32())
-            .unwrap_or(1.0 / 60.0);
-        self.command_palette.set_scroll_last_tick(Some(now));
+        let dt = self.command_palette.scroll_dt_seconds(now);
 
         let next_y = command_palette_next_scroll_y(current_y, target_y, max_scroll, dt);
         scroll_handle.set_offset(point(offset.x, px(-next_y)));
 
         if (target_y - next_y).abs() <= 0.5 {
-            self.command_palette.set_scroll_target_y(None);
-            self.command_palette.set_scroll_animating(false);
-            self.command_palette.set_scroll_last_tick(None);
+            self.command_palette.clear_scroll_target_y();
+            self.command_palette.stop_scroll_animation();
             return true;
         }
 
@@ -317,11 +301,11 @@ impl TerminalView {
     }
 
     fn execute_command_palette_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item_kind) = self.command_palette.selected_item_kind() else {
+        let Some(filtered_index) = self.command_palette.selected_filtered_index() else {
             return;
         };
 
-        self.execute_command_palette_item(item_kind, window, cx);
+        self.execute_command_palette_filtered_index(filtered_index, window, cx);
     }
 
     fn execute_command_palette_filtered_index(

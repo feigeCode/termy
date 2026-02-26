@@ -122,12 +122,13 @@ impl CommandPaletteState {
 
     pub(super) fn set_items(&mut self, items: Vec<CommandPaletteItem>) {
         self.items = items;
-        let query = self.input.text().to_string();
-        self.refilter(&query);
+        self.refilter_current_query();
     }
 
-    pub(super) fn refilter(&mut self, query: &str) {
-        self.filtered_indices = filter_command_palette_item_indices_by_query(&self.items, query);
+    pub(super) fn refilter_current_query(&mut self) {
+        let filtered_indices =
+            filter_command_palette_item_indices_by_query(&self.items, self.input.text());
+        self.filtered_indices = filtered_indices;
         self.clamp_selection();
     }
 
@@ -155,11 +156,6 @@ impl CommandPaletteState {
         } else {
             Some(self.selected_filtered_index.min(len - 1))
         }
-    }
-
-    pub(super) fn selected_item_kind(&self) -> Option<CommandPaletteItemKind> {
-        self.selected_filtered_index()
-            .and_then(|index| self.filtered_item_kind(index))
     }
 
     pub(super) fn set_selected_filtered_index(&mut self, index: usize) -> bool {
@@ -208,39 +204,49 @@ impl CommandPaletteState {
         self.scroll_target_y
     }
 
-    pub(super) fn set_scroll_target_y(&mut self, target: Option<f32>) {
-        self.scroll_target_y = target;
+    pub(super) fn set_scroll_target_y(&mut self, target: f32) {
+        self.scroll_target_y = Some(target);
+    }
+
+    pub(super) fn clear_scroll_target_y(&mut self) {
+        self.scroll_target_y = None;
     }
 
     pub(super) fn scroll_max_y(&self) -> f32 {
         self.scroll_max_y
     }
 
-    pub(super) fn set_scroll_max_y(&mut self, max: f32) {
-        self.scroll_max_y = max;
+    pub(super) fn set_scroll_max_y_for_count(&mut self, item_count: usize) {
+        self.scroll_max_y = command_palette_max_scroll_for_count(item_count);
     }
 
     pub(super) fn is_scroll_animating(&self) -> bool {
         self.scroll_animating
     }
 
-    pub(super) fn set_scroll_animating(&mut self, animating: bool) {
-        self.scroll_animating = animating;
+    pub(super) fn start_scroll_animation(&mut self, now: Instant) {
+        self.scroll_animating = true;
+        self.scroll_last_tick = Some(now);
     }
 
-    pub(super) fn scroll_last_tick(&self) -> Option<Instant> {
-        self.scroll_last_tick
+    pub(super) fn stop_scroll_animation(&mut self) {
+        self.scroll_animating = false;
+        self.scroll_last_tick = None;
     }
 
-    pub(super) fn set_scroll_last_tick(&mut self, tick: Option<Instant>) {
-        self.scroll_last_tick = tick;
+    pub(super) fn scroll_dt_seconds(&mut self, now: Instant) -> f32 {
+        let dt = self
+            .scroll_last_tick
+            .map(|last| (now - last).as_secs_f32())
+            .unwrap_or(1.0 / 60.0);
+        self.scroll_last_tick = Some(now);
+        dt
     }
 
     pub(super) fn reset_scroll_animation_state(&mut self) {
-        self.scroll_target_y = None;
+        self.clear_scroll_target_y();
         self.scroll_max_y = 0.0;
-        self.scroll_animating = false;
-        self.scroll_last_tick = None;
+        self.stop_scroll_animation();
     }
 
     pub(super) fn clamp_selection(&mut self) {
@@ -472,11 +478,13 @@ mod tests {
         ]);
         assert!(state.set_selected_filtered_index(2));
 
-        state.refilter("close");
+        state.input_mut().set_text("close".to_string());
+        state.refilter_current_query();
         assert_eq!(state.filtered_len(), 1);
         assert_eq!(state.selected_filtered_index(), Some(0));
 
-        state.refilter("");
+        state.input_mut().set_text(String::new());
+        state.refilter_current_query();
         assert_eq!(state.filtered_len(), 3);
         assert_eq!(state.selected_filtered_index(), Some(0));
     }
@@ -559,9 +567,9 @@ mod tests {
             CommandAction::NewTab,
         )]);
         state.set_selected_filtered_index(999);
-        state.set_scroll_target_y(Some(12.0));
-        state.set_scroll_max_y(40.0);
-        state.set_scroll_animating(true);
+        state.set_scroll_target_y(12.0);
+        state.set_scroll_max_y_for_count(12);
+        state.start_scroll_animation(Instant::now());
 
         state.close();
 

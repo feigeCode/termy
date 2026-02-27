@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::config::SHELL_DECIDE_THEME_ID;
 use gpui::UniformListScrollHandle;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum CommandPaletteMode {
@@ -18,14 +19,24 @@ pub(super) enum CommandPaletteItemKind {
 pub(super) struct CommandPaletteItem {
     pub(super) title: String,
     pub(super) keywords: String,
+    pub(super) enabled: bool,
+    pub(super) status_hint: Option<&'static str>,
     pub(super) kind: CommandPaletteItemKind,
 }
 
 impl CommandPaletteItem {
-    pub(super) fn command(title: &str, keywords: &str, action: CommandAction) -> Self {
+    pub(super) fn command_with_state(
+        title: &str,
+        keywords: &str,
+        action: CommandAction,
+        enabled: bool,
+        status_hint: Option<&'static str>,
+    ) -> Self {
         Self {
             title: title.to_string(),
             keywords: keywords.to_string(),
+            enabled,
+            status_hint,
             kind: CommandPaletteItemKind::Command(action),
         }
     }
@@ -41,6 +52,8 @@ impl CommandPaletteItem {
         Self {
             title,
             keywords,
+            enabled: true,
+            status_hint: None,
             kind: CommandPaletteItemKind::Theme(theme_id),
         }
     }
@@ -60,6 +73,7 @@ pub(in super::super) struct CommandPaletteState {
     scroll_animating: bool,
     scroll_last_tick: Option<Instant>,
     show_keybinds: bool,
+    shortcut_cache: HashMap<CommandAction, Option<String>>,
 }
 
 impl CommandPaletteState {
@@ -77,6 +91,7 @@ impl CommandPaletteState {
             scroll_animating: false,
             scroll_last_tick: None,
             show_keybinds,
+            shortcut_cache: HashMap::new(),
         }
     }
 
@@ -125,6 +140,18 @@ impl CommandPaletteState {
         self.refilter_current_query();
     }
 
+    pub(super) fn cached_shortcut(&self, action: CommandAction) -> Option<Option<String>> {
+        self.shortcut_cache.get(&action).cloned()
+    }
+
+    pub(super) fn cache_shortcut(&mut self, action: CommandAction, shortcut: Option<String>) {
+        self.shortcut_cache.insert(action, shortcut);
+    }
+
+    pub(super) fn clear_shortcut_cache(&mut self) {
+        self.shortcut_cache.clear();
+    }
+
     pub(super) fn refilter_current_query(&mut self) {
         let filtered_indices =
             filter_command_palette_item_indices_by_query(&self.items, self.input.text());
@@ -139,14 +166,6 @@ impl CommandPaletteState {
     pub(super) fn filtered_item(&self, filtered_index: usize) -> Option<&CommandPaletteItem> {
         let item_index = *self.filtered_indices.get(filtered_index)?;
         self.items.get(item_index)
-    }
-
-    pub(super) fn filtered_item_kind(
-        &self,
-        filtered_index: usize,
-    ) -> Option<CommandPaletteItemKind> {
-        self.filtered_item(filtered_index)
-            .map(|item| item.kind.clone())
     }
 
     pub(super) fn selected_filtered_index(&self) -> Option<usize> {
@@ -264,6 +283,7 @@ impl CommandPaletteState {
         self.filtered_indices.clear();
         self.selected_filtered_index = 0;
         self.scroll_handle = UniformListScrollHandle::new();
+        self.shortcut_cache.clear();
         self.reset_scroll_animation_state();
     }
 }
@@ -401,7 +421,7 @@ mod tests {
     use super::*;
 
     fn command_item(title: &str, keywords: &str, action: CommandAction) -> CommandPaletteItem {
-        CommandPaletteItem::command(title, keywords, action)
+        CommandPaletteItem::command_with_state(title, keywords, action, true, None)
     }
 
     #[test]
@@ -578,10 +598,12 @@ mod tests {
         let mut state = CommandPaletteState::new(false);
         state.open(CommandPaletteMode::Themes);
         state.input_mut().set_text("theme".to_string());
-        state.set_items(vec![CommandPaletteItem::command(
+        state.set_items(vec![CommandPaletteItem::command_with_state(
             "New Tab",
             "tab",
             CommandAction::NewTab,
+            true,
+            None,
         )]);
         state.set_selected_filtered_index(999);
         state.set_scroll_target_y(12.0);

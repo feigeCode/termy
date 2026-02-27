@@ -44,6 +44,7 @@ impl TerminalView {
 
     pub(super) fn set_command_palette_show_keybinds(&mut self, show_keybinds: bool) {
         self.command_palette.set_show_keybinds(show_keybinds);
+        self.command_palette.clear_shortcut_cache();
     }
 
     pub(super) fn command_palette_input(&self) -> &InlineInputState {
@@ -54,20 +55,77 @@ impl TerminalView {
         self.command_palette.input_mut()
     }
 
-    fn command_palette_shortcut(&self, action: CommandAction, window: &Window) -> Option<String> {
+    fn command_palette_shortcut(
+        &mut self,
+        action: CommandAction,
+        window: &Window,
+    ) -> Option<String> {
         if !self.command_palette.show_keybinds() {
             return None;
         }
 
-        action.keybinding_label(window, &self.focus_handle)
+        if let Some(cached) = self.command_palette.cached_shortcut(action) {
+            return cached;
+        }
+
+        let shortcut = action.keybinding_label(window, &self.focus_handle);
+        self.command_palette.cache_shortcut(action, shortcut.clone());
+        shortcut
+    }
+
+    fn command_palette_action_available_for_state(
+        action: CommandAction,
+        install_cli_available: bool,
+    ) -> bool {
+        match action {
+            CommandAction::InstallCli => install_cli_available,
+            _ => true,
+        }
+    }
+
+    fn command_palette_action_status_hint_for_state(
+        action: CommandAction,
+        install_cli_available: bool,
+    ) -> Option<&'static str> {
+        match action {
+            CommandAction::InstallCli if !install_cli_available => Some("Installed"),
+            _ => None,
+        }
+    }
+
+    fn command_palette_command_item_for_state(
+        action: CommandAction,
+        title: &str,
+        keywords: &str,
+        install_cli_available: bool,
+    ) -> CommandPaletteItem {
+        let enabled = Self::command_palette_action_available_for_state(action, install_cli_available);
+        let status_hint =
+            Self::command_palette_action_status_hint_for_state(action, install_cli_available);
+        CommandPaletteItem::command_with_state(title, keywords, action, enabled, status_hint)
+    }
+
+    fn command_palette_command_items_for_state(
+        install_cli_available: bool,
+    ) -> Vec<CommandPaletteItem> {
+        CommandAction::palette_entries()
+            .into_iter()
+            .map(|entry| {
+                Self::command_palette_command_item_for_state(
+                    entry.action,
+                    entry.title,
+                    entry.keywords,
+                    install_cli_available,
+                )
+            })
+            .collect()
     }
 
     fn command_palette_items_for_mode(&self, mode: CommandPaletteMode) -> Vec<CommandPaletteItem> {
         match mode {
-            CommandPaletteMode::Commands => CommandAction::palette_entries()
-                .into_iter()
-                .map(|entry| CommandPaletteItem::command(entry.title, entry.keywords, entry.action))
-                .collect(),
+            CommandPaletteMode::Commands => {
+                Self::command_palette_command_items_for_state(self.install_cli_available())
+            }
             CommandPaletteMode::Themes => self.command_palette_theme_items(),
         }
     }
@@ -93,6 +151,7 @@ impl TerminalView {
         animate_selection: bool,
         cx: &mut Context<Self>,
     ) {
+        self.command_palette.clear_shortcut_cache();
         let items = self.command_palette_items_for_mode(mode);
         self.command_palette.set_items(items);
         self.inline_input_selecting = false;
@@ -157,6 +216,15 @@ impl TerminalView {
         if animate_selection {
             self.animate_command_palette_to_selected(len, cx);
         }
+    }
+
+    pub(super) fn refresh_command_palette_items_for_current_mode(&mut self, cx: &mut Context<Self>) {
+        if !self.is_command_palette_open() {
+            return;
+        }
+
+        let mode = self.command_palette.mode();
+        self.apply_command_palette_mode_setup(mode, false, cx);
     }
 
     pub(super) fn animate_command_palette_to_selected(
@@ -314,27 +382,39 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(item_kind) = self.command_palette.filtered_item_kind(filtered_index) else {
+        let Some(item) = self.command_palette.filtered_item(filtered_index).cloned() else {
             return;
         };
 
         self.command_palette.set_selected_filtered_index(filtered_index);
-        self.execute_command_palette_item(item_kind, window, cx);
+        self.execute_command_palette_item(item, window, cx);
     }
 
     fn execute_command_palette_item(
         &mut self,
-        item_kind: CommandPaletteItemKind,
+        item: CommandPaletteItem,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match item_kind {
+        match item.kind {
             CommandPaletteItemKind::Command(action) => {
+                if !item.enabled {
+                    termy_toast::info(Self::command_palette_disabled_action_message(action));
+                    cx.notify();
+                    return;
+                }
                 self.execute_command_palette_action(action, window, cx)
             }
             CommandPaletteItemKind::Theme(theme_id) => {
                 self.select_theme_from_palette(theme_id.as_str(), cx)
             }
+        }
+    }
+
+    fn command_palette_disabled_action_message(action: CommandAction) -> &'static str {
+        match action {
+            CommandAction::InstallCli => "CLI is already installed",
+            _ => "Command is currently unavailable",
         }
     }
 
@@ -457,5 +537,39 @@ mod tests {
         assert!(!TerminalView::command_palette_should_stay_open(
             CommandAction::NewTab
         ));
+    }
+
+    #[test]
+    fn install_cli_command_is_present_and_tracks_availability_state() {
+        let available_items = TerminalView::command_palette_command_items_for_state(true);
+        let unavailable_items = TerminalView::command_palette_command_items_for_state(false);
+
+        let available_install_cli = available_items
+            .iter()
+            .find_map(|item| match item.kind {
+                CommandPaletteItemKind::Command(CommandAction::InstallCli) => Some(item),
+                _ => None,
+            })
+            .expect("missing Install CLI in available command palette state");
+        assert!(available_install_cli.enabled);
+        assert_eq!(available_install_cli.status_hint, None);
+
+        let unavailable_install_cli = unavailable_items
+            .iter()
+            .find_map(|item| match item.kind {
+                CommandPaletteItemKind::Command(CommandAction::InstallCli) => Some(item),
+                _ => None,
+            })
+            .expect("missing Install CLI in unavailable command palette state");
+        assert!(!unavailable_install_cli.enabled);
+        assert_eq!(unavailable_install_cli.status_hint, Some("Installed"));
+    }
+
+    #[test]
+    fn install_cli_disabled_message_matches_expected_copy() {
+        assert_eq!(
+            TerminalView::command_palette_disabled_action_message(CommandAction::InstallCli),
+            "CLI is already installed"
+        );
     }
 }

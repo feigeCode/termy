@@ -1,21 +1,18 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod app_actions;
 mod colors;
 mod commands;
 mod config;
 mod keybindings;
+mod menus;
 mod settings_view;
 mod terminal_view;
 mod text_input;
 mod ui;
 
-use commands::{OpenConfig, OpenSettings, Quit};
-#[cfg(target_os = "macos")]
-use gpui::SystemMenuType;
-use gpui::{
-    App, Application, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, prelude::*, px, size,
-};
-use settings_view::SettingsWindow;
+use commands::{OpenConfig, OpenSettings};
+use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 use terminal_view::{TerminalView, initial_window_background_appearance};
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,70 +28,21 @@ const WINDOWS_DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 #[cfg(target_os = "windows")]
 const WINDOWS_DEFAULT_WINDOW_HEIGHT: f32 = 820.0;
 
-pub(crate) fn app_menu() -> Menu {
-    #[cfg(target_os = "macos")]
-    let menu_items = vec![
-        MenuItem::os_submenu("Services", SystemMenuType::Services),
-        MenuItem::separator(),
-        MenuItem::action("Settings...", OpenSettings),
-        MenuItem::action("Open Config File...", OpenConfig),
-        MenuItem::action("Quit", Quit),
-    ];
-    #[cfg(not(target_os = "macos"))]
-    let menu_items = vec![
-        MenuItem::separator(),
-        MenuItem::action("Settings...", OpenSettings),
-        MenuItem::action("Open Config File...", OpenConfig),
-        MenuItem::action("Quit", Quit),
-    ];
-
-    Menu {
-        name: "Termy".into(),
-        items: menu_items,
-    }
-}
-
 fn main() {
     env_logger::init();
 
     Application::new().run(|cx: &mut App| {
         cx.on_action(|_: &OpenConfig, _cx| {
-            if let Err(error) = config::open_config_file() {
+            if let Err(error) = app_actions::open_config_file() {
                 log::error!("Failed to open config file: {}", error);
-                termy_toast::error(error.to_string());
+                termy_toast::error(error);
             }
         });
         cx.on_action(|_: &OpenSettings, cx| {
-            let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
-
-            #[cfg(target_os = "macos")]
-            let titlebar = Some(gpui::TitlebarOptions {
-                title: Some("Settings".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(gpui::point(px(12.0), px(10.0))),
-                ..Default::default()
-            });
-            #[cfg(target_os = "windows")]
-            let titlebar = Some(gpui::TitlebarOptions {
-                title: Some("Settings".into()),
-                ..Default::default()
-            });
-            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-            let titlebar = Some(gpui::TitlebarOptions {
-                title: Some("Settings".into()),
-                appears_transparent: true,
-                ..Default::default()
-            });
-
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar,
-                    ..Default::default()
-                },
-                |window, cx| cx.new(|cx| SettingsWindow::new(window, cx)),
-            )
-            .ok();
+            if let Err(error) = app_actions::open_settings_window(cx) {
+                log::error!("{}", error);
+                termy_toast::error(error);
+            }
         });
 
         let mut startup_config_error = None;

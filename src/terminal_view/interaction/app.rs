@@ -35,8 +35,12 @@ impl TerminalView {
         }
     }
 
-    fn open_config_action(&mut self, _cx: &mut Context<Self>) {
-        crate::app_actions::open_config_file();
+    fn open_config_action(&mut self, cx: &mut Context<Self>) {
+        if let Err(error) = crate::app_actions::open_config_file() {
+            log::error!("Failed to open config file from command action: {}", error);
+            termy_toast::error(error);
+            cx.notify();
+        }
     }
 
     fn import_colors_action(&mut self, cx: &mut Context<Self>) {
@@ -115,7 +119,11 @@ impl TerminalView {
     }
 
     fn open_settings_action(&mut self, cx: &mut Context<Self>) {
-        crate::app_actions::open_settings_window(cx);
+        if let Err(error) = crate::app_actions::open_settings_window(cx) {
+            log::error!("{}", error);
+            termy_toast::error(error);
+            cx.notify();
+        }
     }
 
     fn check_for_updates_action(&mut self, cx: &mut Context<Self>) {

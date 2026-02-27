@@ -2,14 +2,11 @@ use crate::config;
 use crate::settings_view::SettingsWindow;
 use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 
-pub(crate) fn open_config_file() {
-    if let Err(error) = config::open_config_file() {
-        log::error!("Failed to open config file: {}", error);
-        termy_toast::error(error.to_string());
-    }
+pub(crate) fn open_config_file() -> Result<(), String> {
+    config::open_config_file().map_err(|error| error.to_string())
 }
 
-pub(crate) fn open_settings_window(cx: &mut App) {
+pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
     let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
 
     #[cfg(target_os = "macos")]
@@ -31,17 +28,14 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         ..Default::default()
     });
 
-    let result = cx.open_window(
+    cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar,
             ..Default::default()
         },
         |window, cx| cx.new(|cx| SettingsWindow::new(window, cx)),
-    );
-
-    if let Err(error) = result {
-        log::error!("Failed to open settings window: {}", error);
-        termy_toast::error(format!("Failed to open settings window: {}", error));
-    }
+    )
+    .map(|_| ())
+    .map_err(|error| format!("Failed to open settings window: {}", error))
 }

@@ -44,6 +44,7 @@ impl TerminalView {
 
     pub(super) fn set_command_palette_show_keybinds(&mut self, show_keybinds: bool) {
         self.command_palette.set_show_keybinds(show_keybinds);
+        self.command_palette.clear_shortcut_cache();
     }
 
     pub(super) fn command_palette_input(&self) -> &InlineInputState {
@@ -54,12 +55,22 @@ impl TerminalView {
         self.command_palette.input_mut()
     }
 
-    fn command_palette_shortcut(&self, action: CommandAction, window: &Window) -> Option<String> {
+    fn command_palette_shortcut(
+        &mut self,
+        action: CommandAction,
+        window: &Window,
+    ) -> Option<String> {
         if !self.command_palette.show_keybinds() {
             return None;
         }
 
-        action.keybinding_label(window, &self.focus_handle)
+        if let Some(cached) = self.command_palette.cached_shortcut(action) {
+            return cached;
+        }
+
+        let shortcut = action.keybinding_label(window, &self.focus_handle);
+        self.command_palette.cache_shortcut(action, shortcut.clone());
+        shortcut
     }
 
     fn command_palette_action_available_for_state(
@@ -140,6 +151,7 @@ impl TerminalView {
         animate_selection: bool,
         cx: &mut Context<Self>,
     ) {
+        self.command_palette.clear_shortcut_cache();
         let items = self.command_palette_items_for_mode(mode);
         self.command_palette.set_items(items);
         self.inline_input_selecting = false;
@@ -540,7 +552,7 @@ mod tests {
             })
             .expect("missing Install CLI in available command palette state");
         assert!(available_install_cli.enabled);
-        assert_eq!(available_install_cli.status_hint.as_deref(), None);
+        assert_eq!(available_install_cli.status_hint, None);
 
         let unavailable_install_cli = unavailable_items
             .iter()
@@ -550,10 +562,7 @@ mod tests {
             })
             .expect("missing Install CLI in unavailable command palette state");
         assert!(!unavailable_install_cli.enabled);
-        assert_eq!(
-            unavailable_install_cli.status_hint.as_deref(),
-            Some("Installed")
-        );
+        assert_eq!(unavailable_install_cli.status_hint, Some("Installed"));
     }
 
     #[test]

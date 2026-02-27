@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::config::SHELL_DECIDE_THEME_ID;
 use gpui::UniformListScrollHandle;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum CommandPaletteMode {
@@ -19,7 +20,7 @@ pub(super) struct CommandPaletteItem {
     pub(super) title: String,
     pub(super) keywords: String,
     pub(super) enabled: bool,
-    pub(super) status_hint: Option<String>,
+    pub(super) status_hint: Option<&'static str>,
     pub(super) kind: CommandPaletteItemKind,
 }
 
@@ -29,13 +30,13 @@ impl CommandPaletteItem {
         keywords: &str,
         action: CommandAction,
         enabled: bool,
-        status_hint: Option<&str>,
+        status_hint: Option<&'static str>,
     ) -> Self {
         Self {
             title: title.to_string(),
             keywords: keywords.to_string(),
             enabled,
-            status_hint: status_hint.map(ToOwned::to_owned),
+            status_hint,
             kind: CommandPaletteItemKind::Command(action),
         }
     }
@@ -72,6 +73,7 @@ pub(in super::super) struct CommandPaletteState {
     scroll_animating: bool,
     scroll_last_tick: Option<Instant>,
     show_keybinds: bool,
+    shortcut_cache: HashMap<CommandAction, Option<String>>,
 }
 
 impl CommandPaletteState {
@@ -89,6 +91,7 @@ impl CommandPaletteState {
             scroll_animating: false,
             scroll_last_tick: None,
             show_keybinds,
+            shortcut_cache: HashMap::new(),
         }
     }
 
@@ -135,6 +138,18 @@ impl CommandPaletteState {
     pub(super) fn set_items(&mut self, items: Vec<CommandPaletteItem>) {
         self.items = items;
         self.refilter_current_query();
+    }
+
+    pub(super) fn cached_shortcut(&self, action: CommandAction) -> Option<Option<String>> {
+        self.shortcut_cache.get(&action).cloned()
+    }
+
+    pub(super) fn cache_shortcut(&mut self, action: CommandAction, shortcut: Option<String>) {
+        self.shortcut_cache.insert(action, shortcut);
+    }
+
+    pub(super) fn clear_shortcut_cache(&mut self) {
+        self.shortcut_cache.clear();
     }
 
     pub(super) fn refilter_current_query(&mut self) {
@@ -268,6 +283,7 @@ impl CommandPaletteState {
         self.filtered_indices.clear();
         self.selected_filtered_index = 0;
         self.scroll_handle = UniformListScrollHandle::new();
+        self.shortcut_cache.clear();
         self.reset_scroll_animation_state();
     }
 }

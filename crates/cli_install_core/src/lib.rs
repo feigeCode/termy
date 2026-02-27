@@ -29,18 +29,18 @@ pub fn is_cli_installed() -> bool {
     {
         let path_env = std::env::var_os("PATH");
         let (target, _) = resolve_install_cli_target_for_unix(dirs::home_dir().as_deref());
-        return managed_target_binary_exists(&target)
-            && managed_target_dir_in_path(&target, path_env.as_deref());
+        managed_target_binary_exists(&target)
+            && managed_target_dir_in_path(&target, path_env.as_deref())
     }
 
     #[cfg(target_os = "windows")]
     {
         let path_env = std::env::var_os("PATH");
         let target = resolve_install_cli_target_for_windows(dirs::data_local_dir().as_deref());
-        return target.as_deref().is_some_and(|target| {
+        target.as_deref().is_some_and(|target| {
             managed_target_binary_exists(target)
                 && managed_target_dir_in_path(target, path_env.as_deref())
-        });
+        })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

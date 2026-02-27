@@ -157,21 +157,27 @@ mod tests {
             .find(|menu| menu.name.as_ref() == "Help")
             .expect("missing Help menu");
 
-        let title_for = |menu: &gpui::Menu| {
-            menu.items.iter().find_map(|item| {
-                if let MenuItem::Action { name, .. } = item
-                    && name.as_ref().starts_with("Install CLI")
-                {
-                    return Some(name.as_ref().to_string());
-                }
-                None
-            })
+        let install_cli_titles = |menu: &gpui::Menu| {
+            menu.items
+                .iter()
+                .filter_map(|item| {
+                    let MenuItem::Action { name, .. } = item else {
+                        return None;
+                    };
+                    let title = name.as_ref();
+                    if title == INSTALL_CLI_TITLE || title == INSTALL_CLI_INSTALLED_TITLE {
+                        Some(title.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
         };
 
-        assert_eq!(title_for(&help_menu_available).as_deref(), Some(INSTALL_CLI_TITLE));
+        assert_eq!(install_cli_titles(&help_menu_available), [INSTALL_CLI_TITLE]);
         assert_eq!(
-            title_for(&help_menu_installed).as_deref(),
-            Some(INSTALL_CLI_INSTALLED_TITLE)
+            install_cli_titles(&help_menu_installed),
+            [INSTALL_CLI_INSTALLED_TITLE]
         );
     }
 }

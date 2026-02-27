@@ -44,7 +44,7 @@ impl TerminalView {
 
         let mut rows = Vec::with_capacity(range.len());
         for index in range {
-            let Some(item) = self.command_palette.filtered_item(index) else {
+            let Some(item) = self.command_palette.filtered_item(index).cloned() else {
                 continue;
             };
 
@@ -57,7 +57,7 @@ impl TerminalView {
                 CommandPaletteItemKind::Theme(_) => None,
             };
             let title = item.title.clone();
-            let status_hint = item.status_hint.clone();
+            let status_hint = item.status_hint;
             let text_color = if is_enabled {
                 style.primary_text
             } else {

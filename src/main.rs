@@ -33,10 +33,16 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         cx.on_action(|_: &OpenConfig, _cx| {
-            app_actions::open_config_file();
+            if let Err(error) = app_actions::open_config_file() {
+                log::error!("Failed to open config file: {}", error);
+                termy_toast::error(error);
+            }
         });
         cx.on_action(|_: &OpenSettings, cx| {
-            app_actions::open_settings_window(cx);
+            if let Err(error) = app_actions::open_settings_window(cx) {
+                log::error!("{}", error);
+                termy_toast::error(error);
+            }
         });
 
         let mut startup_config_error = None;

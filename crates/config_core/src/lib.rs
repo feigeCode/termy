@@ -19,11 +19,12 @@ pub use path::config_path;
 pub use render::{DEFAULT_CONFIG_TEMPLATE, prettify_config_contents};
 pub use schema::{
     COLOR_SETTING_KEYS, COLOR_SETTING_SPECS, ROOT_SETTING_ALL_KEYS, ROOT_SETTING_KEYS,
-    ROOT_SETTING_SPECS, ColorSettingId, ColorSettingSpec, RootSettingId, RootSettingSpec,
-    SettingsSection, canonical_color_key as schema_canonical_color_key,
+    ROOT_SETTING_SPECS, ColorSettingId, ColorSettingSpec, EnumChoice, RootSettingId,
+    RootSettingSpec, RootSettingValueKind, SettingsSection,
+    canonical_color_key as schema_canonical_color_key,
     canonical_root_key as schema_canonical_root_key, color_setting_from_key, color_setting_spec,
-    color_setting_specs, root_setting_default_value, root_setting_from_key, root_setting_spec,
-    root_setting_specs,
+    color_setting_specs, root_setting_default_value, root_setting_enum_choices,
+    root_setting_from_key, root_setting_spec, root_setting_specs, root_setting_value_kind,
 };
 pub use types::{
     AppConfig, CursorStyle, CustomColors, KeybindConfigLine, Rgb8, TabCloseVisibility,

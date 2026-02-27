@@ -36,6 +36,7 @@ pub struct RootSettingSpec {
     pub title: &'static str,
     pub description: &'static str,
     pub keywords: &'static [&'static str],
+    pub value_kind: RootSettingValueKind,
     pub repeatable: bool,
 }
 
@@ -47,6 +48,21 @@ pub struct ColorSettingSpec {
     pub title: &'static str,
     pub description: &'static str,
     pub keywords: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootSettingValueKind {
+    Text,
+    Numeric,
+    Boolean,
+    Enum,
+    Special,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumChoice {
+    pub value: &'static str,
+    pub label: &'static str,
 }
 
 fn normalize_key(raw: &str) -> String {
@@ -63,6 +79,7 @@ macro_rules! define_root_settings {
         $title:literal,
         $description:literal,
         [$($keyword:literal),* $(,)?],
+        $value_kind:expr,
         $repeatable:expr
     )),+ $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,6 +97,7 @@ macro_rules! define_root_settings {
                 title: $title,
                 description: $description,
                 keywords: &[$($keyword),*],
+                value_kind: $value_kind,
                 repeatable: $repeatable,
             },)+
         ];
@@ -157,41 +175,142 @@ macro_rules! define_color_settings {
     };
 }
 
+pub const CURSOR_STYLE_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "block",
+        label: "Block",
+    },
+    EnumChoice {
+        value: "line",
+        label: "Line",
+    },
+];
+
+pub const TAB_TITLE_MODE_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "smart",
+        label: "Smart",
+    },
+    EnumChoice {
+        value: "shell",
+        label: "Shell",
+    },
+    EnumChoice {
+        value: "explicit",
+        label: "Explicit",
+    },
+    EnumChoice {
+        value: "static",
+        label: "Static",
+    },
+];
+
+pub const SCROLLBAR_VISIBILITY_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "off",
+        label: "Off",
+    },
+    EnumChoice {
+        value: "always",
+        label: "Always",
+    },
+    EnumChoice {
+        value: "on_scroll",
+        label: "On Scroll",
+    },
+];
+
+pub const SCROLLBAR_STYLE_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "neutral",
+        label: "Neutral",
+    },
+    EnumChoice {
+        value: "muted_theme",
+        label: "Muted Theme",
+    },
+    EnumChoice {
+        value: "theme",
+        label: "Theme",
+    },
+];
+
+pub const TAB_CLOSE_VISIBILITY_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "active_hover",
+        label: "Active + Hover",
+    },
+    EnumChoice {
+        value: "hover",
+        label: "Hover",
+    },
+    EnumChoice {
+        value: "always",
+        label: "Always",
+    },
+];
+
+pub const TAB_WIDTH_MODE_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "stable",
+        label: "Stable",
+    },
+    EnumChoice {
+        value: "active_grow",
+        label: "Active Grow",
+    },
+    EnumChoice {
+        value: "active_grow_sticky",
+        label: "Active Grow Sticky",
+    },
+];
+
+pub const WORKING_DIR_FALLBACK_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "home",
+        label: "Home",
+    },
+    EnumChoice {
+        value: "process",
+        label: "Process",
+    },
+];
+
 define_root_settings! {
-    (Theme, "theme", [], Appearance, "THEME", "Theme", "Current color scheme name", ["color", "scheme", "appearance"], false),
-    (WorkingDir, "working_dir", [], Advanced, "STARTUP", "Working Directory", "Initial directory for new sessions", ["working directory", "cwd", "startup", "path"], false),
-    (WorkingDirFallback, "working_dir_fallback", ["default_working_dir"], Advanced, "STARTUP", "Working Directory Fallback", "Directory used when working_dir is unset", ["working directory", "fallback", "cwd", "startup"], false),
-    (WarnOnQuitWithRunningProcess, "warn_on_quit_with_running_process", [], Advanced, "SAFETY", "Warn On Quit", "Warn before quitting when a tab has an active process", ["quit", "warning", "safety", "process"], false),
-    (TabTitlePriority, "tab_title_priority", [], Tabs, "TAB TITLES", "Title Priority", "Exact source priority for tab titles", ["tab", "title", "priority", "source"], false),
-    (TabTitleMode, "tab_title_mode", [], Tabs, "TAB TITLES", "Title Mode", "How tab titles are determined", ["tab", "title", "mode", "smart", "shell", "explicit", "static"], false),
-    (TabTitleFallback, "tab_title_fallback", [], Tabs, "TAB TITLES", "Fallback Title", "Default tab title when no source is available", ["tab", "title", "fallback"], false),
-    (TabTitleExplicitPrefix, "tab_title_explicit_prefix", [], Tabs, "TAB TITLES", "Explicit Prefix", "Prefix used for explicit OSC title payloads", ["tab", "title", "prefix", "osc"], false),
-    (TabTitleShellIntegration, "tab_title_shell_integration", [], Tabs, "TAB TITLES", "Shell Integration", "Export TERMY_* environment values for shell hooks", ["shell", "integration", "env", "hooks"], false),
-    (TabTitlePromptFormat, "tab_title_prompt_format", [], Tabs, "TAB TITLES", "Prompt Format", "Template for prompt-derived tab titles", ["tab", "title", "prompt", "format"], false),
-    (TabTitleCommandFormat, "tab_title_command_format", [], Tabs, "TAB TITLES", "Command Format", "Template for command-derived tab titles", ["tab", "title", "command", "format"], false),
-    (TabCloseVisibility, "tab_close_visibility", [], Tabs, "TAB STRIP", "Close Button Visibility", "When tab close buttons are visible", ["tab", "close", "visibility", "hover"], false),
-    (TabWidthMode, "tab_width_mode", [], Tabs, "TAB STRIP", "Tab Width Mode", "How tab widths react to active state", ["tab", "width", "layout", "active"], false),
-    (ShowTermyInTitlebar, "show_termy_in_titlebar", [], Tabs, "TITLE BAR", "Show Termy In Titlebar", "Show or hide the termy branding in the titlebar", ["titlebar", "branding", "tabs"], false),
-    (Shell, "shell", [], Terminal, "SHELL", "Shell", "Executable used for new sessions", ["shell", "bash", "zsh", "fish"], false),
-    (Term, "term", [], Terminal, "SHELL", "TERM", "TERM value exposed to child applications", ["term", "terminal", "env"], false),
-    (Colorterm, "colorterm", [], Terminal, "SHELL", "COLORTERM", "COLORTERM value exposed to child applications", ["colorterm", "color", "env"], false),
-    (WindowWidth, "window_width", [], Advanced, "WINDOW", "Window Width", "Default startup window width in pixels", ["window", "width", "startup", "size"], false),
-    (WindowHeight, "window_height", [], Advanced, "WINDOW", "Window Height", "Default startup window height in pixels", ["window", "height", "startup", "size"], false),
-    (FontFamily, "font_family", [], Appearance, "FONT", "Font Family", "Font family used in terminal UI", ["font", "typeface", "text"], false),
-    (FontSize, "font_size", [], Appearance, "FONT", "Font Size", "Terminal font size in pixels", ["font", "size", "text"], false),
-    (CursorStyle, "cursor_style", [], Terminal, "CURSOR", "Cursor Style", "Shape of the terminal cursor", ["cursor", "shape", "block", "line"], false),
-    (CursorBlink, "cursor_blink", [], Terminal, "CURSOR", "Cursor Blink", "Enable blinking cursor animation", ["cursor", "blink", "animation"], false),
-    (BackgroundOpacity, "background_opacity", [], Appearance, "WINDOW", "Background Opacity", "Window background opacity (0.0 to 1.0)", ["background", "opacity", "transparency"], false),
-    (BackgroundBlur, "background_blur", [], Appearance, "WINDOW", "Background Blur", "Enable blur effect for transparent backgrounds", ["background", "blur", "window"], false),
-    (PaddingX, "padding_x", [], Appearance, "PADDING", "Horizontal Padding", "Left and right terminal padding", ["padding", "spacing", "horizontal"], false),
-    (PaddingY, "padding_y", [], Appearance, "PADDING", "Vertical Padding", "Top and bottom terminal padding", ["padding", "spacing", "vertical"], false),
-    (MouseScrollMultiplier, "mouse_scroll_multiplier", [], Terminal, "SCROLLING", "Scroll Multiplier", "Mouse wheel scroll speed multiplier", ["scroll", "mouse", "speed"], false),
-    (ScrollbarVisibility, "scrollbar_visibility", [], Terminal, "SCROLLING", "Scrollbar Visibility", "Terminal scrollbar visibility behavior", ["scrollbar", "visibility", "scroll"], false),
-    (ScrollbarStyle, "scrollbar_style", [], Terminal, "SCROLLING", "Scrollbar Style", "Terminal scrollbar color style", ["scrollbar", "style", "theme"], false),
-    (ScrollbackHistory, "scrollback_history", ["scrollback"], Terminal, "SCROLLING", "Scrollback History", "Lines retained in terminal scrollback", ["scrollback", "history", "buffer", "lines"], false),
-    (InactiveTabScrollback, "inactive_tab_scrollback", [], Terminal, "SCROLLING", "Inactive Tab Scrollback", "Scrollback limit for inactive tabs", ["scrollback", "inactive", "tabs"], false),
-    (CommandPaletteShowKeybinds, "command_palette_show_keybinds", [], Terminal, "UI", "Show Keybindings In Palette", "Show shortcut badges in command palette rows", ["palette", "keybinds", "shortcuts"], false),
-    (Keybind, "keybind", [], Keybindings, "KEYBINDS", "Keybind Directive", "Keybinding override directive", ["keybind", "shortcut", "command"], true),
+    (Theme, "theme", [], Appearance, "THEME", "Theme", "Current color scheme name", ["color", "scheme", "appearance"], RootSettingValueKind::Special, false),
+    (WorkingDir, "working_dir", [], Advanced, "STARTUP", "Working Directory", "Initial directory for new sessions", ["working directory", "cwd", "startup", "path"], RootSettingValueKind::Text, false),
+    (WorkingDirFallback, "working_dir_fallback", ["default_working_dir"], Advanced, "STARTUP", "Working Directory Fallback", "Directory used when working_dir is unset", ["working directory", "fallback", "cwd", "startup"], RootSettingValueKind::Enum, false),
+    (WarnOnQuitWithRunningProcess, "warn_on_quit_with_running_process", [], Advanced, "SAFETY", "Warn On Quit", "Warn before quitting when a tab has an active process", ["quit", "warning", "safety", "process"], RootSettingValueKind::Boolean, false),
+    (TabTitlePriority, "tab_title_priority", [], Tabs, "TAB TITLES", "Title Priority", "Exact source priority for tab titles", ["tab", "title", "priority", "source"], RootSettingValueKind::Special, false),
+    (TabTitleMode, "tab_title_mode", [], Tabs, "TAB TITLES", "Title Mode", "How tab titles are determined", ["tab", "title", "mode", "smart", "shell", "explicit", "static"], RootSettingValueKind::Enum, false),
+    (TabTitleFallback, "tab_title_fallback", [], Tabs, "TAB TITLES", "Fallback Title", "Default tab title when no source is available", ["tab", "title", "fallback"], RootSettingValueKind::Text, false),
+    (TabTitleExplicitPrefix, "tab_title_explicit_prefix", [], Tabs, "TAB TITLES", "Explicit Prefix", "Prefix used for explicit OSC title payloads", ["tab", "title", "prefix", "osc"], RootSettingValueKind::Text, false),
+    (TabTitleShellIntegration, "tab_title_shell_integration", [], Tabs, "TAB TITLES", "Shell Integration", "Export TERMY_* environment values for shell hooks", ["shell", "integration", "env", "hooks"], RootSettingValueKind::Boolean, false),
+    (TabTitlePromptFormat, "tab_title_prompt_format", [], Tabs, "TAB TITLES", "Prompt Format", "Template for prompt-derived tab titles", ["tab", "title", "prompt", "format"], RootSettingValueKind::Text, false),
+    (TabTitleCommandFormat, "tab_title_command_format", [], Tabs, "TAB TITLES", "Command Format", "Template for command-derived tab titles", ["tab", "title", "command", "format"], RootSettingValueKind::Text, false),
+    (TabCloseVisibility, "tab_close_visibility", [], Tabs, "TAB STRIP", "Close Button Visibility", "When tab close buttons are visible", ["tab", "close", "visibility", "hover"], RootSettingValueKind::Enum, false),
+    (TabWidthMode, "tab_width_mode", [], Tabs, "TAB STRIP", "Tab Width Mode", "How tab widths react to active state", ["tab", "width", "layout", "active"], RootSettingValueKind::Enum, false),
+    (ShowTermyInTitlebar, "show_termy_in_titlebar", [], Tabs, "TITLE BAR", "Show Termy In Titlebar", "Show or hide the termy branding in the titlebar", ["titlebar", "branding", "tabs"], RootSettingValueKind::Boolean, false),
+    (Shell, "shell", [], Terminal, "SHELL", "Shell", "Executable used for new sessions", ["shell", "bash", "zsh", "fish"], RootSettingValueKind::Text, false),
+    (Term, "term", [], Terminal, "SHELL", "TERM", "TERM value exposed to child applications", ["term", "terminal", "env"], RootSettingValueKind::Text, false),
+    (Colorterm, "colorterm", [], Terminal, "SHELL", "COLORTERM", "COLORTERM value exposed to child applications", ["colorterm", "color", "env"], RootSettingValueKind::Text, false),
+    (WindowWidth, "window_width", [], Advanced, "WINDOW", "Window Width", "Default startup window width in pixels", ["window", "width", "startup", "size"], RootSettingValueKind::Numeric, false),
+    (WindowHeight, "window_height", [], Advanced, "WINDOW", "Window Height", "Default startup window height in pixels", ["window", "height", "startup", "size"], RootSettingValueKind::Numeric, false),
+    (FontFamily, "font_family", [], Appearance, "FONT", "Font Family", "Font family used in terminal UI", ["font", "typeface", "text"], RootSettingValueKind::Special, false),
+    (FontSize, "font_size", [], Appearance, "FONT", "Font Size", "Terminal font size in pixels", ["font", "size", "text"], RootSettingValueKind::Numeric, false),
+    (CursorStyle, "cursor_style", [], Terminal, "CURSOR", "Cursor Style", "Shape of the terminal cursor", ["cursor", "shape", "block", "line"], RootSettingValueKind::Enum, false),
+    (CursorBlink, "cursor_blink", [], Terminal, "CURSOR", "Cursor Blink", "Enable blinking cursor animation", ["cursor", "blink", "animation"], RootSettingValueKind::Boolean, false),
+    (BackgroundOpacity, "background_opacity", [], Appearance, "WINDOW", "Background Opacity", "Window background opacity (0.0 to 1.0)", ["background", "opacity", "transparency"], RootSettingValueKind::Numeric, false),
+    (BackgroundBlur, "background_blur", [], Appearance, "WINDOW", "Background Blur", "Enable blur effect for transparent backgrounds", ["background", "blur", "window"], RootSettingValueKind::Boolean, false),
+    (PaddingX, "padding_x", [], Appearance, "PADDING", "Horizontal Padding", "Left and right terminal padding", ["padding", "spacing", "horizontal"], RootSettingValueKind::Numeric, false),
+    (PaddingY, "padding_y", [], Appearance, "PADDING", "Vertical Padding", "Top and bottom terminal padding", ["padding", "spacing", "vertical"], RootSettingValueKind::Numeric, false),
+    (MouseScrollMultiplier, "mouse_scroll_multiplier", [], Terminal, "SCROLLING", "Scroll Multiplier", "Mouse wheel scroll speed multiplier", ["scroll", "mouse", "speed"], RootSettingValueKind::Numeric, false),
+    (ScrollbarVisibility, "scrollbar_visibility", [], Terminal, "SCROLLING", "Scrollbar Visibility", "Terminal scrollbar visibility behavior", ["scrollbar", "visibility", "scroll"], RootSettingValueKind::Enum, false),
+    (ScrollbarStyle, "scrollbar_style", [], Terminal, "SCROLLING", "Scrollbar Style", "Terminal scrollbar color style", ["scrollbar", "style", "theme"], RootSettingValueKind::Enum, false),
+    (ScrollbackHistory, "scrollback_history", ["scrollback"], Terminal, "SCROLLING", "Scrollback History", "Lines retained in terminal scrollback", ["scrollback", "history", "buffer", "lines"], RootSettingValueKind::Numeric, false),
+    (InactiveTabScrollback, "inactive_tab_scrollback", [], Terminal, "SCROLLING", "Inactive Tab Scrollback", "Scrollback limit for inactive tabs", ["scrollback", "inactive", "tabs"], RootSettingValueKind::Numeric, false),
+    (CommandPaletteShowKeybinds, "command_palette_show_keybinds", [], Terminal, "UI", "Show Keybindings In Palette", "Show shortcut badges in command palette rows", ["palette", "keybinds", "shortcuts"], RootSettingValueKind::Boolean, false),
+    (Keybind, "keybind", [], Keybindings, "KEYBINDS", "Keybind Directive", "Keybinding override directive", ["keybind", "shortcut", "command"], RootSettingValueKind::Special, true),
 }
 
 define_color_settings! {
@@ -222,6 +341,23 @@ pub fn canonical_root_key(raw: &str) -> Option<&'static str> {
 
 pub fn canonical_color_key(raw: &str) -> Option<&'static str> {
     color_setting_from_key(raw).map(|id| color_setting_spec(id).key)
+}
+
+pub fn root_setting_value_kind(id: RootSettingId) -> RootSettingValueKind {
+    root_setting_spec(id).value_kind
+}
+
+pub fn root_setting_enum_choices(id: RootSettingId) -> Option<&'static [EnumChoice]> {
+    match id {
+        RootSettingId::WorkingDirFallback => Some(WORKING_DIR_FALLBACK_ENUM_CHOICES),
+        RootSettingId::TabTitleMode => Some(TAB_TITLE_MODE_ENUM_CHOICES),
+        RootSettingId::TabCloseVisibility => Some(TAB_CLOSE_VISIBILITY_ENUM_CHOICES),
+        RootSettingId::TabWidthMode => Some(TAB_WIDTH_MODE_ENUM_CHOICES),
+        RootSettingId::CursorStyle => Some(CURSOR_STYLE_ENUM_CHOICES),
+        RootSettingId::ScrollbarVisibility => Some(SCROLLBAR_VISIBILITY_ENUM_CHOICES),
+        RootSettingId::ScrollbarStyle => Some(SCROLLBAR_STYLE_ENUM_CHOICES),
+        _ => None,
+    }
 }
 
 pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Option<String> {
@@ -302,5 +438,105 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
         RootSettingId::InactiveTabScrollback => config.inactive_tab_scrollback.map(|v| v.to_string()),
         RootSettingId::CommandPaletteShowKeybinds => Some(config.command_palette_show_keybinds.to_string()),
         RootSettingId::Keybind => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enum_choice_values(id: RootSettingId) -> Vec<&'static str> {
+        root_setting_enum_choices(id)
+            .expect("missing enum choices")
+            .iter()
+            .map(|choice| choice.value)
+            .collect()
+    }
+
+    #[test]
+    fn enum_target_fields_have_expected_choices() {
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::CursorStyle),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::CursorStyle),
+            vec!["block", "line"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::TabTitleMode),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::TabTitleMode),
+            vec!["smart", "shell", "explicit", "static"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::ScrollbarVisibility),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::ScrollbarVisibility),
+            vec!["off", "always", "on_scroll"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::ScrollbarStyle),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::ScrollbarStyle),
+            vec!["neutral", "muted_theme", "theme"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::TabCloseVisibility),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::TabCloseVisibility),
+            vec!["active_hover", "hover", "always"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::TabWidthMode),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::TabWidthMode),
+            vec!["stable", "active_grow", "active_grow_sticky"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::WorkingDirFallback),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::WorkingDirFallback),
+            vec!["home", "process"]
+        );
+    }
+
+    #[test]
+    fn non_target_fields_are_not_enum() {
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::Theme),
+            RootSettingValueKind::Special
+        );
+        assert!(root_setting_enum_choices(RootSettingId::Theme).is_none());
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::TabTitlePriority),
+            RootSettingValueKind::Special
+        );
+        assert!(root_setting_enum_choices(RootSettingId::TabTitlePriority).is_none());
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::CursorBlink),
+            RootSettingValueKind::Boolean
+        );
+        assert!(root_setting_enum_choices(RootSettingId::CursorBlink).is_none());
     }
 }

@@ -1,6 +1,7 @@
 use crate::colors::TerminalColors;
-use crate::config::{self, AppConfig, CursorStyle, TabTitleMode};
+use crate::config::{self, AppConfig};
 use crate::text_input::{TextInputAlignment, TextInputElement, TextInputProvider, TextInputState};
+use crate::ui::scrollbar::{self as ui_scrollbar, ScrollbarPaintStyle, ScrollbarRange};
 use gpui::{
     AnyElement, AsyncApp, Context, FocusHandle, Font, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render,
@@ -12,7 +13,8 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termy_config_core::{
-    SettingsSection as CoreSettingsSection, color_setting_specs, root_setting_specs,
+    RootSettingId, RootSettingValueKind, SettingsSection as CoreSettingsSection,
+    color_setting_specs, root_setting_enum_choices, root_setting_specs, root_setting_value_kind,
 };
 
 mod colors;
@@ -31,6 +33,11 @@ const SETTINGS_CONFIG_WATCH_INTERVAL_MS: u64 = 750;
 const SETTINGS_SEARCH_NAV_THROTTLE_MS: u64 = 70;
 const SETTINGS_SCROLL_ANIMATION_DURATION_MS: u64 = 170;
 const SETTINGS_SCROLL_ANIMATION_TICK_MS: u64 = 16;
+const SETTINGS_SCROLLBAR_WIDTH: f32 = 8.0;
+const SETTINGS_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 18.0;
+const SETTINGS_SCROLLBAR_TRACK_ALPHA: f32 = 0.10;
+const SETTINGS_SCROLLBAR_THUMB_ALPHA: f32 = 0.42;
+const SETTINGS_SCROLLBAR_THUMB_ACTIVE_ALPHA: f32 = 0.58;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditableField {
@@ -46,10 +53,12 @@ enum EditableField {
     ScrollbackHistory,
     InactiveTabScrollback,
     ScrollMultiplier,
+    CursorStyle,
     ScrollbarVisibility,
     ScrollbarStyle,
     TabFallbackTitle,
     TabTitlePriority,
+    TabTitleMode,
     TabTitleExplicitPrefix,
     TabTitlePromptFormat,
     TabTitleCommandFormat,
@@ -68,6 +77,41 @@ struct ActiveTextInput {
     field: EditableField,
     state: TextInputState,
     selecting: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DropdownOption {
+    value: String,
+    label: String,
+    show_raw_value: bool,
+}
+
+impl DropdownOption {
+    fn raw(value: String) -> Self {
+        Self {
+            label: value.clone(),
+            value,
+            show_raw_value: false,
+        }
+    }
+
+    fn labeled(value: String, label: String, show_raw_value: bool) -> Self {
+        Self {
+            value,
+            label,
+            show_raw_value,
+        }
+    }
+
+    fn display_text(&self) -> String {
+        if self.show_raw_value {
+            format!("{} ({})", self.label, self.value)
+        } else if self.label == self.value {
+            self.label.clone()
+        } else {
+            format!("{} ({})", self.label, self.value)
+        }
+    }
 }
 
 impl ActiveTextInput {
@@ -722,6 +766,46 @@ impl SettingsWindow {
         c
     }
 
+    fn settings_scrollbar_style(&self) -> ScrollbarPaintStyle {
+        let mut track = self.colors.foreground;
+        track.a = SETTINGS_SCROLLBAR_TRACK_ALPHA;
+
+        let mut thumb = self.colors.foreground;
+        thumb.a = SETTINGS_SCROLLBAR_THUMB_ALPHA;
+
+        let mut active_thumb = self.colors.foreground;
+        active_thumb.a = SETTINGS_SCROLLBAR_THUMB_ACTIVE_ALPHA;
+
+        ScrollbarPaintStyle {
+            width: SETTINGS_SCROLLBAR_WIDTH,
+            track_radius: 0.0,
+            thumb_radius: 0.0,
+            thumb_inset: 0.0,
+            marker_inset: 0.0,
+            marker_radius: 0.0,
+            track_color: track,
+            thumb_color: thumb,
+            active_thumb_color: active_thumb,
+            marker_color: None,
+            current_marker_color: None,
+        }
+    }
+
+    fn settings_scrollbar_metrics(&self, window: &Window) -> Option<ui_scrollbar::ScrollbarMetrics> {
+        let viewport_height: f32 = window.bounds().size.height.into();
+        let max_offset: f32 = self.content_scroll_handle.max_offset().height.into();
+        let offset_y: f32 = self.content_scroll_handle.offset().y.into();
+        let offset = (-offset_y).max(0.0);
+        let range = ScrollbarRange {
+            offset,
+            max_offset,
+            viewport_extent: viewport_height,
+            track_extent: viewport_height,
+        };
+
+        ui_scrollbar::compute_metrics(range, SETTINGS_SCROLLBAR_MIN_THUMB_HEIGHT)
+    }
+
     fn srgb_to_linear(channel: f32) -> f32 {
         if channel <= 0.04045 {
             channel / 12.92
@@ -994,6 +1078,194 @@ impl SettingsWindow {
             }))
     }
 
+    fn root_setting_for_editable_field(field: EditableField) -> Option<RootSettingId> {
+        match field {
+            EditableField::Theme => Some(RootSettingId::Theme),
+            EditableField::BackgroundOpacity => Some(RootSettingId::BackgroundOpacity),
+            EditableField::FontFamily => Some(RootSettingId::FontFamily),
+            EditableField::FontSize => Some(RootSettingId::FontSize),
+            EditableField::PaddingX => Some(RootSettingId::PaddingX),
+            EditableField::PaddingY => Some(RootSettingId::PaddingY),
+            EditableField::Shell => Some(RootSettingId::Shell),
+            EditableField::Term => Some(RootSettingId::Term),
+            EditableField::Colorterm => Some(RootSettingId::Colorterm),
+            EditableField::ScrollbackHistory => Some(RootSettingId::ScrollbackHistory),
+            EditableField::InactiveTabScrollback => Some(RootSettingId::InactiveTabScrollback),
+            EditableField::ScrollMultiplier => Some(RootSettingId::MouseScrollMultiplier),
+            EditableField::CursorStyle => Some(RootSettingId::CursorStyle),
+            EditableField::ScrollbarVisibility => Some(RootSettingId::ScrollbarVisibility),
+            EditableField::ScrollbarStyle => Some(RootSettingId::ScrollbarStyle),
+            EditableField::TabFallbackTitle => Some(RootSettingId::TabTitleFallback),
+            EditableField::TabTitlePriority => Some(RootSettingId::TabTitlePriority),
+            EditableField::TabTitleMode => Some(RootSettingId::TabTitleMode),
+            EditableField::TabTitleExplicitPrefix => Some(RootSettingId::TabTitleExplicitPrefix),
+            EditableField::TabTitlePromptFormat => Some(RootSettingId::TabTitlePromptFormat),
+            EditableField::TabTitleCommandFormat => Some(RootSettingId::TabTitleCommandFormat),
+            EditableField::TabCloseVisibility => Some(RootSettingId::TabCloseVisibility),
+            EditableField::TabWidthMode => Some(RootSettingId::TabWidthMode),
+            EditableField::WorkingDirectory => Some(RootSettingId::WorkingDir),
+            EditableField::WorkingDirFallback => Some(RootSettingId::WorkingDirFallback),
+            EditableField::WindowWidth => Some(RootSettingId::WindowWidth),
+            EditableField::WindowHeight => Some(RootSettingId::WindowHeight),
+            EditableField::KeybindDirectives | EditableField::Color(_) => None,
+        }
+    }
+
+    fn enum_root_setting_for_field(field: EditableField) -> Option<RootSettingId> {
+        let setting = Self::root_setting_for_editable_field(field)?;
+        (root_setting_value_kind(setting) == RootSettingValueKind::Enum).then_some(setting)
+    }
+
+    fn field_uses_dropdown(field: EditableField) -> bool {
+        matches!(field, EditableField::Theme | EditableField::FontFamily)
+            || Self::enum_root_setting_for_field(field).is_some()
+    }
+
+    fn dropdown_option_for_enum_choice(value: &str, label: &str) -> DropdownOption {
+        DropdownOption::labeled(value.to_string(), label.to_string(), true)
+    }
+
+    fn normalize_dropdown_query_token(value: &str) -> String {
+        value
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|ch| !matches!(ch, '_' | '-' | ' ' | '+'))
+            .collect()
+    }
+
+    fn filtered_enum_suggestions(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+        let Some(setting) = Self::enum_root_setting_for_field(field) else {
+            return Vec::new();
+        };
+        let Some(choices) = root_setting_enum_choices(setting) else {
+            return Vec::new();
+        };
+
+        let mut options = choices
+            .iter()
+            .map(|choice| Self::dropdown_option_for_enum_choice(choice.value, choice.label))
+            .collect::<Vec<_>>();
+
+        let trimmed_query = query.trim();
+        let normalized_query = trimmed_query.to_ascii_lowercase();
+        let normalized_compact = Self::normalize_dropdown_query_token(trimmed_query);
+        if normalized_query.is_empty() {
+            let current_value = self.editable_field_value(field);
+            if let Some(index) = options
+                .iter()
+                .position(|option| option.value.eq_ignore_ascii_case(&current_value))
+            {
+                let selected = options.remove(index);
+                options.insert(0, selected);
+            } else if !current_value.trim().is_empty() {
+                options.insert(0, DropdownOption::raw(current_value));
+            }
+            return options;
+        }
+
+        let mut matched = options
+            .into_iter()
+            .filter(|option| {
+                let value_lower = option.value.to_ascii_lowercase();
+                let label_lower = option.label.to_ascii_lowercase();
+                let value_compact = Self::normalize_dropdown_query_token(&option.value);
+                let label_compact = Self::normalize_dropdown_query_token(&option.label);
+                value_lower.contains(&normalized_query)
+                    || label_lower.contains(&normalized_query)
+                    || (!normalized_compact.is_empty()
+                        && (value_compact.contains(&normalized_compact)
+                            || label_compact.contains(&normalized_compact)))
+            })
+            .collect::<Vec<_>>();
+
+        if !trimmed_query.is_empty()
+            && !matched
+                .iter()
+                .any(|option| {
+                    option.value.eq_ignore_ascii_case(trimmed_query)
+                        || Self::normalize_dropdown_query_token(&option.value)
+                            == normalized_compact
+                })
+        {
+            matched.insert(0, DropdownOption::raw(trimmed_query.to_string()));
+        }
+
+        matched
+    }
+
+    fn dropdown_options_for_field(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+        if field == EditableField::Theme {
+            return self
+                .filtered_theme_suggestions(query)
+                .into_iter()
+                .map(DropdownOption::raw)
+                .collect();
+        }
+        if field == EditableField::FontFamily {
+            return self
+                .filtered_font_suggestions(query)
+                .into_iter()
+                .map(DropdownOption::raw)
+                .collect();
+        }
+
+        self.filtered_enum_suggestions(field, query)
+    }
+
+    fn dropdown_display_value(&self, field: EditableField, raw_value: &str) -> String {
+        let Some(setting) = Self::enum_root_setting_for_field(field) else {
+            return raw_value.to_string();
+        };
+        let Some(choices) = root_setting_enum_choices(setting) else {
+            return raw_value.to_string();
+        };
+        let Some(choice) = choices
+            .iter()
+            .find(|choice| choice.value.eq_ignore_ascii_case(raw_value))
+        else {
+            return raw_value.to_string();
+        };
+        Self::dropdown_option_for_enum_choice(choice.value, choice.label).display_text()
+    }
+
+    fn apply_dropdown_selection(
+        &mut self,
+        field: EditableField,
+        selected_value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.apply_editable_field(field, selected_value) {
+            termy_toast::error(error);
+            return;
+        }
+        self.active_input = None;
+        cx.notify();
+    }
+
+    fn commit_dropdown_selection(
+        &mut self,
+        field: EditableField,
+        query: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !Self::field_uses_dropdown(field) {
+            return false;
+        }
+
+        let Some(first_option) = self
+            .dropdown_options_for_field(field, query)
+            .into_iter()
+            .next()
+        else {
+            self.cancel_active_input(cx);
+            return true;
+        };
+
+        self.apply_dropdown_selection(field, &first_option.value, cx);
+        true
+    }
+
     fn editable_field_value(&self, field: EditableField) -> String {
         match field {
             EditableField::Theme => self.config.theme.clone(),
@@ -1015,6 +1287,11 @@ impl SettingsWindow {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             EditableField::ScrollMultiplier => format!("{}", self.config.mouse_scroll_multiplier),
+            EditableField::CursorStyle => match self.config.cursor_style {
+                termy_config_core::CursorStyle::Line => "line",
+                termy_config_core::CursorStyle::Block => "block",
+            }
+            .to_string(),
             EditableField::ScrollbarVisibility => {
                 match self.config.terminal_scrollbar_visibility {
                     termy_config_core::TerminalScrollbarVisibility::Off => "off",
@@ -1045,6 +1322,13 @@ impl SettingsWindow {
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
+            EditableField::TabTitleMode => match self.config.tab_title.mode {
+                termy_config_core::TabTitleMode::Smart => "smart",
+                termy_config_core::TabTitleMode::Shell => "shell",
+                termy_config_core::TabTitleMode::Explicit => "explicit",
+                termy_config_core::TabTitleMode::Static => "static",
+            }
+            .to_string(),
             EditableField::TabTitleExplicitPrefix => self.config.tab_title.explicit_prefix.clone(),
             EditableField::TabTitlePromptFormat => self.config.tab_title.prompt_format.clone(),
             EditableField::TabTitleCommandFormat => self.config.tab_title.command_format.clone(),
@@ -1195,6 +1479,19 @@ impl SettingsWindow {
                 self.config.mouse_scroll_multiplier = parsed;
                 config::set_root_setting(termy_config_core::RootSettingId::MouseScrollMultiplier, &parsed.to_string())
             }
+            EditableField::CursorStyle => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "line" | "bar" | "beam" | "ibeam" => termy_config_core::CursorStyle::Line,
+                    "block" | "box" => termy_config_core::CursorStyle::Block,
+                    _ => return Err("Cursor style must be line or block".to_string()),
+                };
+                self.config.cursor_style = parsed;
+                let canonical = match parsed {
+                    termy_config_core::CursorStyle::Line => "line",
+                    termy_config_core::CursorStyle::Block => "block",
+                };
+                config::set_root_setting(termy_config_core::RootSettingId::CursorStyle, canonical)
+            }
             EditableField::ScrollbarVisibility => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
                     "off" => termy_config_core::TerminalScrollbarVisibility::Off,
@@ -1205,7 +1502,15 @@ impl SettingsWindow {
                     }
                 };
                 self.config.terminal_scrollbar_visibility = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarVisibility, value)
+                let canonical = match parsed {
+                    termy_config_core::TerminalScrollbarVisibility::Off => "off",
+                    termy_config_core::TerminalScrollbarVisibility::Always => "always",
+                    termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
+                };
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::ScrollbarVisibility,
+                    canonical,
+                )
             }
             EditableField::ScrollbarStyle => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
@@ -1217,7 +1522,12 @@ impl SettingsWindow {
                     _ => return Err("Scrollbar style must be neutral, muted_theme, or theme".to_string()),
                 };
                 self.config.terminal_scrollbar_style = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarStyle, value)
+                let canonical = match parsed {
+                    termy_config_core::TerminalScrollbarStyle::Neutral => "neutral",
+                    termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
+                    termy_config_core::TerminalScrollbarStyle::Theme => "theme",
+                };
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarStyle, canonical)
             }
             EditableField::TabFallbackTitle => {
                 if value.is_empty() {
@@ -1243,6 +1553,28 @@ impl SettingsWindow {
                     return Err("Title priority must contain valid sources".to_string());
                 }
                 config::set_root_setting(termy_config_core::RootSettingId::TabTitlePriority, value)
+            }
+            EditableField::TabTitleMode => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "smart" => termy_config_core::TabTitleMode::Smart,
+                    "shell" => termy_config_core::TabTitleMode::Shell,
+                    "explicit" => termy_config_core::TabTitleMode::Explicit,
+                    "static" => termy_config_core::TabTitleMode::Static,
+                    _ => {
+                        return Err(
+                            "Tab title mode must be smart, shell, explicit, or static"
+                                .to_string(),
+                        )
+                    }
+                };
+                self.config.tab_title.mode = parsed;
+                let canonical = match parsed {
+                    termy_config_core::TabTitleMode::Smart => "smart",
+                    termy_config_core::TabTitleMode::Shell => "shell",
+                    termy_config_core::TabTitleMode::Explicit => "explicit",
+                    termy_config_core::TabTitleMode::Static => "static",
+                };
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, canonical)
             }
             EditableField::TabTitleExplicitPrefix => {
                 if value.is_empty() {
@@ -1275,7 +1607,15 @@ impl SettingsWindow {
                     _ => return Err("Tab close visibility must be active_hover, hover, or always".to_string()),
                 };
                 self.config.tab_close_visibility = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::TabCloseVisibility, value)
+                let canonical = match parsed {
+                    termy_config_core::TabCloseVisibility::ActiveHover => "active_hover",
+                    termy_config_core::TabCloseVisibility::Hover => "hover",
+                    termy_config_core::TabCloseVisibility::Always => "always",
+                };
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::TabCloseVisibility,
+                    canonical,
+                )
             }
             EditableField::TabWidthMode => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
@@ -1294,7 +1634,12 @@ impl SettingsWindow {
                     }
                 };
                 self.config.tab_width_mode = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::TabWidthMode, value)
+                let canonical = match parsed {
+                    termy_config_core::TabWidthMode::Stable => "stable",
+                    termy_config_core::TabWidthMode::ActiveGrow => "active_grow",
+                    termy_config_core::TabWidthMode::ActiveGrowSticky => "active_grow_sticky",
+                };
+                config::set_root_setting(termy_config_core::RootSettingId::TabWidthMode, canonical)
             }
             EditableField::KeybindDirectives => {
                 let lines = value
@@ -1345,7 +1690,11 @@ impl SettingsWindow {
                     _ => return Err("Working dir fallback must be home or process".to_string()),
                 };
                 self.config.working_dir_fallback = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::WorkingDirFallback, value)
+                let canonical = match parsed {
+                    termy_config_core::WorkingDirFallback::Home => "home",
+                    termy_config_core::WorkingDirFallback::Process => "process",
+                };
+                config::set_root_setting(termy_config_core::RootSettingId::WorkingDirFallback, canonical)
             }
             EditableField::WindowWidth => {
                 let parsed = value
@@ -1547,22 +1896,6 @@ impl SettingsWindow {
             .collect()
     }
 
-    fn apply_theme_selection(&mut self, theme_id: &str, cx: &mut Context<Self>) {
-        if let Err(error) = self.apply_editable_field(EditableField::Theme, theme_id) {
-            termy_toast::error(error);
-        }
-        self.active_input = None;
-        cx.notify();
-    }
-
-    fn apply_font_selection(&mut self, font_family: &str, cx: &mut Context<Self>) {
-        if let Err(error) = self.apply_editable_field(EditableField::FontFamily, font_family) {
-            termy_toast::error(error);
-        }
-        self.active_input = None;
-        cx.notify();
-    }
-
     fn commit_active_input(&mut self, cx: &mut Context<Self>) {
         let Some(input) = self.active_input.take() else {
             return;
@@ -1728,33 +2061,15 @@ impl SettingsWindow {
             .active_input
             .as_ref()
             .is_some_and(|input| input.field == field);
-        let is_theme_field = field == EditableField::Theme;
-        let is_font_field = field == EditableField::FontFamily;
-        let accent_inner_border = is_numeric || is_theme_field || is_font_field;
-        let theme_suggestions = if is_theme_field && is_active {
+        let uses_dropdown = Self::field_uses_dropdown(field);
+        let accent_inner_border = is_numeric || uses_dropdown;
+        let dropdown_options = if uses_dropdown && is_active {
             let query = self
                 .active_input
                 .as_ref()
                 .map(|input| input.state.text())
                 .unwrap_or("");
-            self.filtered_theme_suggestions(query)
-        } else {
-            Vec::new()
-        };
-        let font_suggestions = if is_font_field && is_active {
-            let query = self
-                .active_input
-                .as_ref()
-                .map(|input| input.state.text())
-                .unwrap_or("");
-            self.filtered_font_suggestions(query)
-        } else {
-            Vec::new()
-        };
-        let dropdown_options = if is_theme_field {
-            theme_suggestions
-        } else if is_font_field {
-            font_suggestions
+            self.dropdown_options_for_field(field, query)
         } else {
             Vec::new()
         };
@@ -1770,36 +2085,30 @@ impl SettingsWindow {
         let text_muted = self.text_muted();
 
         let mut dropdown = None;
-        let dropdown_open =
-            is_active && (is_theme_field || is_font_field) && !dropdown_options.is_empty();
+        let dropdown_open = is_active && uses_dropdown && !dropdown_options.is_empty();
         if dropdown_open {
             let mut list = div().flex().flex_col().py_1();
             for (index, option) in dropdown_options.into_iter().enumerate() {
-                let option_label = option.clone();
-                let option_value = option.clone();
+                let option_label = option.display_text();
+                let option_value = option.value.clone();
+                let should_preview_font = field == EditableField::FontFamily;
                 list = list.child(
                     div()
-                        .id(SharedString::from(if is_theme_field {
-                            format!("theme-option-{index}")
-                        } else {
-                            format!("font-option-{index}")
-                        }))
+                        .id(SharedString::from(format!(
+                            "dropdown-option-{field:?}-{index}"
+                        )))
                         .px_3()
                         .py_1()
                         .text_sm()
                         .text_color(text_secondary)
                         .cursor_pointer()
-                        .when(is_font_field, |s| s.font_family(option_value.clone()))
+                        .when(should_preview_font, |s| s.font_family(option_value.clone()))
                         .hover(|this| this.bg(hover_bg))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |view, _event: &MouseDownEvent, _window, cx| {
                                 cx.stop_propagation();
-                                if is_theme_field {
-                                    view.apply_theme_selection(&option_value, cx);
-                                } else {
-                                    view.apply_font_selection(&option_value, cx);
-                                }
+                                view.apply_dropdown_selection(field, &option_value, cx);
                             }),
                         )
                         .child(option_label),
@@ -1811,17 +2120,17 @@ impl SettingsWindow {
             dropdown = Some(
                 deferred(
                     div()
-                        .id(if is_theme_field {
-                            "theme-suggestions-list"
-                        } else {
-                            "font-suggestions-list"
-                        })
+                        .id(SharedString::from(format!("dropdown-suggestions-{field:?}")))
                         .occlude()
                         .absolute()
                         .top(px(34.0))
                         .left_0()
                         .right_0()
-                        .max_h(if is_theme_field { px(180.0) } else { px(240.0) })
+                        .max_h(if field == EditableField::Theme {
+                            px(180.0)
+                        } else {
+                            px(240.0)
+                        })
                         .overflow_scroll()
                         .overflow_x_hidden()
                         .rounded(px(0.0))
@@ -1845,6 +2154,12 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
+
+        let readonly_display_value = if !is_active && uses_dropdown {
+            self.dropdown_display_value(field, &display_value)
+        } else {
+            display_value.clone()
+        };
 
         let value_element = if is_numeric {
             div()
@@ -1920,7 +2235,7 @@ impl SettingsWindow {
             div()
                 .text_sm()
                 .text_color(text_secondary)
-                .child(display_value)
+                .child(readonly_display_value)
                 .into_any_element()
         };
 
@@ -2126,6 +2441,11 @@ impl SettingsWindow {
         }
 
         let active_field = self.active_input.as_ref().map(|input| input.field);
+        let active_input_query = self
+            .active_input
+            .as_ref()
+            .map(|input| input.state.text().to_string())
+            .unwrap_or_default();
         let allow_text_editing = active_field.is_some_and(Self::uses_text_input_for_field);
 
         if cmd_only
@@ -2139,46 +2459,25 @@ impl SettingsWindow {
 
         match event.keystroke.key.as_str() {
             "enter" => {
-                if active_field == Some(EditableField::FontFamily) {
-                    if let Some(first) = self
-                        .active_input
-                        .as_ref()
-                        .map(|input| self.filtered_font_suggestions(input.state.text()))
-                        .and_then(|items| items.into_iter().next())
-                    {
-                        self.apply_font_selection(&first, cx);
-                    } else {
-                        self.cancel_active_input(cx);
+                if let Some(field) = active_field {
+                    if field == EditableField::Theme {
+                        self.commit_active_input(cx);
+                        return;
                     }
-                } else {
-                    self.commit_active_input(cx);
                 }
+                if let Some(field) = active_field
+                    && self.commit_dropdown_selection(field, &active_input_query, cx)
+                {
+                    return;
+                }
+                self.commit_active_input(cx);
             }
             "escape" => self.cancel_active_input(cx),
             "tab" => {
-                if self
-                    .active_input
-                    .as_ref()
-                    .is_some_and(|input| input.field == EditableField::Theme)
-                    && let Some(first) = self
-                        .active_input
-                        .as_ref()
-                        .map(|input| self.filtered_theme_suggestions(input.state.text()))
-                        .and_then(|items| items.into_iter().next())
+                if let Some(field) = active_field
+                    && self.commit_dropdown_selection(field, &active_input_query, cx)
                 {
-                    self.apply_theme_selection(&first, cx);
-                }
-                if self
-                    .active_input
-                    .as_ref()
-                    .is_some_and(|input| input.field == EditableField::FontFamily)
-                    && let Some(first) = self
-                        .active_input
-                        .as_ref()
-                        .map(|input| self.filtered_font_suggestions(input.state.text()))
-                        .and_then(|items| items.into_iter().next())
-                {
-                    self.apply_font_selection(&first, cx);
+                    return;
                 }
             }
             "backspace" => {
@@ -2219,279 +2518,6 @@ impl SettingsWindow {
             }
             _ => {}
         }
-    }
-
-    fn render_cursor_style_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let current = self.config.cursor_style;
-        let meta =
-            Self::setting_metadata("cursor_style").expect("missing metadata for cursor_style");
-        let bg_card = self.bg_card();
-        let border_color = self.border_color();
-        let text_primary = self.text_primary();
-        let text_muted = self.text_muted();
-        let text_secondary = self.text_secondary();
-        let accent = self.accent();
-        let hover_bg = self.bg_hover();
-        let switch_off_bg = self.bg_input();
-        let selected_text = self.contrasting_text_for_fill(accent, bg_card);
-
-        let row = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .py_3()
-            .px_4()
-            .rounded(px(0.0))
-            .bg(bg_card)
-            .border_1()
-            .border_color(border_color)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text_primary)
-                            .child(meta.title),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(text_muted)
-                            .child(meta.description),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child({
-                        let is_selected = current == CursorStyle::Block;
-                        div()
-                            .id("cursor_style-block")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Block")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.cursor_style = CursorStyle::Block;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorStyle, "block");
-                                cx.notify();
-                            }))
-                    })
-                    .child({
-                        let is_selected = current == CursorStyle::Line;
-                        div()
-                            .id("cursor_style-line")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Line")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.cursor_style = CursorStyle::Line;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorStyle, "line");
-                                cx.notify();
-                            }))
-                    }),
-            );
-
-        self.wrap_setting_with_scroll_anchor("cursor_style", row.into_any_element())
-    }
-
-    fn render_tab_title_mode_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let current = self.config.tab_title.mode;
-        let meta = Self::setting_metadata("tab_title_mode").expect("missing metadata for tab_title_mode");
-        let bg_card = self.bg_card();
-        let border_color = self.border_color();
-        let text_primary = self.text_primary();
-        let text_muted = self.text_muted();
-        let text_secondary = self.text_secondary();
-        let accent = self.accent();
-        let hover_bg = self.bg_hover();
-        let switch_off_bg = self.bg_input();
-        let selected_text = self.contrasting_text_for_fill(accent, bg_card);
-
-        let row = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .py_3()
-            .px_4()
-            .rounded(px(0.0))
-            .bg(bg_card)
-            .border_1()
-            .border_color(border_color)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text_primary)
-                            .child(meta.title),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(text_muted)
-                            .child(meta.description),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child({
-                        let is_selected = current == TabTitleMode::Smart;
-                        div()
-                            .id("tab-mode-smart")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Smart")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.tab_title.mode = TabTitleMode::Smart;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "smart");
-                                cx.notify();
-                            }))
-                    })
-                    .child({
-                        let is_selected = current == TabTitleMode::Shell;
-                        div()
-                            .id("tab-mode-shell")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Shell")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.tab_title.mode = TabTitleMode::Shell;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "shell");
-                                cx.notify();
-                            }))
-                    })
-                    .child({
-                        let is_selected = current == TabTitleMode::Explicit;
-                        div()
-                            .id("tab-mode-explicit")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Explicit")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.tab_title.mode = TabTitleMode::Explicit;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "explicit");
-                                cx.notify();
-                            }))
-                    })
-                    .child({
-                        let is_selected = current == TabTitleMode::Static;
-                        div()
-                            .id("tab-mode-static")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(0.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(if is_selected {
-                                accent.into()
-                            } else {
-                                switch_off_bg
-                            })
-                            .text_color(if is_selected {
-                                selected_text
-                            } else {
-                                text_secondary
-                            })
-                            .hover(|s| if !is_selected { s.bg(hover_bg) } else { s })
-                            .child("Static")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.config.tab_title.mode = TabTitleMode::Static;
-                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "static");
-                                cx.notify();
-                            }))
-                    }),
-            );
-
-        self.wrap_setting_with_scroll_anchor("tab_title_mode", row.into_any_element())
     }
 
     fn render_appearance_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2619,6 +2645,8 @@ impl SettingsWindow {
             .expect("missing metadata for mouse_scroll_multiplier");
         let inactive_scrollback_meta = Self::setting_metadata("inactive_tab_scrollback")
             .expect("missing metadata for inactive_tab_scrollback");
+        let cursor_style_meta =
+            Self::setting_metadata("cursor_style").expect("missing metadata for cursor_style");
         let scrollbar_visibility_meta = Self::setting_metadata("scrollbar_visibility")
             .expect("missing metadata for scrollbar_visibility");
         let scrollbar_style_meta = Self::setting_metadata("scrollbar_style")
@@ -2644,7 +2672,14 @@ impl SettingsWindow {
                     let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorBlink, &view.config.cursor_blink.to_string());
                 },
             ))
-            .child(self.render_cursor_style_row(cx))
+            .child(self.render_editable_row(
+                "cursor_style",
+                EditableField::CursorStyle,
+                cursor_style_meta.title,
+                cursor_style_meta.description,
+                self.editable_field_value(EditableField::CursorStyle),
+                cx,
+            ))
             .child(self.render_group_header("SHELL"))
             .child(self.render_editable_row(
                 "shell",
@@ -2742,6 +2777,8 @@ impl SettingsWindow {
         let width_mode = self.editable_field_value(EditableField::TabWidthMode);
         let shell_integration_meta = Self::setting_metadata("tab_title_shell_integration")
             .expect("missing metadata for tab_title_shell_integration");
+        let title_mode_meta =
+            Self::setting_metadata("tab_title_mode").expect("missing metadata for tab_title_mode");
         let fallback_meta =
             Self::setting_metadata("tab_title_fallback").expect("missing metadata for tab_title_fallback");
         let title_priority_meta = Self::setting_metadata("tab_title_priority")
@@ -2765,7 +2802,14 @@ impl SettingsWindow {
             .gap_2()
             .child(self.render_section_header("Tabs", "Configure tab behavior and titles"))
             .child(self.render_group_header("TAB TITLES"))
-            .child(self.render_tab_title_mode_row(cx))
+            .child(self.render_editable_row(
+                "tab_title_mode",
+                EditableField::TabTitleMode,
+                title_mode_meta.title,
+                title_mode_meta.description,
+                self.editable_field_value(EditableField::TabTitleMode),
+                cx,
+            ))
             .child(self.render_setting_row(
                 "tab_title_shell_integration",
                 "tab_title_shell_integration-toggle",
@@ -3130,8 +3174,24 @@ impl gpui::EntityInputHandler for SettingsWindow {
 }
 
 impl Render for SettingsWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = self.bg_primary();
+        let settings_scrollbar = self.settings_scrollbar_metrics(window).map(|metrics| {
+            div()
+                .w(px(SETTINGS_SCROLLBAR_WIDTH + 4.0))
+                .h_full()
+                .pl(px(2.0))
+                .pr(px(2.0))
+                .child(ui_scrollbar::render_vertical(
+                    "settings-content-scrollbar",
+                    metrics,
+                    self.settings_scrollbar_style(),
+                    false,
+                    &[],
+                    None,
+                    0.0,
+                ))
+        });
         div()
             .id("settings-root")
             .track_focus(&self.focus_handle)
@@ -3150,14 +3210,22 @@ impl Render for SettingsWindow {
             .child(self.render_sidebar(cx))
             .child(
                 div()
-                    .id("settings-content-scroll")
                     .flex_1()
                     .h_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.content_scroll_handle)
-                    .overflow_x_hidden()
-                    .p_6()
-                    .child(self.render_content(cx)),
+                    .flex()
+                    .items_start()
+                    .child(
+                        div()
+                            .id("settings-content-scroll")
+                            .flex_1()
+                            .h_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.content_scroll_handle)
+                            .overflow_x_hidden()
+                            .p_6()
+                            .child(self.render_content(cx)),
+                    )
+                    .when_some(settings_scrollbar, |s, scrollbar| s.child(scrollbar)),
             )
     }
 }

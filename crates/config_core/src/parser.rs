@@ -6,54 +6,11 @@ use crate::constants::{
     SHELL_DECIDE_THEME_ID, VALID_SECTIONS,
 };
 use crate::diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
+use crate::schema::{RootSettingId, root_setting_from_key, root_setting_spec};
 use crate::types::{
     AppConfig, CursorStyle, KeybindConfigLine, TabCloseVisibility, TabTitleMode, TabTitleSource,
     TabWidthMode, TerminalScrollbarStyle, TerminalScrollbarVisibility, ThemeId, WorkingDirFallback,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum RootKey {
-    Theme,
-    WorkingDir,
-    WorkingDirFallback,
-    WarnOnQuitWithRunningProcess,
-    TabTitlePriority,
-    TabTitleMode,
-    TabTitleFallback,
-    TabTitleExplicitPrefix,
-    TabTitleShellIntegration,
-    TabTitlePromptFormat,
-    TabTitleCommandFormat,
-    TabCloseVisibility,
-    TabWidthMode,
-    ShowTermyInTitlebar,
-    Shell,
-    Term,
-    Colorterm,
-    WindowWidth,
-    WindowHeight,
-    FontFamily,
-    FontSize,
-    CursorStyle,
-    CursorBlink,
-    BackgroundOpacity,
-    BackgroundBlur,
-    PaddingX,
-    PaddingY,
-    MouseScrollMultiplier,
-    ScrollbarVisibility,
-    ScrollbarStyle,
-    ScrollbackHistory,
-    InactiveTabScrollback,
-    CommandPaletteShowKeybinds,
-    Keybind,
-}
-
-impl RootKey {
-    fn is_repeatable(self) -> bool {
-        matches!(self, Self::Keybind)
-    }
-}
 
 impl AppConfig {
     pub fn from_contents(contents: &str) -> Self {
@@ -66,7 +23,7 @@ impl AppConfig {
         let mut tab_title_priority_overridden = false;
         let mut in_colors_section = false;
         let mut in_non_root_section = false;
-        let mut seen_root_keys: HashMap<RootKey, usize> = HashMap::new();
+        let mut seen_root_keys: HashMap<RootSettingId, usize> = HashMap::new();
 
         for (line_number, line) in contents.lines().enumerate() {
             let line_number = line_number + 1;
@@ -133,7 +90,7 @@ impl AppConfig {
                 continue;
             }
 
-            let Some(root_key) = parse_root_key(key) else {
+            let Some(root_key) = root_setting_from_key(key) else {
                 diagnostics.push(ConfigDiagnostic {
                     line_number,
                     kind: ConfigDiagnosticKind::UnknownRootKey,
@@ -142,7 +99,7 @@ impl AppConfig {
                 continue;
             };
 
-            if !root_key.is_repeatable() {
+            if !root_setting_spec(root_key).repeatable {
                 if let Some(first_line) = seen_root_keys.get(&root_key).copied() {
                     diagnostics.push(ConfigDiagnostic {
                         line_number,
@@ -158,7 +115,7 @@ impl AppConfig {
             }
 
             match root_key {
-                RootKey::Theme => {
+                RootSettingId::Theme => {
                     if let Some(theme) = parse_theme_id(value) {
                         config.theme = theme;
                     } else {
@@ -171,7 +128,7 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::WorkingDir => {
+                RootSettingId::WorkingDir => {
                     if value.is_empty() {
                         push_invalid_value(
                             &mut diagnostics,
@@ -184,7 +141,7 @@ impl AppConfig {
                         config.working_dir = Some(value.to_string());
                     }
                 }
-                RootKey::WorkingDirFallback => {
+                RootSettingId::WorkingDirFallback => {
                     if let Some(fallback) = WorkingDirFallback::from_str(value) {
                         config.working_dir_fallback = fallback;
                     } else {
@@ -197,14 +154,14 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::WarnOnQuitWithRunningProcess => {
+                RootSettingId::WarnOnQuitWithRunningProcess => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.warn_on_quit_with_running_process = parsed;
                     }
                 }
-                RootKey::TabTitlePriority => {
+                RootSettingId::TabTitlePriority => {
                     if let Some(priority) = parse_tab_title_priority(value) {
                         config.tab_title.priority = priority;
                         tab_title_priority_overridden = true;
@@ -218,7 +175,7 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::TabTitleMode => {
+                RootSettingId::TabTitleMode => {
                     if let Some(mode) = TabTitleMode::from_str(value) {
                         config.tab_title.mode = mode;
                     } else {
@@ -231,7 +188,7 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::TabTitleFallback => {
+                RootSettingId::TabTitleFallback => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -242,7 +199,7 @@ impl AppConfig {
                         config.tab_title.fallback = parsed;
                     }
                 }
-                RootKey::TabTitleExplicitPrefix => {
+                RootSettingId::TabTitleExplicitPrefix => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -253,14 +210,14 @@ impl AppConfig {
                         config.tab_title.explicit_prefix = parsed;
                     }
                 }
-                RootKey::TabTitleShellIntegration => {
+                RootSettingId::TabTitleShellIntegration => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.tab_title.shell_integration = parsed;
                     }
                 }
-                RootKey::TabTitlePromptFormat => {
+                RootSettingId::TabTitlePromptFormat => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -271,7 +228,7 @@ impl AppConfig {
                         config.tab_title.prompt_format = parsed;
                     }
                 }
-                RootKey::TabTitleCommandFormat => {
+                RootSettingId::TabTitleCommandFormat => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -282,7 +239,7 @@ impl AppConfig {
                         config.tab_title.command_format = parsed;
                     }
                 }
-                RootKey::TabCloseVisibility => {
+                RootSettingId::TabCloseVisibility => {
                     if let Some(parsed) = TabCloseVisibility::from_str(value) {
                         config.tab_close_visibility = parsed;
                     } else {
@@ -295,7 +252,7 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::TabWidthMode => {
+                RootSettingId::TabWidthMode => {
                     if let Some(parsed) = TabWidthMode::from_str(value) {
                         config.tab_width_mode = parsed;
                     } else {
@@ -308,17 +265,17 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::ShowTermyInTitlebar => {
+                RootSettingId::ShowTermyInTitlebar => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.show_termy_in_titlebar = parsed;
                     }
                 }
-                RootKey::Shell => {
+                RootSettingId::Shell => {
                     config.shell = parse_optional_string_value(value);
                 }
-                RootKey::Term => {
+                RootSettingId::Term => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -329,24 +286,24 @@ impl AppConfig {
                         config.term = parsed;
                     }
                 }
-                RootKey::Colorterm => {
+                RootSettingId::Colorterm => {
                     config.colorterm = parse_optional_string_value(value);
                 }
-                RootKey::WindowWidth => {
+                RootSettingId::WindowWidth => {
                     if let Some(parsed) =
                         parse_positive_f32_field(&mut diagnostics, line_number, key, value)
                     {
                         config.window_width = parsed;
                     }
                 }
-                RootKey::WindowHeight => {
+                RootSettingId::WindowHeight => {
                     if let Some(parsed) =
                         parse_positive_f32_field(&mut diagnostics, line_number, key, value)
                     {
                         config.window_height = parsed;
                     }
                 }
-                RootKey::FontFamily => {
+                RootSettingId::FontFamily => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -357,14 +314,14 @@ impl AppConfig {
                         config.font_family = parsed;
                     }
                 }
-                RootKey::FontSize => {
+                RootSettingId::FontSize => {
                     if let Some(parsed) =
                         parse_positive_f32_field(&mut diagnostics, line_number, key, value)
                     {
                         config.font_size = parsed;
                     }
                 }
-                RootKey::CursorStyle => {
+                RootSettingId::CursorStyle => {
                     if let Some(parsed) = CursorStyle::from_str(value) {
                         config.cursor_style = parsed;
                     } else {
@@ -377,14 +334,14 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::CursorBlink => {
+                RootSettingId::CursorBlink => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.cursor_blink = parsed;
                     }
                 }
-                RootKey::BackgroundOpacity => {
+                RootSettingId::BackgroundOpacity => {
                     if let Some(parsed) = parse_f32_field(
                         &mut diagnostics,
                         line_number,
@@ -405,28 +362,28 @@ impl AppConfig {
                         }
                     }
                 }
-                RootKey::BackgroundBlur => {
+                RootSettingId::BackgroundBlur => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.background_blur = parsed;
                     }
                 }
-                RootKey::PaddingX => {
+                RootSettingId::PaddingX => {
                     if let Some(parsed) =
                         parse_non_negative_f32_field(&mut diagnostics, line_number, key, value)
                     {
                         config.padding_x = parsed;
                     }
                 }
-                RootKey::PaddingY => {
+                RootSettingId::PaddingY => {
                     if let Some(parsed) =
                         parse_non_negative_f32_field(&mut diagnostics, line_number, key, value)
                     {
                         config.padding_y = parsed;
                     }
                 }
-                RootKey::MouseScrollMultiplier => {
+                RootSettingId::MouseScrollMultiplier => {
                     if let Some(parsed) = parse_finite_f32_field(
                         &mut diagnostics,
                         line_number,
@@ -438,7 +395,7 @@ impl AppConfig {
                             parsed.clamp(MIN_MOUSE_SCROLL_MULTIPLIER, MAX_MOUSE_SCROLL_MULTIPLIER);
                     }
                 }
-                RootKey::ScrollbarVisibility => {
+                RootSettingId::ScrollbarVisibility => {
                     if let Some(parsed) = TerminalScrollbarVisibility::from_str(value) {
                         config.terminal_scrollbar_visibility = parsed;
                     } else {
@@ -451,7 +408,7 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::ScrollbarStyle => {
+                RootSettingId::ScrollbarStyle => {
                     if let Some(parsed) = TerminalScrollbarStyle::from_str(value) {
                         config.terminal_scrollbar_style = parsed;
                     } else {
@@ -464,28 +421,28 @@ impl AppConfig {
                         );
                     }
                 }
-                RootKey::ScrollbackHistory => {
+                RootSettingId::ScrollbackHistory => {
                     if let Some(parsed) =
                         parse_usize_field(&mut diagnostics, line_number, key, value)
                     {
                         config.scrollback_history = parsed.min(MAX_SCROLLBACK_HISTORY);
                     }
                 }
-                RootKey::InactiveTabScrollback => {
+                RootSettingId::InactiveTabScrollback => {
                     if let Some(parsed) =
                         parse_usize_field(&mut diagnostics, line_number, key, value)
                     {
                         config.inactive_tab_scrollback = Some(parsed.min(MAX_SCROLLBACK_HISTORY));
                     }
                 }
-                RootKey::CommandPaletteShowKeybinds => {
+                RootSettingId::CommandPaletteShowKeybinds => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.command_palette_show_keybinds = parsed;
                     }
                 }
-                RootKey::Keybind => {
+                RootSettingId::Keybind => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,
                         line_number,
@@ -532,46 +489,6 @@ pub fn parse_theme_id(value: &str) -> Option<ThemeId> {
         None
     } else {
         Some(normalized)
-    }
-}
-
-fn parse_root_key(raw: &str) -> Option<RootKey> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "theme" => Some(RootKey::Theme),
-        "working_dir" => Some(RootKey::WorkingDir),
-        "working_dir_fallback" | "default_working_dir" => Some(RootKey::WorkingDirFallback),
-        "warn_on_quit_with_running_process" => Some(RootKey::WarnOnQuitWithRunningProcess),
-        "tab_title_priority" => Some(RootKey::TabTitlePriority),
-        "tab_title_mode" => Some(RootKey::TabTitleMode),
-        "tab_title_fallback" => Some(RootKey::TabTitleFallback),
-        "tab_title_explicit_prefix" => Some(RootKey::TabTitleExplicitPrefix),
-        "tab_title_shell_integration" => Some(RootKey::TabTitleShellIntegration),
-        "tab_title_prompt_format" => Some(RootKey::TabTitlePromptFormat),
-        "tab_title_command_format" => Some(RootKey::TabTitleCommandFormat),
-        "tab_close_visibility" => Some(RootKey::TabCloseVisibility),
-        "tab_width_mode" => Some(RootKey::TabWidthMode),
-        "show_termy_in_titlebar" => Some(RootKey::ShowTermyInTitlebar),
-        "shell" => Some(RootKey::Shell),
-        "term" => Some(RootKey::Term),
-        "colorterm" => Some(RootKey::Colorterm),
-        "window_width" => Some(RootKey::WindowWidth),
-        "window_height" => Some(RootKey::WindowHeight),
-        "font_family" => Some(RootKey::FontFamily),
-        "font_size" => Some(RootKey::FontSize),
-        "cursor_style" => Some(RootKey::CursorStyle),
-        "cursor_blink" => Some(RootKey::CursorBlink),
-        "background_opacity" => Some(RootKey::BackgroundOpacity),
-        "background_blur" => Some(RootKey::BackgroundBlur),
-        "padding_x" => Some(RootKey::PaddingX),
-        "padding_y" => Some(RootKey::PaddingY),
-        "mouse_scroll_multiplier" => Some(RootKey::MouseScrollMultiplier),
-        "scrollbar_visibility" => Some(RootKey::ScrollbarVisibility),
-        "scrollbar_style" => Some(RootKey::ScrollbarStyle),
-        "scrollback_history" | "scrollback" => Some(RootKey::ScrollbackHistory),
-        "inactive_tab_scrollback" => Some(RootKey::InactiveTabScrollback),
-        "command_palette_show_keybinds" => Some(RootKey::CommandPaletteShowKeybinds),
-        "keybind" => Some(RootKey::Keybind),
-        _ => None,
     }
 }
 

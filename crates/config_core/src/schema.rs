@@ -1,0 +1,306 @@
+use crate::types::{
+    AppConfig, CursorStyle, TabCloseVisibility, TabTitleMode, TabWidthMode,
+    TerminalScrollbarStyle, TerminalScrollbarVisibility, WorkingDirFallback,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SettingsSection {
+    Appearance,
+    Terminal,
+    Tabs,
+    Advanced,
+    Colors,
+    Keybindings,
+}
+
+impl SettingsSection {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::Terminal => "Terminal",
+            Self::Tabs => "Tabs",
+            Self::Advanced => "Advanced",
+            Self::Colors => "Colors",
+            Self::Keybindings => "Keybindings",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RootSettingSpec {
+    pub id: RootSettingId,
+    pub key: &'static str,
+    pub aliases: &'static [&'static str],
+    pub section: SettingsSection,
+    pub group: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    pub keywords: &'static [&'static str],
+    pub repeatable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColorSettingSpec {
+    pub id: ColorSettingId,
+    pub key: &'static str,
+    pub aliases: &'static [&'static str],
+    pub title: &'static str,
+    pub description: &'static str,
+    pub keywords: &'static [&'static str],
+}
+
+fn normalize_key(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+macro_rules! define_root_settings {
+    ($((
+        $id:ident,
+        $key:literal,
+        [$($alias:literal),* $(,)?],
+        $section:ident,
+        $group:literal,
+        $title:literal,
+        $description:literal,
+        [$($keyword:literal),* $(,)?],
+        $repeatable:expr
+    )),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum RootSettingId {
+            $($id,)+
+        }
+
+        pub const ROOT_SETTING_SPECS: &[RootSettingSpec] = &[
+            $(RootSettingSpec {
+                id: RootSettingId::$id,
+                key: $key,
+                aliases: &[$($alias),*],
+                section: SettingsSection::$section,
+                group: $group,
+                title: $title,
+                description: $description,
+                keywords: &[$($keyword),*],
+                repeatable: $repeatable,
+            },)+
+        ];
+
+        pub const ROOT_SETTING_KEYS: &[&str] = &[
+            $($key,)+
+        ];
+
+        pub const ROOT_SETTING_ALL_KEYS: &[&str] = &[
+            $($key, $($alias,)* )+
+        ];
+
+        pub fn root_setting_specs() -> &'static [RootSettingSpec] {
+            ROOT_SETTING_SPECS
+        }
+
+        pub fn root_setting_spec(id: RootSettingId) -> &'static RootSettingSpec {
+            &ROOT_SETTING_SPECS[id as usize]
+        }
+
+        pub fn root_setting_from_key(raw: &str) -> Option<RootSettingId> {
+            let normalized = normalize_key(raw);
+            match normalized.as_str() {
+                $($key $(| $alias)* => Some(RootSettingId::$id),)+
+                _ => None,
+            }
+        }
+    };
+}
+
+macro_rules! define_color_settings {
+    ($((
+        $id:ident,
+        $key:literal,
+        [$($alias:literal),* $(,)?],
+        $title:literal,
+        $description:literal,
+        [$($keyword:literal),* $(,)?]
+    )),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum ColorSettingId {
+            $($id,)+
+        }
+
+        pub const COLOR_SETTING_SPECS: &[ColorSettingSpec] = &[
+            $(ColorSettingSpec {
+                id: ColorSettingId::$id,
+                key: $key,
+                aliases: &[$($alias),*],
+                title: $title,
+                description: $description,
+                keywords: &[$($keyword),*],
+            },)+
+        ];
+
+        pub const COLOR_SETTING_KEYS: &[&str] = &[
+            $($key,)+
+        ];
+
+        pub fn color_setting_specs() -> &'static [ColorSettingSpec] {
+            COLOR_SETTING_SPECS
+        }
+
+        pub fn color_setting_spec(id: ColorSettingId) -> &'static ColorSettingSpec {
+            &COLOR_SETTING_SPECS[id as usize]
+        }
+
+        pub fn color_setting_from_key(raw: &str) -> Option<ColorSettingId> {
+            let normalized = normalize_key(raw);
+            match normalized.as_str() {
+                $($key $(| $alias)* => Some(ColorSettingId::$id),)+
+                _ => None,
+            }
+        }
+    };
+}
+
+define_root_settings! {
+    (Theme, "theme", [], Appearance, "THEME", "Theme", "Current color scheme name", ["color", "scheme", "appearance"], false),
+    (WorkingDir, "working_dir", [], Advanced, "STARTUP", "Working Directory", "Initial directory for new sessions", ["working directory", "cwd", "startup", "path"], false),
+    (WorkingDirFallback, "working_dir_fallback", ["default_working_dir"], Advanced, "STARTUP", "Working Directory Fallback", "Directory used when working_dir is unset", ["working directory", "fallback", "cwd", "startup"], false),
+    (WarnOnQuitWithRunningProcess, "warn_on_quit_with_running_process", [], Advanced, "SAFETY", "Warn On Quit", "Warn before quitting when a tab has an active process", ["quit", "warning", "safety", "process"], false),
+    (TabTitlePriority, "tab_title_priority", [], Tabs, "TAB TITLES", "Title Priority", "Exact source priority for tab titles", ["tab", "title", "priority", "source"], false),
+    (TabTitleMode, "tab_title_mode", [], Tabs, "TAB TITLES", "Title Mode", "How tab titles are determined", ["tab", "title", "mode", "smart", "shell", "explicit", "static"], false),
+    (TabTitleFallback, "tab_title_fallback", [], Tabs, "TAB TITLES", "Fallback Title", "Default tab title when no source is available", ["tab", "title", "fallback"], false),
+    (TabTitleExplicitPrefix, "tab_title_explicit_prefix", [], Tabs, "TAB TITLES", "Explicit Prefix", "Prefix used for explicit OSC title payloads", ["tab", "title", "prefix", "osc"], false),
+    (TabTitleShellIntegration, "tab_title_shell_integration", [], Tabs, "TAB TITLES", "Shell Integration", "Export TERMY_* environment values for shell hooks", ["shell", "integration", "env", "hooks"], false),
+    (TabTitlePromptFormat, "tab_title_prompt_format", [], Tabs, "TAB TITLES", "Prompt Format", "Template for prompt-derived tab titles", ["tab", "title", "prompt", "format"], false),
+    (TabTitleCommandFormat, "tab_title_command_format", [], Tabs, "TAB TITLES", "Command Format", "Template for command-derived tab titles", ["tab", "title", "command", "format"], false),
+    (TabCloseVisibility, "tab_close_visibility", [], Tabs, "TAB STRIP", "Close Button Visibility", "When tab close buttons are visible", ["tab", "close", "visibility", "hover"], false),
+    (TabWidthMode, "tab_width_mode", [], Tabs, "TAB STRIP", "Tab Width Mode", "How tab widths react to active state", ["tab", "width", "layout", "active"], false),
+    (ShowTermyInTitlebar, "show_termy_in_titlebar", [], Tabs, "TITLE BAR", "Show Termy In Titlebar", "Show or hide the termy branding in the titlebar", ["titlebar", "branding", "tabs"], false),
+    (Shell, "shell", [], Terminal, "SHELL", "Shell", "Executable used for new sessions", ["shell", "bash", "zsh", "fish"], false),
+    (Term, "term", [], Terminal, "SHELL", "TERM", "TERM value exposed to child applications", ["term", "terminal", "env"], false),
+    (Colorterm, "colorterm", [], Terminal, "SHELL", "COLORTERM", "COLORTERM value exposed to child applications", ["colorterm", "color", "env"], false),
+    (WindowWidth, "window_width", [], Advanced, "WINDOW", "Window Width", "Default startup window width in pixels", ["window", "width", "startup", "size"], false),
+    (WindowHeight, "window_height", [], Advanced, "WINDOW", "Window Height", "Default startup window height in pixels", ["window", "height", "startup", "size"], false),
+    (FontFamily, "font_family", [], Appearance, "FONT", "Font Family", "Font family used in terminal UI", ["font", "typeface", "text"], false),
+    (FontSize, "font_size", [], Appearance, "FONT", "Font Size", "Terminal font size in pixels", ["font", "size", "text"], false),
+    (CursorStyle, "cursor_style", [], Terminal, "CURSOR", "Cursor Style", "Shape of the terminal cursor", ["cursor", "shape", "block", "line"], false),
+    (CursorBlink, "cursor_blink", [], Terminal, "CURSOR", "Cursor Blink", "Enable blinking cursor animation", ["cursor", "blink", "animation"], false),
+    (BackgroundOpacity, "background_opacity", [], Appearance, "WINDOW", "Background Opacity", "Window background opacity (0.0 to 1.0)", ["background", "opacity", "transparency"], false),
+    (BackgroundBlur, "background_blur", [], Appearance, "WINDOW", "Background Blur", "Enable blur effect for transparent backgrounds", ["background", "blur", "window"], false),
+    (PaddingX, "padding_x", [], Appearance, "PADDING", "Horizontal Padding", "Left and right terminal padding", ["padding", "spacing", "horizontal"], false),
+    (PaddingY, "padding_y", [], Appearance, "PADDING", "Vertical Padding", "Top and bottom terminal padding", ["padding", "spacing", "vertical"], false),
+    (MouseScrollMultiplier, "mouse_scroll_multiplier", [], Terminal, "SCROLLING", "Scroll Multiplier", "Mouse wheel scroll speed multiplier", ["scroll", "mouse", "speed"], false),
+    (ScrollbarVisibility, "scrollbar_visibility", [], Terminal, "SCROLLING", "Scrollbar Visibility", "Terminal scrollbar visibility behavior", ["scrollbar", "visibility", "scroll"], false),
+    (ScrollbarStyle, "scrollbar_style", [], Terminal, "SCROLLING", "Scrollbar Style", "Terminal scrollbar color style", ["scrollbar", "style", "theme"], false),
+    (ScrollbackHistory, "scrollback_history", ["scrollback"], Terminal, "SCROLLING", "Scrollback History", "Lines retained in terminal scrollback", ["scrollback", "history", "buffer", "lines"], false),
+    (InactiveTabScrollback, "inactive_tab_scrollback", [], Terminal, "SCROLLING", "Inactive Tab Scrollback", "Scrollback limit for inactive tabs", ["scrollback", "inactive", "tabs"], false),
+    (CommandPaletteShowKeybinds, "command_palette_show_keybinds", [], Terminal, "UI", "Show Keybindings In Palette", "Show shortcut badges in command palette rows", ["palette", "keybinds", "shortcuts"], false),
+    (Keybind, "keybind", [], Keybindings, "KEYBINDS", "Keybind Directive", "Keybinding override directive", ["keybind", "shortcut", "command"], true),
+}
+
+define_color_settings! {
+    (Foreground, "foreground", ["fg"], "Foreground", "Default text color", ["text", "foreground"]),
+    (Background, "background", ["bg"], "Background", "Terminal background color", ["background", "surface"]),
+    (Cursor, "cursor", [], "Cursor", "Cursor color", ["cursor"]),
+    (Black, "black", ["color0"], "Black", "ANSI black", ["ansi", "black", "color0"]),
+    (Red, "red", ["color1"], "Red", "ANSI red", ["ansi", "red", "color1"]),
+    (Green, "green", ["color2"], "Green", "ANSI green", ["ansi", "green", "color2"]),
+    (Yellow, "yellow", ["color3"], "Yellow", "ANSI yellow", ["ansi", "yellow", "color3"]),
+    (Blue, "blue", ["color4"], "Blue", "ANSI blue", ["ansi", "blue", "color4"]),
+    (Magenta, "magenta", ["color5"], "Magenta", "ANSI magenta", ["ansi", "magenta", "color5"]),
+    (Cyan, "cyan", ["color6"], "Cyan", "ANSI cyan", ["ansi", "cyan", "color6"]),
+    (White, "white", ["color7"], "White", "ANSI white", ["ansi", "white", "color7"]),
+    (BrightBlack, "bright_black", ["brightblack", "color8"], "Bright Black", "ANSI bright black", ["ansi", "bright", "black", "color8"]),
+    (BrightRed, "bright_red", ["brightred", "color9"], "Bright Red", "ANSI bright red", ["ansi", "bright", "red", "color9"]),
+    (BrightGreen, "bright_green", ["brightgreen", "color10"], "Bright Green", "ANSI bright green", ["ansi", "bright", "green", "color10"]),
+    (BrightYellow, "bright_yellow", ["brightyellow", "color11"], "Bright Yellow", "ANSI bright yellow", ["ansi", "bright", "yellow", "color11"]),
+    (BrightBlue, "bright_blue", ["brightblue", "color12"], "Bright Blue", "ANSI bright blue", ["ansi", "bright", "blue", "color12"]),
+    (BrightMagenta, "bright_magenta", ["brightmagenta", "color13"], "Bright Magenta", "ANSI bright magenta", ["ansi", "bright", "magenta", "color13"]),
+    (BrightCyan, "bright_cyan", ["brightcyan", "color14"], "Bright Cyan", "ANSI bright cyan", ["ansi", "bright", "cyan", "color14"]),
+    (BrightWhite, "bright_white", ["brightwhite", "color15"], "Bright White", "ANSI bright white", ["ansi", "bright", "white", "color15"]),
+}
+
+pub fn canonical_root_key(raw: &str) -> Option<&'static str> {
+    root_setting_from_key(raw).map(|id| root_setting_spec(id).key)
+}
+
+pub fn canonical_color_key(raw: &str) -> Option<&'static str> {
+    color_setting_from_key(raw).map(|id| color_setting_spec(id).key)
+}
+
+pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Option<String> {
+    match id {
+        RootSettingId::Theme => Some(config.theme.clone()),
+        RootSettingId::WorkingDir => config.working_dir.clone(),
+        RootSettingId::WorkingDirFallback => Some(match config.working_dir_fallback {
+            WorkingDirFallback::Home => "home".to_string(),
+            WorkingDirFallback::Process => "process".to_string(),
+        }),
+        RootSettingId::WarnOnQuitWithRunningProcess => {
+            Some(config.warn_on_quit_with_running_process.to_string())
+        }
+        RootSettingId::TabTitlePriority => Some(
+            config
+                .tab_title
+                .priority
+                .iter()
+                .map(|source| match source {
+                    crate::types::TabTitleSource::Manual => "manual",
+                    crate::types::TabTitleSource::Explicit => "explicit",
+                    crate::types::TabTitleSource::Shell => "shell",
+                    crate::types::TabTitleSource::Fallback => "fallback",
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        RootSettingId::TabTitleMode => Some(match config.tab_title.mode {
+            TabTitleMode::Smart => "smart".to_string(),
+            TabTitleMode::Shell => "shell".to_string(),
+            TabTitleMode::Explicit => "explicit".to_string(),
+            TabTitleMode::Static => "static".to_string(),
+        }),
+        RootSettingId::TabTitleFallback => Some(config.tab_title.fallback.clone()),
+        RootSettingId::TabTitleExplicitPrefix => Some(config.tab_title.explicit_prefix.clone()),
+        RootSettingId::TabTitleShellIntegration => Some(config.tab_title.shell_integration.to_string()),
+        RootSettingId::TabTitlePromptFormat => Some(config.tab_title.prompt_format.clone()),
+        RootSettingId::TabTitleCommandFormat => Some(config.tab_title.command_format.clone()),
+        RootSettingId::TabCloseVisibility => Some(match config.tab_close_visibility {
+            TabCloseVisibility::ActiveHover => "active_hover".to_string(),
+            TabCloseVisibility::Hover => "hover".to_string(),
+            TabCloseVisibility::Always => "always".to_string(),
+        }),
+        RootSettingId::TabWidthMode => Some(match config.tab_width_mode {
+            TabWidthMode::Stable => "stable".to_string(),
+            TabWidthMode::ActiveGrow => "active_grow".to_string(),
+            TabWidthMode::ActiveGrowSticky => "active_grow_sticky".to_string(),
+        }),
+        RootSettingId::ShowTermyInTitlebar => Some(config.show_termy_in_titlebar.to_string()),
+        RootSettingId::Shell => config.shell.clone(),
+        RootSettingId::Term => Some(config.term.clone()),
+        RootSettingId::Colorterm => config.colorterm.clone(),
+        RootSettingId::WindowWidth => Some(config.window_width.to_string()),
+        RootSettingId::WindowHeight => Some(config.window_height.to_string()),
+        RootSettingId::FontFamily => Some(config.font_family.clone()),
+        RootSettingId::FontSize => Some(config.font_size.to_string()),
+        RootSettingId::CursorStyle => Some(match config.cursor_style {
+            CursorStyle::Line => "line".to_string(),
+            CursorStyle::Block => "block".to_string(),
+        }),
+        RootSettingId::CursorBlink => Some(config.cursor_blink.to_string()),
+        RootSettingId::BackgroundOpacity => Some(config.background_opacity.to_string()),
+        RootSettingId::BackgroundBlur => Some(config.background_blur.to_string()),
+        RootSettingId::PaddingX => Some(config.padding_x.to_string()),
+        RootSettingId::PaddingY => Some(config.padding_y.to_string()),
+        RootSettingId::MouseScrollMultiplier => Some(config.mouse_scroll_multiplier.to_string()),
+        RootSettingId::ScrollbarVisibility => Some(match config.terminal_scrollbar_visibility {
+            TerminalScrollbarVisibility::Off => "off".to_string(),
+            TerminalScrollbarVisibility::Always => "always".to_string(),
+            TerminalScrollbarVisibility::OnScroll => "on_scroll".to_string(),
+        }),
+        RootSettingId::ScrollbarStyle => Some(match config.terminal_scrollbar_style {
+            TerminalScrollbarStyle::Neutral => "neutral".to_string(),
+            TerminalScrollbarStyle::MutedTheme => "muted_theme".to_string(),
+            TerminalScrollbarStyle::Theme => "theme".to_string(),
+        }),
+        RootSettingId::ScrollbackHistory => Some(config.scrollback_history.to_string()),
+        RootSettingId::InactiveTabScrollback => config.inactive_tab_scrollback.map(|v| v.to_string()),
+        RootSettingId::CommandPaletteShowKeybinds => Some(config.command_palette_show_keybinds.to_string()),
+        RootSettingId::Keybind => None,
+    }
+}

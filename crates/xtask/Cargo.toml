@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 termy_command_core = { path = "../command_core" }
+termy_config_core = { path = "../config_core" }

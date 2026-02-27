@@ -53,8 +53,14 @@ build-setup *args:
 generate-keybindings-doc:
     cargo run -p xtask -- generate-keybindings-doc
 
+generate-config-doc:
+    cargo run -p xtask -- generate-config-doc
+
 check-keybindings-doc:
     cargo run -p xtask -- generate-keybindings-doc --check
+
+check-config-doc:
+    cargo run -p xtask -- generate-config-doc --check
 
 check-boundaries:
     ./scripts/check-boundaries.sh

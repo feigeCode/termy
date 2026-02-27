@@ -1,4 +1,5 @@
 use crate::types::{CustomColors, Rgb8};
+use crate::{ColorSettingId, color_setting_from_key, color_setting_spec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorEntryError {
@@ -15,28 +16,8 @@ enum ColorSlot {
 }
 
 pub fn canonical_color_key(key: &str) -> Option<&'static str> {
-    match key.trim().to_ascii_lowercase().as_str() {
-        "foreground" | "fg" => Some("foreground"),
-        "background" | "bg" => Some("background"),
-        "cursor" => Some("cursor"),
-        "black" | "color0" => Some("black"),
-        "red" | "color1" => Some("red"),
-        "green" | "color2" => Some("green"),
-        "yellow" | "color3" => Some("yellow"),
-        "blue" | "color4" => Some("blue"),
-        "magenta" | "color5" => Some("magenta"),
-        "cyan" | "color6" => Some("cyan"),
-        "white" | "color7" => Some("white"),
-        "bright_black" | "brightblack" | "color8" => Some("bright_black"),
-        "bright_red" | "brightred" | "color9" => Some("bright_red"),
-        "bright_green" | "brightgreen" | "color10" => Some("bright_green"),
-        "bright_yellow" | "brightyellow" | "color11" => Some("bright_yellow"),
-        "bright_blue" | "brightblue" | "color12" => Some("bright_blue"),
-        "bright_magenta" | "brightmagenta" | "color13" => Some("bright_magenta"),
-        "bright_cyan" | "brightcyan" | "color14" => Some("bright_cyan"),
-        "bright_white" | "brightwhite" | "color15" => Some("bright_white"),
-        _ => None,
-    }
+    let id = color_setting_from_key(key)?;
+    Some(color_setting_spec(id).key)
 }
 
 pub fn apply_color_entry(
@@ -58,26 +39,26 @@ pub fn apply_color_entry(
 }
 
 fn color_slot(key: &str) -> Option<ColorSlot> {
-    match canonical_color_key(key)? {
-        "foreground" => Some(ColorSlot::Foreground),
-        "background" => Some(ColorSlot::Background),
-        "cursor" => Some(ColorSlot::Cursor),
-        "black" => Some(ColorSlot::Ansi(0)),
-        "red" => Some(ColorSlot::Ansi(1)),
-        "green" => Some(ColorSlot::Ansi(2)),
-        "yellow" => Some(ColorSlot::Ansi(3)),
-        "blue" => Some(ColorSlot::Ansi(4)),
-        "magenta" => Some(ColorSlot::Ansi(5)),
-        "cyan" => Some(ColorSlot::Ansi(6)),
-        "white" => Some(ColorSlot::Ansi(7)),
-        "bright_black" => Some(ColorSlot::Ansi(8)),
-        "bright_red" => Some(ColorSlot::Ansi(9)),
-        "bright_green" => Some(ColorSlot::Ansi(10)),
-        "bright_yellow" => Some(ColorSlot::Ansi(11)),
-        "bright_blue" => Some(ColorSlot::Ansi(12)),
-        "bright_magenta" => Some(ColorSlot::Ansi(13)),
-        "bright_cyan" => Some(ColorSlot::Ansi(14)),
-        "bright_white" => Some(ColorSlot::Ansi(15)),
-        _ => None,
+    let id = color_setting_from_key(key)?;
+    match id {
+        ColorSettingId::Foreground => Some(ColorSlot::Foreground),
+        ColorSettingId::Background => Some(ColorSlot::Background),
+        ColorSettingId::Cursor => Some(ColorSlot::Cursor),
+        ColorSettingId::Black => Some(ColorSlot::Ansi(0)),
+        ColorSettingId::Red => Some(ColorSlot::Ansi(1)),
+        ColorSettingId::Green => Some(ColorSlot::Ansi(2)),
+        ColorSettingId::Yellow => Some(ColorSlot::Ansi(3)),
+        ColorSettingId::Blue => Some(ColorSlot::Ansi(4)),
+        ColorSettingId::Magenta => Some(ColorSlot::Ansi(5)),
+        ColorSettingId::Cyan => Some(ColorSlot::Ansi(6)),
+        ColorSettingId::White => Some(ColorSlot::Ansi(7)),
+        ColorSettingId::BrightBlack => Some(ColorSlot::Ansi(8)),
+        ColorSettingId::BrightRed => Some(ColorSlot::Ansi(9)),
+        ColorSettingId::BrightGreen => Some(ColorSlot::Ansi(10)),
+        ColorSettingId::BrightYellow => Some(ColorSlot::Ansi(11)),
+        ColorSettingId::BrightBlue => Some(ColorSlot::Ansi(12)),
+        ColorSettingId::BrightMagenta => Some(ColorSlot::Ansi(13)),
+        ColorSettingId::BrightCyan => Some(ColorSlot::Ansi(14)),
+        ColorSettingId::BrightWhite => Some(ColorSlot::Ansi(15)),
     }
 }

@@ -1,5 +1,5 @@
 use crate::colors::TerminalColors;
-use crate::config::{self, AppConfig, CursorStyle, TabTitleMode, set_config_value};
+use crate::config::{self, AppConfig, CursorStyle, TabTitleMode};
 use crate::text_input::{TextInputAlignment, TextInputElement, TextInputProvider, TextInputState};
 use gpui::{
     AnyElement, AsyncApp, Context, FocusHandle, Font, InteractiveElement, IntoElement,
@@ -9,7 +9,19 @@ use gpui::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+use termy_config_core::{
+    SettingsSection as CoreSettingsSection, color_setting_specs, root_setting_specs,
+};
+
+mod colors;
+mod components;
+mod keybinds;
+mod search;
+mod sections;
+mod state;
+mod style;
 
 const SIDEBAR_WIDTH: f32 = 220.0;
 const NUMERIC_INPUT_WIDTH: f32 = 220.0;
@@ -32,11 +44,23 @@ enum EditableField {
     Term,
     Colorterm,
     ScrollbackHistory,
+    InactiveTabScrollback,
     ScrollMultiplier,
+    ScrollbarVisibility,
+    ScrollbarStyle,
     TabFallbackTitle,
+    TabTitlePriority,
+    TabTitleExplicitPrefix,
+    TabTitlePromptFormat,
+    TabTitleCommandFormat,
+    TabCloseVisibility,
+    TabWidthMode,
+    KeybindDirectives,
     WorkingDirectory,
+    WorkingDirFallback,
     WindowWidth,
     WindowHeight,
+    Color(termy_config_core::ColorSettingId),
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +86,8 @@ enum SettingsSection {
     Terminal,
     Tabs,
     Advanced,
+    Colors,
+    Keybindings,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -73,157 +99,35 @@ struct SettingMetadata {
     keywords: &'static [&'static str],
 }
 
-const SETTINGS_METADATA: &[SettingMetadata] = &[
-    SettingMetadata {
-        key: "theme",
-        section: SettingsSection::Appearance,
-        title: "Theme",
-        description: "Current color scheme name",
-        keywords: &["color", "scheme", "appearance"],
-    },
-    SettingMetadata {
-        key: "background-blur",
-        section: SettingsSection::Appearance,
-        title: "Background Blur",
-        description: "Enable blur effect for transparent backgrounds",
-        keywords: &["blur", "transparent", "window"],
-    },
-    SettingMetadata {
-        key: "background-opacity",
-        section: SettingsSection::Appearance,
-        title: "Background Opacity",
-        description: "Window transparency (0-100%)",
-        keywords: &["opacity", "transparency", "window"],
-    },
-    SettingMetadata {
-        key: "font-family",
-        section: SettingsSection::Appearance,
-        title: "Font Family",
-        description: "Font family used in terminal UI",
-        keywords: &["font", "typeface", "text"],
-    },
-    SettingMetadata {
-        key: "font-size",
-        section: SettingsSection::Appearance,
-        title: "Font Size",
-        description: "Terminal font size in pixels",
-        keywords: &["font", "size", "text", "zoom"],
-    },
-    SettingMetadata {
-        key: "padding-x",
-        section: SettingsSection::Appearance,
-        title: "Horizontal Padding",
-        description: "Left and right terminal padding",
-        keywords: &["padding", "spacing", "left", "right"],
-    },
-    SettingMetadata {
-        key: "padding-y",
-        section: SettingsSection::Appearance,
-        title: "Vertical Padding",
-        description: "Top and bottom terminal padding",
-        keywords: &["padding", "spacing", "top", "bottom"],
-    },
-    SettingMetadata {
-        key: "cursor-blink",
-        section: SettingsSection::Terminal,
-        title: "Cursor Blink",
-        description: "Enable blinking cursor animation",
-        keywords: &["cursor", "blink", "animation"],
-    },
-    SettingMetadata {
-        key: "cursor-style",
-        section: SettingsSection::Terminal,
-        title: "Cursor Style",
-        description: "Shape of the terminal cursor",
-        keywords: &["cursor", "block", "line"],
-    },
-    SettingMetadata {
-        key: "shell",
-        section: SettingsSection::Terminal,
-        title: "Shell",
-        description: "Executable for new sessions",
-        keywords: &["shell", "bash", "zsh", "fish"],
-    },
-    SettingMetadata {
-        key: "term",
-        section: SettingsSection::Terminal,
-        title: "TERM",
-        description: "Terminal type for child apps",
-        keywords: &["term", "terminal type", "env"],
-    },
-    SettingMetadata {
-        key: "colorterm",
-        section: SettingsSection::Terminal,
-        title: "COLORTERM",
-        description: "Color support advertisement",
-        keywords: &["colorterm", "color", "env"],
-    },
-    SettingMetadata {
-        key: "scrollback-history",
-        section: SettingsSection::Terminal,
-        title: "Scrollback History",
-        description: "Lines to keep in buffer",
-        keywords: &["scrollback", "history", "buffer", "lines"],
-    },
-    SettingMetadata {
-        key: "scroll-multiplier",
-        section: SettingsSection::Terminal,
-        title: "Scroll Multiplier",
-        description: "Mouse wheel scroll speed",
-        keywords: &["scroll", "speed", "mouse", "wheel"],
-    },
-    SettingMetadata {
-        key: "palette-keybinds",
-        section: SettingsSection::Terminal,
-        title: "Show Keybindings in Palette",
-        description: "Display keyboard shortcuts in command palette",
-        keywords: &["palette", "keybindings", "shortcuts", "command"],
-    },
-    SettingMetadata {
-        key: "title-mode",
-        section: SettingsSection::Tabs,
-        title: "Title Mode",
-        description: "How tab titles are determined",
-        keywords: &[
-            "tab", "title", "mode", "smart", "shell", "explicit", "static",
-        ],
-    },
-    SettingMetadata {
-        key: "shell-integration",
-        section: SettingsSection::Tabs,
-        title: "Shell Integration",
-        description: "Export TERMY_* env vars for shell hooks",
-        keywords: &["shell", "integration", "env", "hooks", "tab"],
-    },
-    SettingMetadata {
-        key: "fallback-title",
-        section: SettingsSection::Tabs,
-        title: "Fallback Title",
-        description: "Default when no other source available",
-        keywords: &["fallback", "title", "tab"],
-    },
-    SettingMetadata {
-        key: "working-directory",
-        section: SettingsSection::Advanced,
-        title: "Working Directory",
-        description: "Initial directory for new sessions",
-        keywords: &["working directory", "cwd", "startup", "path"],
-    },
-    SettingMetadata {
-        key: "window-width",
-        section: SettingsSection::Advanced,
-        title: "Default Width",
-        description: "Window width on startup",
-        keywords: &["window", "width", "startup", "size"],
-    },
-    SettingMetadata {
-        key: "window-height",
-        section: SettingsSection::Advanced,
-        title: "Default Height",
-        description: "Window height on startup",
-        keywords: &["window", "height", "startup", "size"],
-    },
-];
+static SETTINGS_METADATA: LazyLock<Vec<SettingMetadata>> = LazyLock::new(|| {
+    let mut entries = root_setting_specs()
+        .iter()
+        .map(|spec| SettingMetadata {
+            key: spec.key,
+            section: match spec.section {
+                CoreSettingsSection::Appearance => SettingsSection::Appearance,
+                CoreSettingsSection::Terminal => SettingsSection::Terminal,
+                CoreSettingsSection::Tabs => SettingsSection::Tabs,
+                CoreSettingsSection::Advanced => SettingsSection::Advanced,
+                CoreSettingsSection::Colors => SettingsSection::Colors,
+                CoreSettingsSection::Keybindings => SettingsSection::Keybindings,
+            },
+            title: spec.title,
+            description: spec.description,
+            keywords: spec.keywords,
+        })
+        .collect::<Vec<_>>();
+
+    entries.extend(color_setting_specs().iter().map(|spec| SettingMetadata {
+        key: spec.key,
+        section: SettingsSection::Colors,
+        title: spec.title,
+        description: spec.description,
+        keywords: spec.keywords,
+    }));
+
+    entries
+});
 
 #[derive(Clone, Debug)]
 struct SearchableSetting {
@@ -258,6 +162,70 @@ pub struct SettingsWindow {
 }
 
 impl SettingsWindow {
+    fn parse_tab_title_source_token(token: &str) -> Option<termy_config_core::TabTitleSource> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "manual" => Some(termy_config_core::TabTitleSource::Manual),
+            "explicit" => Some(termy_config_core::TabTitleSource::Explicit),
+            "shell" | "app" | "terminal" => Some(termy_config_core::TabTitleSource::Shell),
+            "fallback" | "default" => Some(termy_config_core::TabTitleSource::Fallback),
+            _ => None,
+        }
+    }
+
+    fn custom_color_for_id(&self, id: termy_config_core::ColorSettingId) -> Option<termy_config_core::Rgb8> {
+        let colors = &self.config.colors;
+        match id {
+            termy_config_core::ColorSettingId::Foreground => colors.foreground,
+            termy_config_core::ColorSettingId::Background => colors.background,
+            termy_config_core::ColorSettingId::Cursor => colors.cursor,
+            termy_config_core::ColorSettingId::Black => colors.ansi[0],
+            termy_config_core::ColorSettingId::Red => colors.ansi[1],
+            termy_config_core::ColorSettingId::Green => colors.ansi[2],
+            termy_config_core::ColorSettingId::Yellow => colors.ansi[3],
+            termy_config_core::ColorSettingId::Blue => colors.ansi[4],
+            termy_config_core::ColorSettingId::Magenta => colors.ansi[5],
+            termy_config_core::ColorSettingId::Cyan => colors.ansi[6],
+            termy_config_core::ColorSettingId::White => colors.ansi[7],
+            termy_config_core::ColorSettingId::BrightBlack => colors.ansi[8],
+            termy_config_core::ColorSettingId::BrightRed => colors.ansi[9],
+            termy_config_core::ColorSettingId::BrightGreen => colors.ansi[10],
+            termy_config_core::ColorSettingId::BrightYellow => colors.ansi[11],
+            termy_config_core::ColorSettingId::BrightBlue => colors.ansi[12],
+            termy_config_core::ColorSettingId::BrightMagenta => colors.ansi[13],
+            termy_config_core::ColorSettingId::BrightCyan => colors.ansi[14],
+            termy_config_core::ColorSettingId::BrightWhite => colors.ansi[15],
+        }
+    }
+
+    fn set_custom_color_for_id(
+        &mut self,
+        id: termy_config_core::ColorSettingId,
+        value: Option<termy_config_core::Rgb8>,
+    ) {
+        let colors = &mut self.config.colors;
+        match id {
+            termy_config_core::ColorSettingId::Foreground => colors.foreground = value,
+            termy_config_core::ColorSettingId::Background => colors.background = value,
+            termy_config_core::ColorSettingId::Cursor => colors.cursor = value,
+            termy_config_core::ColorSettingId::Black => colors.ansi[0] = value,
+            termy_config_core::ColorSettingId::Red => colors.ansi[1] = value,
+            termy_config_core::ColorSettingId::Green => colors.ansi[2] = value,
+            termy_config_core::ColorSettingId::Yellow => colors.ansi[3] = value,
+            termy_config_core::ColorSettingId::Blue => colors.ansi[4] = value,
+            termy_config_core::ColorSettingId::Magenta => colors.ansi[5] = value,
+            termy_config_core::ColorSettingId::Cyan => colors.ansi[6] = value,
+            termy_config_core::ColorSettingId::White => colors.ansi[7] = value,
+            termy_config_core::ColorSettingId::BrightBlack => colors.ansi[8] = value,
+            termy_config_core::ColorSettingId::BrightRed => colors.ansi[9] = value,
+            termy_config_core::ColorSettingId::BrightGreen => colors.ansi[10] = value,
+            termy_config_core::ColorSettingId::BrightYellow => colors.ansi[11] = value,
+            termy_config_core::ColorSettingId::BrightBlue => colors.ansi[12] = value,
+            termy_config_core::ColorSettingId::BrightMagenta => colors.ansi[13] = value,
+            termy_config_core::ColorSettingId::BrightCyan => colors.ansi[14] = value,
+            termy_config_core::ColorSettingId::BrightWhite => colors.ansi[15] = value,
+        }
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut last_config_error_message = None;
         let loaded = config::load_runtime_config(
@@ -343,6 +311,8 @@ impl SettingsWindow {
             SettingsSection::Terminal => "Terminal",
             SettingsSection::Tabs => "Tabs",
             SettingsSection::Advanced => "Advanced",
+            SettingsSection::Colors => "Colors",
+            SettingsSection::Keybindings => "Keybindings",
         }
     }
 
@@ -831,7 +801,13 @@ impl SettingsWindow {
                     .child(self.render_sidebar_item("Appearance", SettingsSection::Appearance, cx))
                     .child(self.render_sidebar_item("Terminal", SettingsSection::Terminal, cx))
                     .child(self.render_sidebar_item("Tabs", SettingsSection::Tabs, cx))
-                    .child(self.render_sidebar_item("Advanced", SettingsSection::Advanced, cx)),
+                    .child(self.render_sidebar_item("Advanced", SettingsSection::Advanced, cx))
+                    .child(self.render_sidebar_item("Colors", SettingsSection::Colors, cx))
+                    .child(self.render_sidebar_item(
+                        "Keybindings",
+                        SettingsSection::Keybindings,
+                        cx,
+                    )),
             )
     }
 
@@ -879,7 +855,7 @@ impl SettingsWindow {
                 .id("settings-sidebar-search-input")
                 .h(px(36.0))
                 .px_3()
-                .rounded_lg()
+                .rounded(px(0.0))
                 .bg(bg_input)
                 .border_1()
                 .border_color(if is_active {
@@ -969,7 +945,7 @@ impl SettingsWindow {
             .id(SharedString::from(label))
             .px_3()
             .py(px(10.0))
-            .rounded_lg()
+            .rounded(px(0.0))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -1006,7 +982,7 @@ impl SettingsWindow {
                         .ml_auto()
                         .w(px(3.0))
                         .h(px(16.0))
-                        .rounded(px(2.0))
+                        .rounded(px(0.0))
                         .bg(accent),
                 )
             })
@@ -1033,11 +1009,76 @@ impl SettingsWindow {
             EditableField::Term => self.config.term.clone(),
             EditableField::Colorterm => self.config.colorterm.clone().unwrap_or_default(),
             EditableField::ScrollbackHistory => self.config.scrollback_history.to_string(),
+            EditableField::InactiveTabScrollback => self
+                .config
+                .inactive_tab_scrollback
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             EditableField::ScrollMultiplier => format!("{}", self.config.mouse_scroll_multiplier),
+            EditableField::ScrollbarVisibility => {
+                match self.config.terminal_scrollbar_visibility {
+                    termy_config_core::TerminalScrollbarVisibility::Off => "off",
+                    termy_config_core::TerminalScrollbarVisibility::Always => "always",
+                    termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
+                }
+                .to_string()
+            }
+            EditableField::ScrollbarStyle => {
+                match self.config.terminal_scrollbar_style {
+                    termy_config_core::TerminalScrollbarStyle::Neutral => "neutral",
+                    termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
+                    termy_config_core::TerminalScrollbarStyle::Theme => "theme",
+                }
+                .to_string()
+            }
             EditableField::TabFallbackTitle => self.config.tab_title.fallback.clone(),
+            EditableField::TabTitlePriority => self
+                .config
+                .tab_title
+                .priority
+                .iter()
+                .map(|source| match source {
+                    termy_config_core::TabTitleSource::Manual => "manual",
+                    termy_config_core::TabTitleSource::Explicit => "explicit",
+                    termy_config_core::TabTitleSource::Shell => "shell",
+                    termy_config_core::TabTitleSource::Fallback => "fallback",
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            EditableField::TabTitleExplicitPrefix => self.config.tab_title.explicit_prefix.clone(),
+            EditableField::TabTitlePromptFormat => self.config.tab_title.prompt_format.clone(),
+            EditableField::TabTitleCommandFormat => self.config.tab_title.command_format.clone(),
+            EditableField::TabCloseVisibility => match self.config.tab_close_visibility {
+                termy_config_core::TabCloseVisibility::ActiveHover => "active_hover",
+                termy_config_core::TabCloseVisibility::Hover => "hover",
+                termy_config_core::TabCloseVisibility::Always => "always",
+            }
+            .to_string(),
+            EditableField::TabWidthMode => match self.config.tab_width_mode {
+                termy_config_core::TabWidthMode::Stable => "stable",
+                termy_config_core::TabWidthMode::ActiveGrow => "active_grow",
+                termy_config_core::TabWidthMode::ActiveGrowSticky => "active_grow_sticky",
+            }
+            .to_string(),
+            EditableField::KeybindDirectives => self
+                .config
+                .keybind_lines
+                .iter()
+                .map(|line| line.value.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
             EditableField::WorkingDirectory => self.config.working_dir.clone().unwrap_or_default(),
+            EditableField::WorkingDirFallback => match self.config.working_dir_fallback {
+                termy_config_core::WorkingDirFallback::Home => "home",
+                termy_config_core::WorkingDirFallback::Process => "process",
+            }
+            .to_string(),
             EditableField::WindowWidth => format!("{}", self.config.window_width.round() as i32),
             EditableField::WindowHeight => format!("{}", self.config.window_height.round() as i32),
+            EditableField::Color(id) => self
+                .custom_color_for_id(id)
+                .map(|rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b))
+                .unwrap_or_default(),
         }
     }
 
@@ -1063,14 +1104,14 @@ impl SettingsWindow {
                     .map_err(|_| "Background opacity must be a number from 0 to 100".to_string())?;
                 let opacity = (parsed / 100.0).clamp(0.0, 1.0);
                 self.config.background_opacity = opacity;
-                set_config_value("background_opacity", &format!("{:.3}", opacity))
+                config::set_root_setting(termy_config_core::RootSettingId::BackgroundOpacity, &format!("{:.3}", opacity))
             }
             EditableField::FontFamily => {
                 if value.is_empty() {
                     return Err("Font family cannot be empty".to_string());
                 }
                 self.config.font_family = value.to_string();
-                set_config_value("font_family", value)
+                config::set_root_setting(termy_config_core::RootSettingId::FontFamily, value)
             }
             EditableField::FontSize => {
                 let parsed = value
@@ -1080,7 +1121,7 @@ impl SettingsWindow {
                     return Err("Font size must be greater than 0".to_string());
                 }
                 self.config.font_size = parsed;
-                set_config_value("font_size", &format!("{}", parsed))
+                config::set_root_setting(termy_config_core::RootSettingId::FontSize, &format!("{}", parsed))
             }
             EditableField::PaddingX => {
                 let parsed = value
@@ -1090,7 +1131,7 @@ impl SettingsWindow {
                     return Err("Horizontal padding cannot be negative".to_string());
                 }
                 self.config.padding_x = parsed;
-                set_config_value("padding_x", &format!("{}", parsed))
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingX, &format!("{}", parsed))
             }
             EditableField::PaddingY => {
                 let parsed = value
@@ -1100,15 +1141,15 @@ impl SettingsWindow {
                     return Err("Vertical padding cannot be negative".to_string());
                 }
                 self.config.padding_y = parsed;
-                set_config_value("padding_y", &format!("{}", parsed))
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingY, &format!("{}", parsed))
             }
             EditableField::Shell => {
                 if value.is_empty() {
                     self.config.shell = None;
-                    set_config_value("shell", "none")
+                    config::set_root_setting(termy_config_core::RootSettingId::Shell, "none")
                 } else {
                     self.config.shell = Some(value.to_string());
-                    set_config_value("shell", value)
+                    config::set_root_setting(termy_config_core::RootSettingId::Shell, value)
                 }
             }
             EditableField::Term => {
@@ -1116,15 +1157,15 @@ impl SettingsWindow {
                     return Err("TERM cannot be empty".to_string());
                 }
                 self.config.term = value.to_string();
-                set_config_value("term", value)
+                config::set_root_setting(termy_config_core::RootSettingId::Term, value)
             }
             EditableField::Colorterm => {
                 if value.is_empty() {
                     self.config.colorterm = None;
-                    set_config_value("colorterm", "none")
+                    config::set_root_setting(termy_config_core::RootSettingId::Colorterm, "none")
                 } else {
                     self.config.colorterm = Some(value.to_string());
-                    set_config_value("colorterm", value)
+                    config::set_root_setting(termy_config_core::RootSettingId::Colorterm, value)
                 }
             }
             EditableField::ScrollbackHistory => {
@@ -1133,7 +1174,15 @@ impl SettingsWindow {
                     .map_err(|_| "Scrollback history must be a positive integer".to_string())?;
                 let parsed = parsed.min(100_000);
                 self.config.scrollback_history = parsed;
-                set_config_value("scrollback_history", &parsed.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbackHistory, &parsed.to_string())
+            }
+            EditableField::InactiveTabScrollback => {
+                let parsed = value
+                    .parse::<usize>()
+                    .map_err(|_| "Inactive tab scrollback must be a positive integer".to_string())?;
+                let parsed = parsed.min(100_000);
+                self.config.inactive_tab_scrollback = Some(parsed);
+                config::set_root_setting(termy_config_core::RootSettingId::InactiveTabScrollback, &parsed.to_string())
             }
             EditableField::ScrollMultiplier => {
                 let parsed = value
@@ -1144,23 +1193,159 @@ impl SettingsWindow {
                 }
                 let parsed = parsed.clamp(0.1, 1000.0);
                 self.config.mouse_scroll_multiplier = parsed;
-                set_config_value("mouse_scroll_multiplier", &parsed.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::MouseScrollMultiplier, &parsed.to_string())
+            }
+            EditableField::ScrollbarVisibility => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "off" => termy_config_core::TerminalScrollbarVisibility::Off,
+                    "always" => termy_config_core::TerminalScrollbarVisibility::Always,
+                    "on_scroll" | "onscroll" => termy_config_core::TerminalScrollbarVisibility::OnScroll,
+                    _ => {
+                        return Err("Scrollbar visibility must be off, always, or on_scroll".to_string())
+                    }
+                };
+                self.config.terminal_scrollbar_visibility = parsed;
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarVisibility, value)
+            }
+            EditableField::ScrollbarStyle => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "neutral" => termy_config_core::TerminalScrollbarStyle::Neutral,
+                    "muted_theme" | "mutedtheme" => {
+                        termy_config_core::TerminalScrollbarStyle::MutedTheme
+                    }
+                    "theme" => termy_config_core::TerminalScrollbarStyle::Theme,
+                    _ => return Err("Scrollbar style must be neutral, muted_theme, or theme".to_string()),
+                };
+                self.config.terminal_scrollbar_style = parsed;
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarStyle, value)
             }
             EditableField::TabFallbackTitle => {
                 if value.is_empty() {
                     return Err("Fallback title cannot be empty".to_string());
                 }
                 self.config.tab_title.fallback = value.to_string();
-                set_config_value("tab_title_fallback", value)
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitleFallback, value)
+            }
+            EditableField::TabTitlePriority => {
+                if value.is_empty() {
+                    return Err("Title priority cannot be empty".to_string());
+                }
+                self.config.tab_title.priority = value
+                    .split(',')
+                    .filter_map(Self::parse_tab_title_source_token)
+                    .fold(Vec::new(), |mut acc, source| {
+                        if !acc.contains(&source) {
+                            acc.push(source);
+                        }
+                        acc
+                    });
+                if self.config.tab_title.priority.is_empty() {
+                    return Err("Title priority must contain valid sources".to_string());
+                }
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitlePriority, value)
+            }
+            EditableField::TabTitleExplicitPrefix => {
+                if value.is_empty() {
+                    return Err("Explicit prefix cannot be empty".to_string());
+                }
+                self.config.tab_title.explicit_prefix = value.to_string();
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitleExplicitPrefix, value)
+            }
+            EditableField::TabTitlePromptFormat => {
+                if value.is_empty() {
+                    return Err("Prompt format cannot be empty".to_string());
+                }
+                self.config.tab_title.prompt_format = value.to_string();
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitlePromptFormat, value)
+            }
+            EditableField::TabTitleCommandFormat => {
+                if value.is_empty() {
+                    return Err("Command format cannot be empty".to_string());
+                }
+                self.config.tab_title.command_format = value.to_string();
+                config::set_root_setting(termy_config_core::RootSettingId::TabTitleCommandFormat, value)
+            }
+            EditableField::TabCloseVisibility => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "active_hover" | "activehover" | "active+hover" => {
+                        termy_config_core::TabCloseVisibility::ActiveHover
+                    }
+                    "hover" => termy_config_core::TabCloseVisibility::Hover,
+                    "always" => termy_config_core::TabCloseVisibility::Always,
+                    _ => return Err("Tab close visibility must be active_hover, hover, or always".to_string()),
+                };
+                self.config.tab_close_visibility = parsed;
+                config::set_root_setting(termy_config_core::RootSettingId::TabCloseVisibility, value)
+            }
+            EditableField::TabWidthMode => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "stable" => termy_config_core::TabWidthMode::Stable,
+                    "active_grow" | "activegrow" | "active-grow" => {
+                        termy_config_core::TabWidthMode::ActiveGrow
+                    }
+                    "active_grow_sticky" | "activegrowsticky" | "active-grow-sticky" => {
+                        termy_config_core::TabWidthMode::ActiveGrowSticky
+                    }
+                    _ => {
+                        return Err(
+                            "Tab width mode must be stable, active_grow, or active_grow_sticky"
+                                .to_string(),
+                        )
+                    }
+                };
+                self.config.tab_width_mode = parsed;
+                config::set_root_setting(termy_config_core::RootSettingId::TabWidthMode, value)
+            }
+            EditableField::KeybindDirectives => {
+                let lines = value
+                    .split(['\n', ';'])
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let (_directives, warnings) =
+                    termy_command_core::parse_keybind_directives_from_iter(
+                        lines.iter().enumerate().map(|(index, line)| {
+                            termy_command_core::KeybindLineRef {
+                                line_number: index + 1,
+                                value: line.as_str(),
+                            }
+                        }),
+                    );
+                if let Some(first_warning) = warnings.first() {
+                    return Err(format!(
+                        "Invalid keybind directive on line {}: {}",
+                        first_warning.line_number, first_warning.message
+                    ));
+                }
+                config::set_keybind_lines(&lines)?;
+                self.config.keybind_lines = lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| termy_config_core::KeybindConfigLine {
+                        line_number: index + 1,
+                        value,
+                    })
+                    .collect();
+                Ok(())
             }
             EditableField::WorkingDirectory => {
                 if value.is_empty() {
                     self.config.working_dir = None;
-                    set_config_value("working_dir", "none")
+                    config::set_root_setting(termy_config_core::RootSettingId::WorkingDir, "none")
                 } else {
                     self.config.working_dir = Some(value.to_string());
-                    set_config_value("working_dir", value)
+                    config::set_root_setting(termy_config_core::RootSettingId::WorkingDir, value)
                 }
+            }
+            EditableField::WorkingDirFallback => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "home" | "user" => termy_config_core::WorkingDirFallback::Home,
+                    "process" | "cwd" => termy_config_core::WorkingDirFallback::Process,
+                    _ => return Err("Working dir fallback must be home or process".to_string()),
+                };
+                self.config.working_dir_fallback = parsed;
+                config::set_root_setting(termy_config_core::RootSettingId::WorkingDirFallback, value)
             }
             EditableField::WindowWidth => {
                 let parsed = value
@@ -1170,7 +1355,7 @@ impl SettingsWindow {
                     return Err("Default width must be greater than 0".to_string());
                 }
                 self.config.window_width = parsed;
-                set_config_value("window_width", &parsed.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::WindowWidth, &parsed.to_string())
             }
             EditableField::WindowHeight => {
                 let parsed = value
@@ -1180,7 +1365,22 @@ impl SettingsWindow {
                     return Err("Default height must be greater than 0".to_string());
                 }
                 self.config.window_height = parsed;
-                set_config_value("window_height", &parsed.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::WindowHeight, &parsed.to_string())
+            }
+            EditableField::Color(id) => {
+                if value.is_empty() {
+                    config::set_color_setting(id, None)?;
+                    self.set_custom_color_for_id(id, None);
+                } else {
+                    let Some(parsed) = termy_config_core::Rgb8::from_hex(value) else {
+                        return Err("Color must be #RRGGBB".to_string());
+                    };
+                    let canonical = format!("#{:02x}{:02x}{:02x}", parsed.r, parsed.g, parsed.b);
+                    config::set_color_setting(id, Some(&canonical))?;
+                    self.set_custom_color_for_id(id, Some(parsed));
+                }
+                self.colors = TerminalColors::from_theme(&self.config.theme, &self.config.colors);
+                Ok(())
             }
         }
     }
@@ -1208,6 +1408,7 @@ impl SettingsWindow {
                 | EditableField::PaddingX
                 | EditableField::PaddingY
                 | EditableField::ScrollbackHistory
+                | EditableField::InactiveTabScrollback
                 | EditableField::ScrollMultiplier
                 | EditableField::WindowWidth
                 | EditableField::WindowHeight
@@ -1223,44 +1424,50 @@ impl SettingsWindow {
             EditableField::BackgroundOpacity => {
                 let next = (self.config.background_opacity + (delta as f32 * 0.05)).clamp(0.0, 1.0);
                 self.config.background_opacity = next;
-                set_config_value("background_opacity", &format!("{:.3}", next))
+                config::set_root_setting(termy_config_core::RootSettingId::BackgroundOpacity, &format!("{:.3}", next))
             }
             EditableField::FontSize => {
                 let next = (self.config.font_size + delta as f32).max(1.0);
                 self.config.font_size = next;
-                set_config_value("font_size", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::FontSize, &next.to_string())
             }
             EditableField::PaddingX => {
                 let next = (self.config.padding_x + delta as f32).max(0.0);
                 self.config.padding_x = next;
-                set_config_value("padding_x", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingX, &next.to_string())
             }
             EditableField::PaddingY => {
                 let next = (self.config.padding_y + delta as f32).max(0.0);
                 self.config.padding_y = next;
-                set_config_value("padding_y", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingY, &next.to_string())
             }
             EditableField::ScrollbackHistory => {
                 let next = (self.config.scrollback_history as i64 + (delta as i64 * 100))
                     .clamp(0, 100_000) as usize;
                 self.config.scrollback_history = next;
-                set_config_value("scrollback_history", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbackHistory, &next.to_string())
+            }
+            EditableField::InactiveTabScrollback => {
+                let current = self.config.inactive_tab_scrollback.unwrap_or(0);
+                let next = (current as i64 + (delta as i64 * 100)).clamp(0, 100_000) as usize;
+                self.config.inactive_tab_scrollback = Some(next);
+                config::set_root_setting(termy_config_core::RootSettingId::InactiveTabScrollback, &next.to_string())
             }
             EditableField::ScrollMultiplier => {
                 let next =
                     (self.config.mouse_scroll_multiplier + (delta as f32 * 0.1)).clamp(0.1, 1000.0);
                 self.config.mouse_scroll_multiplier = next;
-                set_config_value("mouse_scroll_multiplier", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::MouseScrollMultiplier, &next.to_string())
             }
             EditableField::WindowWidth => {
                 let next = (self.config.window_width + (delta as f32 * 20.0)).max(1.0);
                 self.config.window_width = next;
-                set_config_value("window_width", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::WindowWidth, &next.to_string())
             }
             EditableField::WindowHeight => {
                 let next = (self.config.window_height + (delta as f32 * 20.0)).max(1.0);
                 self.config.window_height = next;
-                set_config_value("window_height", &next.to_string())
+                config::set_root_setting(termy_config_core::RootSettingId::WindowHeight, &next.to_string())
             }
             _ => Ok(()),
         };
@@ -1383,6 +1590,8 @@ impl SettingsWindow {
                 SettingsSection::Terminal => self.render_terminal_section(cx).into_any_element(),
                 SettingsSection::Tabs => self.render_tabs_section(cx).into_any_element(),
                 SettingsSection::Advanced => self.render_advanced_section(cx).into_any_element(),
+                SettingsSection::Colors => self.render_colors_section(cx).into_any_element(),
+                SettingsSection::Keybindings => self.render_keybindings_section(cx).into_any_element(),
             })
             .into_any_element()
     }
@@ -1438,7 +1647,7 @@ impl SettingsWindow {
             .justify_between()
             .py_3()
             .px_4()
-            .rounded_lg()
+            .rounded(px(0.0))
             .bg(self.bg_card())
             .border_1()
             .border_color(self.border_color())
@@ -1484,7 +1693,7 @@ impl SettingsWindow {
             .id(SharedString::from(id))
             .w(px(44.0))
             .h(px(24.0))
-            .rounded(px(12.0))
+            .rounded(px(0.0))
             .bg(track_color)
             .cursor_pointer()
             .relative()
@@ -1495,7 +1704,7 @@ impl SettingsWindow {
                     .left(if checked { px(22.0) } else { px(2.0) })
                     .w(px(20.0))
                     .h(px(20.0))
-                    .rounded_full()
+                    .rounded(px(0.0))
                     .bg(knob_color)
                     .shadow_sm(),
             )
@@ -1615,7 +1824,7 @@ impl SettingsWindow {
                         .max_h(if is_theme_field { px(180.0) } else { px(240.0) })
                         .overflow_scroll()
                         .overflow_x_hidden()
-                        .rounded_md()
+                        .rounded(px(0.0))
                         .bg(dropdown_bg)
                         .border_1()
                         .border_color(border_color)
@@ -1649,7 +1858,7 @@ impl SettingsWindow {
                         .id(SharedString::from(format!("dec-{field:?}")))
                         .w(px(NUMERIC_STEP_BUTTON_SIZE))
                         .h(px(NUMERIC_STEP_BUTTON_SIZE))
-                        .rounded_sm()
+                        .rounded(px(0.0))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1676,7 +1885,7 @@ impl SettingsWindow {
                         .id(SharedString::from(format!("inc-{field:?}")))
                         .w(px(NUMERIC_STEP_BUTTON_SIZE))
                         .h(px(NUMERIC_STEP_BUTTON_SIZE))
-                        .rounded_sm()
+                        .rounded(px(0.0))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1722,7 +1931,7 @@ impl SettingsWindow {
             .gap_4()
             .py_3()
             .px_4()
-            .rounded_lg()
+            .rounded(px(0.0))
             .bg(bg_card)
             .border_1()
             .border_color(if dropdown_open {
@@ -1833,7 +2042,7 @@ impl SettingsWindow {
                         div()
                             .h_full()
                             .px_2()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .bg(input_bg)
                             .border_1()
                             .border_color(if is_active && accent_inner_border {
@@ -2015,7 +2224,7 @@ impl SettingsWindow {
     fn render_cursor_style_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.config.cursor_style;
         let meta =
-            Self::setting_metadata("cursor-style").expect("missing metadata for cursor-style");
+            Self::setting_metadata("cursor_style").expect("missing metadata for cursor_style");
         let bg_card = self.bg_card();
         let border_color = self.border_color();
         let text_primary = self.text_primary();
@@ -2032,7 +2241,7 @@ impl SettingsWindow {
             .justify_between()
             .py_3()
             .px_4()
-            .rounded_lg()
+            .rounded(px(0.0))
             .bg(bg_card)
             .border_1()
             .border_color(border_color)
@@ -2063,10 +2272,10 @@ impl SettingsWindow {
                     .child({
                         let is_selected = current == CursorStyle::Block;
                         div()
-                            .id("cursor-style-block")
+                            .id("cursor_style-block")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2084,17 +2293,17 @@ impl SettingsWindow {
                             .child("Block")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.cursor_style = CursorStyle::Block;
-                                let _ = set_config_value("cursor_style", "block");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorStyle, "block");
                                 cx.notify();
                             }))
                     })
                     .child({
                         let is_selected = current == CursorStyle::Line;
                         div()
-                            .id("cursor-style-line")
+                            .id("cursor_style-line")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2112,18 +2321,18 @@ impl SettingsWindow {
                             .child("Line")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.cursor_style = CursorStyle::Line;
-                                let _ = set_config_value("cursor_style", "line");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorStyle, "line");
                                 cx.notify();
                             }))
                     }),
             );
 
-        self.wrap_setting_with_scroll_anchor("cursor-style", row.into_any_element())
+        self.wrap_setting_with_scroll_anchor("cursor_style", row.into_any_element())
     }
 
     fn render_tab_title_mode_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.config.tab_title.mode;
-        let meta = Self::setting_metadata("title-mode").expect("missing metadata for title-mode");
+        let meta = Self::setting_metadata("tab_title_mode").expect("missing metadata for tab_title_mode");
         let bg_card = self.bg_card();
         let border_color = self.border_color();
         let text_primary = self.text_primary();
@@ -2140,7 +2349,7 @@ impl SettingsWindow {
             .justify_between()
             .py_3()
             .px_4()
-            .rounded_lg()
+            .rounded(px(0.0))
             .bg(bg_card)
             .border_1()
             .border_color(border_color)
@@ -2174,7 +2383,7 @@ impl SettingsWindow {
                             .id("tab-mode-smart")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2192,7 +2401,7 @@ impl SettingsWindow {
                             .child("Smart")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.tab_title.mode = TabTitleMode::Smart;
-                                let _ = set_config_value("tab_title_mode", "smart");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "smart");
                                 cx.notify();
                             }))
                     })
@@ -2202,7 +2411,7 @@ impl SettingsWindow {
                             .id("tab-mode-shell")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2220,7 +2429,7 @@ impl SettingsWindow {
                             .child("Shell")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.tab_title.mode = TabTitleMode::Shell;
-                                let _ = set_config_value("tab_title_mode", "shell");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "shell");
                                 cx.notify();
                             }))
                     })
@@ -2230,7 +2439,7 @@ impl SettingsWindow {
                             .id("tab-mode-explicit")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2248,7 +2457,7 @@ impl SettingsWindow {
                             .child("Explicit")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.tab_title.mode = TabTitleMode::Explicit;
-                                let _ = set_config_value("tab_title_mode", "explicit");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "explicit");
                                 cx.notify();
                             }))
                     })
@@ -2258,7 +2467,7 @@ impl SettingsWindow {
                             .id("tab-mode-static")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .cursor_pointer()
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2276,13 +2485,13 @@ impl SettingsWindow {
                             .child("Static")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.config.tab_title.mode = TabTitleMode::Static;
-                                let _ = set_config_value("tab_title_mode", "static");
+                                let _ = config::set_root_setting(termy_config_core::RootSettingId::TabTitleMode, "static");
                                 cx.notify();
                             }))
                     }),
             );
 
-        self.wrap_setting_with_scroll_anchor("title-mode", row.into_any_element())
+        self.wrap_setting_with_scroll_anchor("tab_title_mode", row.into_any_element())
     }
 
     fn render_appearance_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2294,18 +2503,18 @@ impl SettingsWindow {
         let padding_x = self.config.padding_x;
         let padding_y = self.config.padding_y;
         let theme_meta = Self::setting_metadata("theme").expect("missing metadata for theme");
-        let blur_meta = Self::setting_metadata("background-blur")
-            .expect("missing metadata for background-blur");
-        let opacity_meta = Self::setting_metadata("background-opacity")
-            .expect("missing metadata for background-opacity");
+        let blur_meta = Self::setting_metadata("background_blur")
+            .expect("missing metadata for background_blur");
+        let opacity_meta = Self::setting_metadata("background_opacity")
+            .expect("missing metadata for background_opacity");
         let font_family_meta =
-            Self::setting_metadata("font-family").expect("missing metadata for font-family");
+            Self::setting_metadata("font_family").expect("missing metadata for font_family");
         let font_size_meta =
-            Self::setting_metadata("font-size").expect("missing metadata for font-size");
+            Self::setting_metadata("font_size").expect("missing metadata for font_size");
         let padding_x_meta =
-            Self::setting_metadata("padding-x").expect("missing metadata for padding-x");
+            Self::setting_metadata("padding_x").expect("missing metadata for padding_x");
         let padding_y_meta =
-            Self::setting_metadata("padding-y").expect("missing metadata for padding-y");
+            Self::setting_metadata("padding_y").expect("missing metadata for padding_y");
 
         div()
             .flex()
@@ -2323,7 +2532,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("WINDOW"))
             .child(self.render_setting_row(
-                "background-blur",
+                "background_blur",
                 "blur-toggle",
                 blur_meta.title,
                 blur_meta.description,
@@ -2331,14 +2540,14 @@ impl SettingsWindow {
                 cx,
                 |view, _cx| {
                     view.config.background_blur = !view.config.background_blur;
-                    let _ = set_config_value(
-                        "background_blur",
+                    let _ = config::set_root_setting(
+                        termy_config_core::RootSettingId::BackgroundBlur,
                         &view.config.background_blur.to_string(),
                     );
                 },
             ))
             .child(self.render_editable_row(
-                "background-opacity",
+                "background_opacity",
                 EditableField::BackgroundOpacity,
                 opacity_meta.title,
                 opacity_meta.description,
@@ -2347,7 +2556,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("FONT"))
             .child(self.render_editable_row(
-                "font-family",
+                "font_family",
                 EditableField::FontFamily,
                 font_family_meta.title,
                 font_family_meta.description,
@@ -2355,7 +2564,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
-                "font-size",
+                "font_size",
                 EditableField::FontSize,
                 font_size_meta.title,
                 font_size_meta.description,
@@ -2364,7 +2573,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("PADDING"))
             .child(self.render_editable_row(
-                "padding-x",
+                "padding_x",
                 EditableField::PaddingX,
                 padding_x_meta.title,
                 padding_x_meta.description,
@@ -2372,7 +2581,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
-                "padding-y",
+                "padding_y",
                 EditableField::PaddingY,
                 padding_y_meta.title,
                 padding_y_meta.description,
@@ -2395,20 +2604,27 @@ impl SettingsWindow {
             .clone()
             .unwrap_or_else(|| "Disabled".to_string());
         let scrollback = self.config.scrollback_history;
+        let inactive_scrollback = self.config.inactive_tab_scrollback.unwrap_or(0);
         let scroll_mult = self.config.mouse_scroll_multiplier;
         let command_palette_show_keybinds = self.config.command_palette_show_keybinds;
         let cursor_blink_meta =
-            Self::setting_metadata("cursor-blink").expect("missing metadata for cursor-blink");
+            Self::setting_metadata("cursor_blink").expect("missing metadata for cursor_blink");
         let shell_meta = Self::setting_metadata("shell").expect("missing metadata for shell");
         let term_meta = Self::setting_metadata("term").expect("missing metadata for term");
         let colorterm_meta =
             Self::setting_metadata("colorterm").expect("missing metadata for colorterm");
-        let scrollback_meta = Self::setting_metadata("scrollback-history")
-            .expect("missing metadata for scrollback-history");
-        let scroll_mult_meta = Self::setting_metadata("scroll-multiplier")
-            .expect("missing metadata for scroll-multiplier");
-        let palette_meta = Self::setting_metadata("palette-keybinds")
-            .expect("missing metadata for palette-keybinds");
+        let scrollback_meta = Self::setting_metadata("scrollback_history")
+            .expect("missing metadata for scrollback_history");
+        let scroll_mult_meta = Self::setting_metadata("mouse_scroll_multiplier")
+            .expect("missing metadata for mouse_scroll_multiplier");
+        let inactive_scrollback_meta = Self::setting_metadata("inactive_tab_scrollback")
+            .expect("missing metadata for inactive_tab_scrollback");
+        let scrollbar_visibility_meta = Self::setting_metadata("scrollbar_visibility")
+            .expect("missing metadata for scrollbar_visibility");
+        let scrollbar_style_meta = Self::setting_metadata("scrollbar_style")
+            .expect("missing metadata for scrollbar_style");
+        let palette_meta = Self::setting_metadata("command_palette_show_keybinds")
+            .expect("missing metadata for command_palette_show_keybinds");
 
         div()
             .flex()
@@ -2417,15 +2633,15 @@ impl SettingsWindow {
             .child(self.render_section_header("Terminal", "Configure terminal behavior"))
             .child(self.render_group_header("CURSOR"))
             .child(self.render_setting_row(
-                "cursor-blink",
-                "cursor-blink-toggle",
+                "cursor_blink",
+                "cursor_blink-toggle",
                 cursor_blink_meta.title,
                 cursor_blink_meta.description,
                 cursor_blink,
                 cx,
                 |view, _cx| {
                     view.config.cursor_blink = !view.config.cursor_blink;
-                    let _ = set_config_value("cursor_blink", &view.config.cursor_blink.to_string());
+                    let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorBlink, &view.config.cursor_blink.to_string());
                 },
             ))
             .child(self.render_cursor_style_row(cx))
@@ -2456,7 +2672,7 @@ impl SettingsWindow {
             ))
             .child(self.render_group_header("SCROLLING"))
             .child(self.render_editable_row(
-                "scrollback-history",
+                "scrollback_history",
                 EditableField::ScrollbackHistory,
                 scrollback_meta.title,
                 scrollback_meta.description,
@@ -2464,17 +2680,41 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
-                "scroll-multiplier",
+                "inactive_tab_scrollback",
+                EditableField::InactiveTabScrollback,
+                inactive_scrollback_meta.title,
+                inactive_scrollback_meta.description,
+                format!("{} lines", inactive_scrollback),
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "mouse_scroll_multiplier",
                 EditableField::ScrollMultiplier,
                 scroll_mult_meta.title,
                 scroll_mult_meta.description,
                 format!("{}x", scroll_mult),
                 cx,
             ))
+            .child(self.render_editable_row(
+                "scrollbar_visibility",
+                EditableField::ScrollbarVisibility,
+                scrollbar_visibility_meta.title,
+                scrollbar_visibility_meta.description,
+                self.editable_field_value(EditableField::ScrollbarVisibility),
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "scrollbar_style",
+                EditableField::ScrollbarStyle,
+                scrollbar_style_meta.title,
+                scrollbar_style_meta.description,
+                self.editable_field_value(EditableField::ScrollbarStyle),
+                cx,
+            ))
             .child(self.render_group_header("UI"))
             .child(self.render_setting_row(
-                "palette-keybinds",
-                "palette-keybinds-toggle",
+                "command_palette_show_keybinds",
+                "command_palette_show_keybinds-toggle",
                 palette_meta.title,
                 palette_meta.description,
                 command_palette_show_keybinds,
@@ -2482,8 +2722,8 @@ impl SettingsWindow {
                 |view, _cx| {
                     view.config.command_palette_show_keybinds =
                         !view.config.command_palette_show_keybinds;
-                    let _ = set_config_value(
-                        "command_palette_show_keybinds",
+                    let _ = config::set_root_setting(
+                        termy_config_core::RootSettingId::CommandPaletteShowKeybinds,
                         &view.config.command_palette_show_keybinds.to_string(),
                     );
                 },
@@ -2492,11 +2732,32 @@ impl SettingsWindow {
 
     fn render_tabs_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let shell_integration = self.config.tab_title.shell_integration;
+        let show_termy = self.config.show_termy_in_titlebar;
         let fallback = self.config.tab_title.fallback.clone();
-        let shell_integration_meta = Self::setting_metadata("shell-integration")
-            .expect("missing metadata for shell-integration");
+        let title_priority = self.editable_field_value(EditableField::TabTitlePriority);
+        let explicit_prefix = self.config.tab_title.explicit_prefix.clone();
+        let prompt_format = self.config.tab_title.prompt_format.clone();
+        let command_format = self.config.tab_title.command_format.clone();
+        let close_visibility = self.editable_field_value(EditableField::TabCloseVisibility);
+        let width_mode = self.editable_field_value(EditableField::TabWidthMode);
+        let shell_integration_meta = Self::setting_metadata("tab_title_shell_integration")
+            .expect("missing metadata for tab_title_shell_integration");
         let fallback_meta =
-            Self::setting_metadata("fallback-title").expect("missing metadata for fallback-title");
+            Self::setting_metadata("tab_title_fallback").expect("missing metadata for tab_title_fallback");
+        let title_priority_meta = Self::setting_metadata("tab_title_priority")
+            .expect("missing metadata for tab_title_priority");
+        let explicit_prefix_meta = Self::setting_metadata("tab_title_explicit_prefix")
+            .expect("missing metadata for tab_title_explicit_prefix");
+        let prompt_format_meta = Self::setting_metadata("tab_title_prompt_format")
+            .expect("missing metadata for tab_title_prompt_format");
+        let command_format_meta = Self::setting_metadata("tab_title_command_format")
+            .expect("missing metadata for tab_title_command_format");
+        let close_visibility_meta = Self::setting_metadata("tab_close_visibility")
+            .expect("missing metadata for tab_close_visibility");
+        let width_mode_meta = Self::setting_metadata("tab_width_mode")
+            .expect("missing metadata for tab_width_mode");
+        let show_termy_meta = Self::setting_metadata("show_termy_in_titlebar")
+            .expect("missing metadata for show_termy_in_titlebar");
 
         div()
             .flex()
@@ -2506,8 +2767,8 @@ impl SettingsWindow {
             .child(self.render_group_header("TAB TITLES"))
             .child(self.render_tab_title_mode_row(cx))
             .child(self.render_setting_row(
-                "shell-integration",
-                "shell-integration-toggle",
+                "tab_title_shell_integration",
+                "tab_title_shell_integration-toggle",
                 shell_integration_meta.title,
                 shell_integration_meta.description,
                 shell_integration,
@@ -2515,19 +2776,84 @@ impl SettingsWindow {
                 |view, _cx| {
                     view.config.tab_title.shell_integration =
                         !view.config.tab_title.shell_integration;
-                    let _ = set_config_value(
-                        "tab_title_shell_integration",
+                    let _ = config::set_root_setting(
+                        termy_config_core::RootSettingId::TabTitleShellIntegration,
                         &view.config.tab_title.shell_integration.to_string(),
                     );
                 },
             ))
             .child(self.render_editable_row(
-                "fallback-title",
+                "tab_title_fallback",
                 EditableField::TabFallbackTitle,
                 fallback_meta.title,
                 fallback_meta.description,
                 fallback,
                 cx,
+            ))
+            .child(self.render_editable_row(
+                "tab_title_priority",
+                EditableField::TabTitlePriority,
+                title_priority_meta.title,
+                title_priority_meta.description,
+                title_priority,
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "tab_title_explicit_prefix",
+                EditableField::TabTitleExplicitPrefix,
+                explicit_prefix_meta.title,
+                explicit_prefix_meta.description,
+                explicit_prefix,
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "tab_title_prompt_format",
+                EditableField::TabTitlePromptFormat,
+                prompt_format_meta.title,
+                prompt_format_meta.description,
+                prompt_format,
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "tab_title_command_format",
+                EditableField::TabTitleCommandFormat,
+                command_format_meta.title,
+                command_format_meta.description,
+                command_format,
+                cx,
+            ))
+            .child(self.render_group_header("TAB STRIP"))
+            .child(self.render_editable_row(
+                "tab_close_visibility",
+                EditableField::TabCloseVisibility,
+                close_visibility_meta.title,
+                close_visibility_meta.description,
+                close_visibility,
+                cx,
+            ))
+            .child(self.render_editable_row(
+                "tab_width_mode",
+                EditableField::TabWidthMode,
+                width_mode_meta.title,
+                width_mode_meta.description,
+                width_mode,
+                cx,
+            ))
+            .child(self.render_group_header("TITLE BAR"))
+            .child(self.render_setting_row(
+                "show_termy_in_titlebar",
+                "show_termy_in_titlebar-toggle",
+                show_termy_meta.title,
+                show_termy_meta.description,
+                show_termy,
+                cx,
+                |view, _cx| {
+                    view.config.show_termy_in_titlebar = !view.config.show_termy_in_titlebar;
+                    let _ = config::set_root_setting(
+                        termy_config_core::RootSettingId::ShowTermyInTitlebar,
+                        &view.config.show_termy_in_titlebar.to_string(),
+                    );
+                },
             ))
     }
 
@@ -2537,6 +2863,8 @@ impl SettingsWindow {
             .working_dir
             .clone()
             .unwrap_or_else(|| "Not set".to_string());
+        let working_dir_fallback = self.editable_field_value(EditableField::WorkingDirFallback);
+        let warn_on_quit = self.config.warn_on_quit_with_running_process;
         let window_width = self.config.window_width;
         let window_height = self.config.window_height;
         let bg_card = self.bg_card();
@@ -2547,12 +2875,16 @@ impl SettingsWindow {
         let accent_hover = self.accent_with_alpha(0.8);
         let button_text = self.contrasting_text_for_fill(accent, bg_card);
         let button_hover_text = self.contrasting_text_for_fill(accent_hover, bg_card);
-        let working_dir_meta = Self::setting_metadata("working-directory")
-            .expect("missing metadata for working-directory");
+        let working_dir_meta = Self::setting_metadata("working_dir")
+            .expect("missing metadata for working_dir");
+        let working_dir_fallback_meta = Self::setting_metadata("working_dir_fallback")
+            .expect("missing metadata for working_dir_fallback");
+        let warn_on_quit_meta = Self::setting_metadata("warn_on_quit_with_running_process")
+            .expect("missing metadata for warn_on_quit_with_running_process");
         let window_width_meta =
-            Self::setting_metadata("window-width").expect("missing metadata for window-width");
+            Self::setting_metadata("window_width").expect("missing metadata for window_width");
         let window_height_meta =
-            Self::setting_metadata("window-height").expect("missing metadata for window-height");
+            Self::setting_metadata("window_height").expect("missing metadata for window_height");
 
         div()
             .flex()
@@ -2561,16 +2893,41 @@ impl SettingsWindow {
             .child(self.render_section_header("Advanced", "Advanced configuration options"))
             .child(self.render_group_header("STARTUP"))
             .child(self.render_editable_row(
-                "working-directory",
+                "working_dir",
                 EditableField::WorkingDirectory,
                 working_dir_meta.title,
                 working_dir_meta.description,
                 working_dir,
                 cx,
             ))
+            .child(self.render_editable_row(
+                "working_dir_fallback",
+                EditableField::WorkingDirFallback,
+                working_dir_fallback_meta.title,
+                working_dir_fallback_meta.description,
+                working_dir_fallback,
+                cx,
+            ))
+            .child(self.render_group_header("SAFETY"))
+            .child(self.render_setting_row(
+                "warn_on_quit_with_running_process",
+                "warn_on_quit-toggle",
+                warn_on_quit_meta.title,
+                warn_on_quit_meta.description,
+                warn_on_quit,
+                cx,
+                |view, _cx| {
+                    view.config.warn_on_quit_with_running_process =
+                        !view.config.warn_on_quit_with_running_process;
+                    let _ = config::set_root_setting(
+                        termy_config_core::RootSettingId::WarnOnQuitWithRunningProcess,
+                        &view.config.warn_on_quit_with_running_process.to_string(),
+                    );
+                },
+            ))
             .child(self.render_group_header("WINDOW"))
             .child(self.render_editable_row(
-                "window-width",
+                "window_width",
                 EditableField::WindowWidth,
                 window_width_meta.title,
                 window_width_meta.description,
@@ -2578,7 +2935,7 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_editable_row(
-                "window-height",
+                "window_height",
                 EditableField::WindowHeight,
                 window_height_meta.title,
                 window_height_meta.description,
@@ -2590,7 +2947,7 @@ impl SettingsWindow {
                 div()
                     .py_4()
                     .px_4()
-                    .rounded_lg()
+                    .rounded(px(0.0))
                     .bg(bg_card)
                     .border_1()
                     .border_color(border_color)
@@ -2616,7 +2973,7 @@ impl SettingsWindow {
                             .mt_2()
                             .px_4()
                             .py_2()
-                            .rounded_md()
+                            .rounded(px(0.0))
                             .bg(accent)
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -2637,6 +2994,7 @@ impl SettingsWindow {
                     ),
             )
     }
+
 }
 
 impl TextInputProvider for SettingsWindow {

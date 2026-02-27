@@ -297,7 +297,7 @@ pub(super) fn filter_command_palette_item_indices_by_query(
 ) -> Vec<usize> {
     let query = query.trim().to_ascii_lowercase();
     let query_terms: Vec<String> = query
-        .split_whitespace()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|term| !term.is_empty())
         .map(ToOwned::to_owned)
         .collect();
@@ -466,6 +466,23 @@ mod tests {
                 CommandAction::ZoomReset
             ]
         );
+    }
+
+    #[test]
+    fn query_splits_hyphenated_terms_on_non_alphanumeric_boundaries() {
+        let items = vec![
+            command_item("Tokyo Night", "theme", CommandAction::SwitchTheme),
+            command_item("Tomorrow Night", "theme", CommandAction::SwitchTheme),
+            command_item("Nord", "theme", CommandAction::SwitchTheme),
+        ];
+
+        let filtered_indices = filter_command_palette_item_indices_by_query(&items, "tokyo-night");
+        let titles: Vec<&str> = filtered_indices
+            .into_iter()
+            .map(|index| items[index].title.as_str())
+            .collect();
+
+        assert_eq!(titles, vec!["Tokyo Night"]);
     }
 
     #[test]

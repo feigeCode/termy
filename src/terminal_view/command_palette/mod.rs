@@ -364,8 +364,7 @@ impl TerminalView {
     ) {
         let keep_open = Self::command_palette_should_stay_open(action);
         if !keep_open {
-            self.command_palette.close();
-            self.inline_input_selecting = false;
+            self.close_command_palette(cx);
         }
 
         self.execute_command_action(action, false, window, cx);

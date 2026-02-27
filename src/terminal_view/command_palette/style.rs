@@ -1,4 +1,11 @@
-use super::super::*;
+use super::super::{
+    COMMAND_PALETTE_DIM_ALPHA, COMMAND_PALETTE_INPUT_BG_ALPHA, COMMAND_PALETTE_INPUT_SELECTION_ALPHA,
+    COMMAND_PALETTE_INPUT_SOLID_ALPHA, COMMAND_PALETTE_PANEL_BG_ALPHA, COMMAND_PALETTE_PANEL_SOLID_ALPHA,
+    COMMAND_PALETTE_ROW_SELECTED_BG_ALPHA, COMMAND_PALETTE_SCROLLBAR_THUMB_ALPHA,
+    COMMAND_PALETTE_SCROLLBAR_TRACK_ALPHA, COMMAND_PALETTE_SHORTCUT_BG_ALPHA,
+    COMMAND_PALETTE_SHORTCUT_TEXT_ALPHA, OVERLAY_MUTED_TEXT_ALPHA, OVERLAY_PRIMARY_TEXT_ALPHA,
+    TAB_STROKE_FOREGROUND_MIX, TerminalView, resolve_chrome_stroke_color,
+};
 
 pub(super) const COMMAND_PALETTE_PANEL_RADIUS: f32 = 0.0;
 pub(super) const COMMAND_PALETTE_INPUT_RADIUS: f32 = 0.0;
@@ -27,11 +34,7 @@ pub(super) fn command_palette_border_color(
     chrome_surface_bg: gpui::Rgba,
     foreground: gpui::Rgba,
 ) -> gpui::Rgba {
-    super::super::resolve_chrome_stroke_color(
-        chrome_surface_bg,
-        foreground,
-        TAB_STROKE_FOREGROUND_MIX,
-    )
+    resolve_chrome_stroke_color(chrome_surface_bg, foreground, TAB_STROKE_FOREGROUND_MIX)
 }
 
 impl CommandPaletteStyle {
@@ -107,7 +110,7 @@ mod tests {
         };
 
         let border = command_palette_border_color(chrome_surface_bg, foreground);
-        let tab_stroke = super::super::super::resolve_chrome_stroke_color(
+        let tab_stroke = resolve_chrome_stroke_color(
             chrome_surface_bg,
             foreground,
             TAB_STROKE_FOREGROUND_MIX,

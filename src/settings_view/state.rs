@@ -1,0 +1,1052 @@
+use super::*;
+
+const MAX_THEME_SUGGESTIONS: usize = 16;
+const MAX_FONT_SUGGESTIONS: usize = 200;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum EditableField {
+    Theme,
+    BackgroundOpacity,
+    FontFamily,
+    FontSize,
+    PaddingX,
+    PaddingY,
+    Shell,
+    Term,
+    Colorterm,
+    ScrollbackHistory,
+    InactiveTabScrollback,
+    ScrollMultiplier,
+    CursorStyle,
+    ScrollbarVisibility,
+    ScrollbarStyle,
+    TabFallbackTitle,
+    TabTitlePriority,
+    TabTitleMode,
+    TabTitleExplicitPrefix,
+    TabTitlePromptFormat,
+    TabTitleCommandFormat,
+    TabCloseVisibility,
+    TabWidthMode,
+    WorkingDirectory,
+    WorkingDirFallback,
+    WindowWidth,
+    WindowHeight,
+    Color(termy_config_core::ColorSettingId),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ActiveTextInput {
+    pub(super) field: EditableField,
+    pub(super) state: TextInputState,
+    pub(super) selecting: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DropdownOption {
+    pub(super) value: String,
+    pub(super) label: String,
+    pub(super) show_raw_value: bool,
+}
+
+impl DropdownOption {
+    pub(super) fn raw(value: String) -> Self {
+        Self {
+            label: value.clone(),
+            value,
+            show_raw_value: false,
+        }
+    }
+
+    pub(super) fn labeled(value: String, label: String, show_raw_value: bool) -> Self {
+        Self {
+            value,
+            label,
+            show_raw_value,
+        }
+    }
+
+    pub(super) fn display_text(&self) -> String {
+        if self.show_raw_value {
+            format!("{} ({})", self.label, self.value)
+        } else if self.label == self.value {
+            self.label.clone()
+        } else {
+            format!("{} ({})", self.label, self.value)
+        }
+    }
+}
+
+impl ActiveTextInput {
+    pub(super) fn new(field: EditableField, text: String) -> Self {
+        Self {
+            field,
+            state: TextInputState::new(text),
+            selecting: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FieldCodec {
+    Theme,
+    FontFamily,
+    Enum,
+    Numeric,
+    Text,
+    Color,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NumericStepSpec {
+    pub(super) delta: f32,
+    pub(super) min: f32,
+    pub(super) max: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FieldSpec {
+    pub(super) root_setting: Option<RootSettingId>,
+    pub(super) codec: FieldCodec,
+    pub(super) dropdown_click_only: bool,
+    pub(super) numeric_step: Option<NumericStepSpec>,
+}
+
+impl SettingsWindow {
+    pub(super) fn parse_tab_title_source_token(token: &str) -> Option<termy_config_core::TabTitleSource> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "manual" => Some(termy_config_core::TabTitleSource::Manual),
+            "explicit" => Some(termy_config_core::TabTitleSource::Explicit),
+            "shell" | "app" | "terminal" => Some(termy_config_core::TabTitleSource::Shell),
+            "fallback" | "default" => Some(termy_config_core::TabTitleSource::Fallback),
+            _ => None,
+        }
+    }
+
+    pub(super) fn custom_color_for_id(&self, id: termy_config_core::ColorSettingId) -> Option<termy_config_core::Rgb8> {
+        let colors = &self.config.colors;
+        match id {
+            termy_config_core::ColorSettingId::Foreground => colors.foreground,
+            termy_config_core::ColorSettingId::Background => colors.background,
+            termy_config_core::ColorSettingId::Cursor => colors.cursor,
+            termy_config_core::ColorSettingId::Black => colors.ansi[0],
+            termy_config_core::ColorSettingId::Red => colors.ansi[1],
+            termy_config_core::ColorSettingId::Green => colors.ansi[2],
+            termy_config_core::ColorSettingId::Yellow => colors.ansi[3],
+            termy_config_core::ColorSettingId::Blue => colors.ansi[4],
+            termy_config_core::ColorSettingId::Magenta => colors.ansi[5],
+            termy_config_core::ColorSettingId::Cyan => colors.ansi[6],
+            termy_config_core::ColorSettingId::White => colors.ansi[7],
+            termy_config_core::ColorSettingId::BrightBlack => colors.ansi[8],
+            termy_config_core::ColorSettingId::BrightRed => colors.ansi[9],
+            termy_config_core::ColorSettingId::BrightGreen => colors.ansi[10],
+            termy_config_core::ColorSettingId::BrightYellow => colors.ansi[11],
+            termy_config_core::ColorSettingId::BrightBlue => colors.ansi[12],
+            termy_config_core::ColorSettingId::BrightMagenta => colors.ansi[13],
+            termy_config_core::ColorSettingId::BrightCyan => colors.ansi[14],
+            termy_config_core::ColorSettingId::BrightWhite => colors.ansi[15],
+        }
+    }
+
+    pub(super) fn set_custom_color_for_id(
+        &mut self,
+        id: termy_config_core::ColorSettingId,
+        value: Option<termy_config_core::Rgb8>,
+    ) {
+        let colors = &mut self.config.colors;
+        match id {
+            termy_config_core::ColorSettingId::Foreground => colors.foreground = value,
+            termy_config_core::ColorSettingId::Background => colors.background = value,
+            termy_config_core::ColorSettingId::Cursor => colors.cursor = value,
+            termy_config_core::ColorSettingId::Black => colors.ansi[0] = value,
+            termy_config_core::ColorSettingId::Red => colors.ansi[1] = value,
+            termy_config_core::ColorSettingId::Green => colors.ansi[2] = value,
+            termy_config_core::ColorSettingId::Yellow => colors.ansi[3] = value,
+            termy_config_core::ColorSettingId::Blue => colors.ansi[4] = value,
+            termy_config_core::ColorSettingId::Magenta => colors.ansi[5] = value,
+            termy_config_core::ColorSettingId::Cyan => colors.ansi[6] = value,
+            termy_config_core::ColorSettingId::White => colors.ansi[7] = value,
+            termy_config_core::ColorSettingId::BrightBlack => colors.ansi[8] = value,
+            termy_config_core::ColorSettingId::BrightRed => colors.ansi[9] = value,
+            termy_config_core::ColorSettingId::BrightGreen => colors.ansi[10] = value,
+            termy_config_core::ColorSettingId::BrightYellow => colors.ansi[11] = value,
+            termy_config_core::ColorSettingId::BrightBlue => colors.ansi[12] = value,
+            termy_config_core::ColorSettingId::BrightMagenta => colors.ansi[13] = value,
+            termy_config_core::ColorSettingId::BrightCyan => colors.ansi[14] = value,
+            termy_config_core::ColorSettingId::BrightWhite => colors.ansi[15] = value,
+        }
+    }
+
+    pub(super) fn default_root_setting_value(setting: RootSettingId) -> Option<String> {
+        let defaults = AppConfig::default();
+        root_setting_default_value(&defaults, setting)
+    }
+
+    fn section_root_settings(section: SettingsSection) -> &'static [RootSettingId] {
+        const APPEARANCE_SETTINGS: &[RootSettingId] = &[
+            RootSettingId::Theme,
+            RootSettingId::BackgroundBlur,
+            RootSettingId::BackgroundOpacity,
+            RootSettingId::FontFamily,
+            RootSettingId::FontSize,
+            RootSettingId::PaddingX,
+            RootSettingId::PaddingY,
+        ];
+        const TERMINAL_SETTINGS: &[RootSettingId] = &[
+            RootSettingId::CursorBlink,
+            RootSettingId::CursorStyle,
+            RootSettingId::Shell,
+            RootSettingId::Term,
+            RootSettingId::Colorterm,
+            RootSettingId::ScrollbackHistory,
+            RootSettingId::InactiveTabScrollback,
+            RootSettingId::MouseScrollMultiplier,
+            RootSettingId::ScrollbarVisibility,
+            RootSettingId::ScrollbarStyle,
+            RootSettingId::CommandPaletteShowKeybinds,
+        ];
+        const TABS_SETTINGS: &[RootSettingId] = &[
+            RootSettingId::TabTitleMode,
+            RootSettingId::TabTitleShellIntegration,
+            RootSettingId::TabTitleFallback,
+            RootSettingId::TabTitlePriority,
+            RootSettingId::TabTitleExplicitPrefix,
+            RootSettingId::TabTitlePromptFormat,
+            RootSettingId::TabTitleCommandFormat,
+            RootSettingId::TabCloseVisibility,
+            RootSettingId::TabWidthMode,
+            RootSettingId::ShowTermyInTitlebar,
+        ];
+        const ADVANCED_SETTINGS: &[RootSettingId] = &[
+            RootSettingId::WorkingDir,
+            RootSettingId::WorkingDirFallback,
+            RootSettingId::WarnOnQuitWithRunningProcess,
+            RootSettingId::WindowWidth,
+            RootSettingId::WindowHeight,
+        ];
+
+        match section {
+            SettingsSection::Appearance => APPEARANCE_SETTINGS,
+            SettingsSection::Terminal => TERMINAL_SETTINGS,
+            SettingsSection::Tabs => TABS_SETTINGS,
+            SettingsSection::Advanced => ADVANCED_SETTINGS,
+            SettingsSection::Colors | SettingsSection::Keybindings => &[],
+        }
+    }
+
+    fn is_root_setting_at_default(&self, setting: RootSettingId) -> bool {
+        let current = root_setting_default_value(&self.config, setting);
+        let default = Self::default_root_setting_value(setting);
+        current == default
+    }
+
+    pub(super) fn is_setting_at_default(&self, setting_key: &str) -> bool {
+        if let Some(setting) = root_setting_from_key(setting_key) {
+            return self.is_root_setting_at_default(setting);
+        }
+        if let Some(color_setting) = color_setting_from_key(setting_key) {
+            return self.custom_color_for_id(color_setting).is_none();
+        }
+        false
+    }
+
+    pub(super) fn section_has_non_default_values(&self, section: SettingsSection) -> bool {
+        match section {
+            SettingsSection::Colors => color_setting_specs()
+                .iter()
+                .any(|spec| self.custom_color_for_id(spec.id).is_some()),
+            SettingsSection::Keybindings => !self.config.keybind_lines.is_empty(),
+            _ => Self::section_root_settings(section)
+                .iter()
+                .any(|setting| !self.is_root_setting_at_default(*setting)),
+        }
+    }
+
+    pub(super) fn reset_root_setting_to_default(&mut self, setting: RootSettingId) -> Result<(), String> {
+        if let Some(default_value) = Self::default_root_setting_value(setting) {
+            config::set_root_setting(setting, &default_value)
+        } else {
+            config::remove_root_setting(setting)
+        }
+    }
+
+    pub(super) fn reset_setting_to_default(&mut self, setting_key: &'static str, cx: &mut Context<Self>) {
+        let result = if let Some(setting) = root_setting_from_key(setting_key) {
+            self.reset_root_setting_to_default(setting)
+        } else if let Some(color_setting) = color_setting_from_key(setting_key) {
+            config::set_color_setting(color_setting, None)
+        } else {
+            return;
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = self.reload_config_if_changed(cx);
+                self.active_input = None;
+                self.capturing_action = None;
+                termy_toast::success("Reset to default");
+                cx.notify();
+            }
+            Err(error) => termy_toast::error(error),
+        }
+    }
+
+    pub(super) fn reset_section_to_defaults(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        if section == SettingsSection::Keybindings {
+            self.reset_keybinds_to_defaults(cx);
+            return;
+        }
+
+        let result = match section {
+            SettingsSection::Appearance
+            | SettingsSection::Terminal
+            | SettingsSection::Tabs
+            | SettingsSection::Advanced => Self::section_root_settings(section)
+                .iter()
+                .try_for_each(|setting| self.reset_root_setting_to_default(*setting)),
+            SettingsSection::Colors => color_setting_specs()
+                .iter()
+                .try_for_each(|spec| config::set_color_setting(spec.id, None)),
+            SettingsSection::Keybindings => Ok(()),
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = self.reload_config_if_changed(cx);
+                self.active_input = None;
+                self.capturing_action = None;
+                termy_toast::success("Section reset to defaults");
+                cx.notify();
+            }
+            Err(error) => termy_toast::error(error),
+        }
+    }
+
+    pub(super) fn field_spec(field: EditableField) -> FieldSpec {
+        match field {
+            EditableField::Theme
+            | EditableField::BackgroundOpacity
+            | EditableField::FontFamily
+            | EditableField::FontSize
+            | EditableField::PaddingX
+            | EditableField::PaddingY => Self::appearance_field_spec(field),
+            EditableField::Shell
+            | EditableField::Term
+            | EditableField::Colorterm
+            | EditableField::ScrollbackHistory
+            | EditableField::InactiveTabScrollback
+            | EditableField::ScrollMultiplier
+            | EditableField::CursorStyle
+            | EditableField::ScrollbarVisibility
+            | EditableField::ScrollbarStyle => Self::terminal_field_spec(field),
+            EditableField::TabFallbackTitle
+            | EditableField::TabTitlePriority
+            | EditableField::TabTitleMode
+            | EditableField::TabTitleExplicitPrefix
+            | EditableField::TabTitlePromptFormat
+            | EditableField::TabTitleCommandFormat
+            | EditableField::TabCloseVisibility
+            | EditableField::TabWidthMode => Self::tabs_field_spec(field),
+            EditableField::WorkingDirectory
+            | EditableField::WorkingDirFallback
+            | EditableField::WindowWidth
+            | EditableField::WindowHeight => Self::advanced_field_spec(field),
+            EditableField::Color(_) => FieldSpec {
+                root_setting: None,
+                codec: FieldCodec::Color,
+                dropdown_click_only: false,
+                numeric_step: None,
+            },
+        }
+    }
+
+    pub(super) fn appearance_field_spec(field: EditableField) -> FieldSpec {
+        match field {
+            EditableField::Theme => FieldSpec {
+                root_setting: Some(RootSettingId::Theme),
+                codec: FieldCodec::Theme,
+                dropdown_click_only: false,
+                numeric_step: None,
+            },
+            EditableField::BackgroundOpacity => FieldSpec {
+                root_setting: Some(RootSettingId::BackgroundOpacity),
+                codec: FieldCodec::Numeric,
+                dropdown_click_only: false,
+                numeric_step: Some(NumericStepSpec { delta: 0.05, min: 0.0, max: 1.0 }),
+            },
+            EditableField::FontFamily => FieldSpec {
+                root_setting: Some(RootSettingId::FontFamily),
+                codec: FieldCodec::FontFamily,
+                dropdown_click_only: false,
+                numeric_step: None,
+            },
+            EditableField::FontSize => FieldSpec {
+                root_setting: Some(RootSettingId::FontSize),
+                codec: FieldCodec::Numeric,
+                dropdown_click_only: false,
+                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 1.0, max: 4096.0 }),
+            },
+            EditableField::PaddingX => FieldSpec {
+                root_setting: Some(RootSettingId::PaddingX),
+                codec: FieldCodec::Numeric,
+                dropdown_click_only: false,
+                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 0.0, max: 4096.0 }),
+            },
+            EditableField::PaddingY => FieldSpec {
+                root_setting: Some(RootSettingId::PaddingY),
+                codec: FieldCodec::Numeric,
+                dropdown_click_only: false,
+                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 0.0, max: 4096.0 }),
+            },
+            _ => unreachable!("invalid appearance field"),
+        }
+    }
+
+    pub(super) fn terminal_field_spec(field: EditableField) -> FieldSpec {
+        match field {
+            EditableField::Shell => Self::text_field_spec(Some(RootSettingId::Shell)),
+            EditableField::Term => Self::text_field_spec(Some(RootSettingId::Term)),
+            EditableField::Colorterm => Self::text_field_spec(Some(RootSettingId::Colorterm)),
+            EditableField::ScrollbackHistory => Self::numeric_field_spec(
+                RootSettingId::ScrollbackHistory,
+                NumericStepSpec { delta: 100.0, min: 0.0, max: 100_000.0 },
+            ),
+            EditableField::InactiveTabScrollback => Self::numeric_field_spec(
+                RootSettingId::InactiveTabScrollback,
+                NumericStepSpec { delta: 100.0, min: 0.0, max: 100_000.0 },
+            ),
+            EditableField::ScrollMultiplier => Self::numeric_field_spec(
+                RootSettingId::MouseScrollMultiplier,
+                NumericStepSpec { delta: 0.1, min: 0.1, max: 1000.0 },
+            ),
+            EditableField::CursorStyle => Self::enum_field_spec(RootSettingId::CursorStyle),
+            EditableField::ScrollbarVisibility => Self::enum_field_spec(RootSettingId::ScrollbarVisibility),
+            EditableField::ScrollbarStyle => Self::enum_field_spec(RootSettingId::ScrollbarStyle),
+            _ => unreachable!("invalid terminal field"),
+        }
+    }
+
+    pub(super) fn tabs_field_spec(field: EditableField) -> FieldSpec {
+        match field {
+            EditableField::TabFallbackTitle => {
+                Self::text_field_spec(Some(RootSettingId::TabTitleFallback))
+            }
+            EditableField::TabTitlePriority => {
+                Self::text_field_spec(Some(RootSettingId::TabTitlePriority))
+            }
+            EditableField::TabTitleMode => Self::enum_field_spec(RootSettingId::TabTitleMode),
+            EditableField::TabTitleExplicitPrefix => {
+                Self::text_field_spec(Some(RootSettingId::TabTitleExplicitPrefix))
+            }
+            EditableField::TabTitlePromptFormat => {
+                Self::text_field_spec(Some(RootSettingId::TabTitlePromptFormat))
+            }
+            EditableField::TabTitleCommandFormat => {
+                Self::text_field_spec(Some(RootSettingId::TabTitleCommandFormat))
+            }
+            EditableField::TabCloseVisibility => {
+                Self::enum_field_spec(RootSettingId::TabCloseVisibility)
+            }
+            EditableField::TabWidthMode => Self::enum_field_spec(RootSettingId::TabWidthMode),
+            _ => unreachable!("invalid tabs field"),
+        }
+    }
+
+    pub(super) fn advanced_field_spec(field: EditableField) -> FieldSpec {
+        match field {
+            EditableField::WorkingDirectory => Self::text_field_spec(Some(RootSettingId::WorkingDir)),
+            EditableField::WorkingDirFallback => {
+                Self::enum_field_spec(RootSettingId::WorkingDirFallback)
+            }
+            EditableField::WindowWidth => Self::numeric_field_spec(
+                RootSettingId::WindowWidth,
+                NumericStepSpec { delta: 10.0, min: 100.0, max: 10000.0 },
+            ),
+            EditableField::WindowHeight => Self::numeric_field_spec(
+                RootSettingId::WindowHeight,
+                NumericStepSpec { delta: 10.0, min: 100.0, max: 10000.0 },
+            ),
+            _ => unreachable!("invalid advanced field"),
+        }
+    }
+
+    pub(super) fn text_field_spec(root_setting: Option<RootSettingId>) -> FieldSpec {
+        FieldSpec {
+            root_setting,
+            codec: FieldCodec::Text,
+            dropdown_click_only: false,
+            numeric_step: None,
+        }
+    }
+
+    pub(super) fn numeric_field_spec(root_setting: RootSettingId, numeric_step: NumericStepSpec) -> FieldSpec {
+        FieldSpec {
+            root_setting: Some(root_setting),
+            codec: FieldCodec::Numeric,
+            dropdown_click_only: false,
+            numeric_step: Some(numeric_step),
+        }
+    }
+
+    pub(super) fn enum_field_spec(root_setting: RootSettingId) -> FieldSpec {
+        FieldSpec {
+            root_setting: Some(root_setting),
+            codec: FieldCodec::Enum,
+            dropdown_click_only: true,
+            numeric_step: None,
+        }
+    }
+
+    pub(super) fn root_setting_for_editable_field(field: EditableField) -> Option<RootSettingId> {
+        Self::field_spec(field).root_setting
+    }
+
+    pub(super) fn enum_root_setting_for_field(field: EditableField) -> Option<RootSettingId> {
+        let setting = Self::root_setting_for_editable_field(field)?;
+        (root_setting_value_kind(setting) == RootSettingValueKind::Enum).then_some(setting)
+    }
+
+    pub(super) fn field_uses_dropdown(field: EditableField) -> bool {
+        matches!(
+            Self::field_spec(field).codec,
+            FieldCodec::Theme | FieldCodec::FontFamily | FieldCodec::Enum
+        )
+    }
+
+    pub(super) fn field_uses_click_only_dropdown(field: EditableField) -> bool {
+        Self::field_spec(field).dropdown_click_only
+    }
+
+    pub(super) fn dropdown_option_for_enum_choice(value: &str, label: &str) -> DropdownOption {
+        DropdownOption::labeled(value.to_string(), label.to_string(), true)
+    }
+
+    pub(super) fn normalize_dropdown_query_token(value: &str) -> String {
+        value
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|ch| !matches!(ch, '_' | '-' | ' ' | '+'))
+            .collect()
+    }
+
+    pub(super) fn filtered_enum_suggestions(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+        let Some(setting) = Self::enum_root_setting_for_field(field) else {
+            return Vec::new();
+        };
+        let Some(choices) = root_setting_enum_choices(setting) else {
+            return Vec::new();
+        };
+
+        let mut options = choices
+            .iter()
+            .map(|choice| Self::dropdown_option_for_enum_choice(choice.value, choice.label))
+            .collect::<Vec<_>>();
+
+        let trimmed_query = query.trim();
+        let normalized_query = trimmed_query.to_ascii_lowercase();
+        let normalized_compact = Self::normalize_dropdown_query_token(trimmed_query);
+        if normalized_query.is_empty() {
+            let current_value = self.editable_field_value(field);
+            if let Some(index) = options
+                .iter()
+                .position(|option| option.value.eq_ignore_ascii_case(&current_value))
+            {
+                let selected = options.remove(index);
+                options.insert(0, selected);
+            } else if !current_value.trim().is_empty() {
+                options.insert(0, DropdownOption::raw(current_value));
+            }
+            return options;
+        }
+
+        let mut matched = options
+            .into_iter()
+            .filter(|option| {
+                let value_lower = option.value.to_ascii_lowercase();
+                let label_lower = option.label.to_ascii_lowercase();
+                let value_compact = Self::normalize_dropdown_query_token(&option.value);
+                let label_compact = Self::normalize_dropdown_query_token(&option.label);
+                value_lower.contains(&normalized_query)
+                    || label_lower.contains(&normalized_query)
+                    || (!normalized_compact.is_empty()
+                        && (value_compact.contains(&normalized_compact)
+                            || label_compact.contains(&normalized_compact)))
+            })
+            .collect::<Vec<_>>();
+
+        if !trimmed_query.is_empty()
+            && !matched
+                .iter()
+                .any(|option| {
+                    option.value.eq_ignore_ascii_case(trimmed_query)
+                        || Self::normalize_dropdown_query_token(&option.value)
+                            == normalized_compact
+                })
+        {
+            matched.insert(0, DropdownOption::raw(trimmed_query.to_string()));
+        }
+
+        matched
+    }
+
+    pub(super) fn dropdown_options_for_field(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+        if field == EditableField::Theme {
+            return self
+                .filtered_theme_suggestions(query)
+                .into_iter()
+                .map(DropdownOption::raw)
+                .collect();
+        }
+        if field == EditableField::FontFamily {
+            return self
+                .filtered_font_suggestions(query)
+                .into_iter()
+                .map(DropdownOption::raw)
+                .collect();
+        }
+
+        self.filtered_enum_suggestions(field, query)
+    }
+
+    pub(super) fn dropdown_display_value(&self, field: EditableField, raw_value: &str) -> String {
+        let Some(setting) = Self::enum_root_setting_for_field(field) else {
+            return raw_value.to_string();
+        };
+        let Some(choices) = root_setting_enum_choices(setting) else {
+            return raw_value.to_string();
+        };
+        let Some(choice) = choices
+            .iter()
+            .find(|choice| choice.value.eq_ignore_ascii_case(raw_value))
+        else {
+            return raw_value.to_string();
+        };
+        Self::dropdown_option_for_enum_choice(choice.value, choice.label).display_text()
+    }
+
+    pub(super) fn apply_dropdown_selection(
+        &mut self,
+        field: EditableField,
+        selected_value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.apply_editable_field(field, selected_value) {
+            termy_toast::error(error);
+            return;
+        }
+        self.active_input = None;
+        termy_toast::success("Saved");
+        cx.notify();
+    }
+
+    pub(super) fn commit_dropdown_selection(
+        &mut self,
+        field: EditableField,
+        query: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !Self::field_uses_dropdown(field) {
+            return false;
+        }
+
+        let dropdown_query = if Self::field_uses_click_only_dropdown(field) {
+            ""
+        } else {
+            query
+        };
+        let Some(first_option) = self
+            .dropdown_options_for_field(field, dropdown_query)
+            .into_iter()
+            .next()
+        else {
+            self.cancel_active_input(cx);
+            return true;
+        };
+
+        self.apply_dropdown_selection(field, &first_option.value, cx);
+        true
+    }
+
+    pub(super) fn editable_field_value(&self, field: EditableField) -> String {
+        match field {
+            EditableField::Theme => self.config.theme.clone(),
+            EditableField::BackgroundOpacity => format!(
+                "{}",
+                (self.config.background_opacity * 100.0).round() as i32
+            ),
+            EditableField::FontFamily => self.config.font_family.clone(),
+            EditableField::FontSize => format!("{}", self.config.font_size.round() as i32),
+            EditableField::PaddingX => format!("{}", self.config.padding_x.round() as i32),
+            EditableField::PaddingY => format!("{}", self.config.padding_y.round() as i32),
+            EditableField::Shell => self.config.shell.clone().unwrap_or_default(),
+            EditableField::Term => self.config.term.clone(),
+            EditableField::Colorterm => self.config.colorterm.clone().unwrap_or_default(),
+            EditableField::ScrollbackHistory => self.config.scrollback_history.to_string(),
+            EditableField::InactiveTabScrollback => self
+                .config
+                .inactive_tab_scrollback
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            EditableField::ScrollMultiplier => {
+                format!("{:.3}", self.config.mouse_scroll_multiplier)
+            }
+            EditableField::CursorStyle => match self.config.cursor_style {
+                termy_config_core::CursorStyle::Line => "line",
+                termy_config_core::CursorStyle::Block => "block",
+            }
+            .to_string(),
+            EditableField::ScrollbarVisibility => {
+                match self.config.terminal_scrollbar_visibility {
+                    termy_config_core::TerminalScrollbarVisibility::Off => "off",
+                    termy_config_core::TerminalScrollbarVisibility::Always => "always",
+                    termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
+                }
+                .to_string()
+            }
+            EditableField::ScrollbarStyle => {
+                match self.config.terminal_scrollbar_style {
+                    termy_config_core::TerminalScrollbarStyle::Neutral => "neutral",
+                    termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
+                    termy_config_core::TerminalScrollbarStyle::Theme => "theme",
+                }
+                .to_string()
+            }
+            EditableField::TabFallbackTitle => self.config.tab_title.fallback.clone(),
+            EditableField::TabTitlePriority => self
+                .config
+                .tab_title
+                .priority
+                .iter()
+                .map(|source| match source {
+                    termy_config_core::TabTitleSource::Manual => "manual",
+                    termy_config_core::TabTitleSource::Explicit => "explicit",
+                    termy_config_core::TabTitleSource::Shell => "shell",
+                    termy_config_core::TabTitleSource::Fallback => "fallback",
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            EditableField::TabTitleMode => match self.config.tab_title.mode {
+                termy_config_core::TabTitleMode::Smart => "smart",
+                termy_config_core::TabTitleMode::Shell => "shell",
+                termy_config_core::TabTitleMode::Explicit => "explicit",
+                termy_config_core::TabTitleMode::Static => "static",
+            }
+            .to_string(),
+            EditableField::TabTitleExplicitPrefix => self.config.tab_title.explicit_prefix.clone(),
+            EditableField::TabTitlePromptFormat => self.config.tab_title.prompt_format.clone(),
+            EditableField::TabTitleCommandFormat => self.config.tab_title.command_format.clone(),
+            EditableField::TabCloseVisibility => match self.config.tab_close_visibility {
+                termy_config_core::TabCloseVisibility::ActiveHover => "active_hover",
+                termy_config_core::TabCloseVisibility::Hover => "hover",
+                termy_config_core::TabCloseVisibility::Always => "always",
+            }
+            .to_string(),
+            EditableField::TabWidthMode => match self.config.tab_width_mode {
+                termy_config_core::TabWidthMode::Stable => "stable",
+                termy_config_core::TabWidthMode::ActiveGrow => "active_grow",
+                termy_config_core::TabWidthMode::ActiveGrowSticky => "active_grow_sticky",
+            }
+            .to_string(),
+            EditableField::WorkingDirectory => self.config.working_dir.clone().unwrap_or_default(),
+            EditableField::WorkingDirFallback => match self.config.working_dir_fallback {
+                termy_config_core::WorkingDirFallback::Home => "home",
+                termy_config_core::WorkingDirFallback::Process => "process",
+            }
+            .to_string(),
+            EditableField::WindowWidth => format!("{}", self.config.window_width.round() as i32),
+            EditableField::WindowHeight => format!("{}", self.config.window_height.round() as i32),
+            EditableField::Color(id) => self
+                .custom_color_for_id(id)
+                .map(|rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b))
+                .unwrap_or_default(),
+        }
+    }
+
+
+    pub(super) fn begin_editing_field(
+        &mut self,
+        field: EditableField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.blur_sidebar_search();
+        self.capturing_action = None;
+        self.active_input = Some(ActiveTextInput::new(
+            field,
+            self.editable_field_value(field),
+        ));
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn is_numeric_field(field: EditableField) -> bool {
+        Self::field_spec(field).numeric_step.is_some()
+    }
+
+    pub(super) fn uses_text_input_for_field(field: EditableField) -> bool {
+        !Self::is_numeric_field(field) && !Self::field_uses_click_only_dropdown(field)
+    }
+
+    pub(super) fn step_numeric_field(&mut self, field: EditableField, delta: i32, cx: &mut Context<Self>) {
+        let Some(step) = Self::field_spec(field).numeric_step else {
+            termy_toast::error("Invalid numeric setting");
+            return;
+        };
+        let result = match field {
+            EditableField::BackgroundOpacity => {
+                let next =
+                    (self.config.background_opacity + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.background_opacity = next;
+                config::set_root_setting(termy_config_core::RootSettingId::BackgroundOpacity, &format!("{:.3}", next))
+            }
+            EditableField::FontSize => {
+                let next = (self.config.font_size + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.font_size = next;
+                config::set_root_setting(termy_config_core::RootSettingId::FontSize, &next.to_string())
+            }
+            EditableField::PaddingX => {
+                let next = (self.config.padding_x + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.padding_x = next;
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingX, &next.to_string())
+            }
+            EditableField::PaddingY => {
+                let next = (self.config.padding_y + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.padding_y = next;
+                config::set_root_setting(termy_config_core::RootSettingId::PaddingY, &next.to_string())
+            }
+            EditableField::ScrollbackHistory => {
+                let next = (self.config.scrollback_history as f32 + (delta as f32 * step.delta))
+                    .round()
+                    .clamp(step.min, step.max) as usize;
+                self.config.scrollback_history = next;
+                config::set_root_setting(termy_config_core::RootSettingId::ScrollbackHistory, &next.to_string())
+            }
+            EditableField::InactiveTabScrollback => {
+                let current = self.config.inactive_tab_scrollback.unwrap_or(0);
+                let next = (current as f32 + (delta as f32 * step.delta))
+                    .round()
+                    .clamp(step.min, step.max) as usize;
+                self.config.inactive_tab_scrollback = Some(next);
+                config::set_root_setting(termy_config_core::RootSettingId::InactiveTabScrollback, &next.to_string())
+            }
+            EditableField::ScrollMultiplier => {
+                let next =
+                    (self.config.mouse_scroll_multiplier + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.mouse_scroll_multiplier = next;
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::MouseScrollMultiplier,
+                    &format!("{:.3}", next),
+                )
+            }
+            EditableField::WindowWidth => {
+                let next = (self.config.window_width + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.window_width = next;
+                config::set_root_setting(termy_config_core::RootSettingId::WindowWidth, &next.to_string())
+            }
+            EditableField::WindowHeight => {
+                let next = (self.config.window_height + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                self.config.window_height = next;
+                config::set_root_setting(termy_config_core::RootSettingId::WindowHeight, &next.to_string())
+            }
+            _ => Err(format!("Unsupported numeric field: {:?}", field)),
+        };
+
+        if let Err(error) = result {
+            termy_toast::error(error);
+        } else {
+            termy_toast::success("Saved");
+        }
+        self.active_input = None;
+        cx.notify();
+    }
+
+    pub(super) fn ordered_theme_ids_for_settings(&self) -> Vec<String> {
+        let mut theme_ids: Vec<String> = termy_themes::available_theme_ids()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        theme_ids.push("shell-decide".to_string());
+
+        if !theme_ids.iter().any(|theme| theme == &self.config.theme) {
+            theme_ids.push(self.config.theme.clone());
+        }
+
+        theme_ids.sort_unstable();
+        theme_ids.dedup();
+        theme_ids
+    }
+
+    pub(super) fn ordered_font_families_for_settings(&self) -> Vec<String> {
+        let mut fonts = self.available_font_families.clone();
+        if !fonts
+            .iter()
+            .any(|font| font.eq_ignore_ascii_case(&self.config.font_family))
+        {
+            fonts.push(self.config.font_family.clone());
+        }
+        fonts.sort_unstable_by_key(|font| font.to_ascii_lowercase());
+        fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        fonts
+    }
+
+    pub(super) fn filtered_theme_suggestions(&self, query: &str) -> Vec<String> {
+        let normalized = query.trim().to_ascii_lowercase();
+        let themes = self.ordered_theme_ids_for_settings();
+
+        if normalized.is_empty() {
+            return themes.into_iter().take(MAX_THEME_SUGGESTIONS).collect();
+        }
+
+        let mut matched = Vec::new();
+        let mut rest = Vec::new();
+        for theme in themes {
+            let lower = theme.to_ascii_lowercase();
+            if lower.contains(&normalized) || lower.replace('-', " ").contains(&normalized) {
+                matched.push(theme);
+            } else {
+                rest.push(theme);
+            }
+        }
+        matched.extend(rest);
+        matched
+            .into_iter()
+            .take(MAX_THEME_SUGGESTIONS)
+            .collect()
+    }
+
+    pub(super) fn filtered_font_suggestions(&self, query: &str) -> Vec<String> {
+        let normalized = query.trim().to_ascii_lowercase();
+        let fonts = self.ordered_font_families_for_settings();
+        let selected_font = self.config.font_family.trim().to_ascii_lowercase();
+
+        // When the dropdown first opens, the input text equals the selected font.
+        // Treat that like an empty query so users can browse the full installed list.
+        if normalized.is_empty() || normalized == selected_font {
+            return fonts.into_iter().take(MAX_FONT_SUGGESTIONS).collect();
+        }
+
+        fonts
+            .into_iter()
+            .filter(|font| font.to_ascii_lowercase().contains(&normalized))
+            .take(MAX_FONT_SUGGESTIONS)
+            .collect()
+    }
+
+    pub(super) fn commit_active_input(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self.active_input.take() else {
+            return;
+        };
+
+        if let Err(error) = self.apply_editable_field(input.field, input.state.text()) {
+            termy_toast::error(error);
+            self.active_input = Some(input);
+        } else {
+            termy_toast::success("Saved");
+        }
+        cx.notify();
+    }
+
+    pub(super) fn cancel_active_input(&mut self, cx: &mut Context<Self>) {
+        self.active_input = None;
+        cx.notify();
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EditableField, FieldCodec, SettingsWindow};
+
+    #[test]
+    fn field_spec_covers_all_editable_fields() {
+        let fields = vec![
+            EditableField::Theme,
+            EditableField::BackgroundOpacity,
+            EditableField::FontFamily,
+            EditableField::FontSize,
+            EditableField::PaddingX,
+            EditableField::PaddingY,
+            EditableField::Shell,
+            EditableField::Term,
+            EditableField::Colorterm,
+            EditableField::ScrollbackHistory,
+            EditableField::InactiveTabScrollback,
+            EditableField::ScrollMultiplier,
+            EditableField::CursorStyle,
+            EditableField::ScrollbarVisibility,
+            EditableField::ScrollbarStyle,
+            EditableField::TabFallbackTitle,
+            EditableField::TabTitlePriority,
+            EditableField::TabTitleMode,
+            EditableField::TabTitleExplicitPrefix,
+            EditableField::TabTitlePromptFormat,
+            EditableField::TabTitleCommandFormat,
+            EditableField::TabCloseVisibility,
+            EditableField::TabWidthMode,
+            EditableField::WorkingDirectory,
+            EditableField::WorkingDirFallback,
+            EditableField::WindowWidth,
+            EditableField::WindowHeight,
+            EditableField::Color(termy_config_core::ColorSettingId::Foreground),
+        ];
+
+        for field in fields {
+            let spec = SettingsWindow::field_spec(field);
+            if matches!(field, EditableField::Color(_)) {
+                assert_eq!(spec.codec, FieldCodec::Color);
+                assert!(spec.root_setting.is_none());
+            } else {
+                assert!(spec.root_setting.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn enum_fields_are_click_only_dropdowns() {
+        let enum_fields = [
+            EditableField::CursorStyle,
+            EditableField::ScrollbarVisibility,
+            EditableField::ScrollbarStyle,
+            EditableField::TabTitleMode,
+            EditableField::TabCloseVisibility,
+            EditableField::TabWidthMode,
+            EditableField::WorkingDirFallback,
+        ];
+
+        for field in enum_fields {
+            let spec = SettingsWindow::field_spec(field);
+            assert_eq!(spec.codec, FieldCodec::Enum);
+            assert!(spec.dropdown_click_only);
+        }
+    }
+
+    #[test]
+    fn numeric_step_specs_are_defined_for_numeric_fields() {
+        let numeric_fields = [
+            EditableField::BackgroundOpacity,
+            EditableField::FontSize,
+            EditableField::PaddingX,
+            EditableField::PaddingY,
+            EditableField::ScrollbackHistory,
+            EditableField::InactiveTabScrollback,
+            EditableField::ScrollMultiplier,
+            EditableField::WindowWidth,
+            EditableField::WindowHeight,
+        ];
+
+        for field in numeric_fields {
+            let spec = SettingsWindow::field_spec(field);
+            assert_eq!(spec.codec, FieldCodec::Numeric);
+            assert!(spec.numeric_step.is_some());
+        }
+    }
+
+    #[test]
+    fn color_hex_parser_accepts_valid_and_rejects_invalid_values() {
+        assert!(termy_config_core::Rgb8::from_hex("#12ab34").is_some());
+        assert!(termy_config_core::Rgb8::from_hex("#12AB34").is_some());
+        assert!(termy_config_core::Rgb8::from_hex("12ab34").is_some());
+        assert!(termy_config_core::Rgb8::from_hex("#zzzzzz").is_none());
+    }
+}

@@ -1,68 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::color_keys::canonical_color_key;
+use crate::schema::{
+    COLOR_SETTING_KEYS, RootSettingId, canonical_root_key, root_setting_specs,
+};
 
 pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("default_config.txt");
 
-const ROOT_KEY_ORDER: &[&str] = &[
-    "theme",
-    "working_dir",
-    "working_dir_fallback",
-    "warn_on_quit_with_running_process",
-    "tab_title_priority",
-    "tab_title_mode",
-    "tab_title_fallback",
-    "tab_title_explicit_prefix",
-    "tab_title_shell_integration",
-    "tab_title_prompt_format",
-    "tab_title_command_format",
-    "tab_close_visibility",
-    "tab_width_mode",
-    "show_termy_in_titlebar",
-    "shell",
-    "term",
-    "colorterm",
-    "window_width",
-    "window_height",
-    "font_family",
-    "font_size",
-    "cursor_style",
-    "cursor_blink",
-    "background_opacity",
-    "background_blur",
-    "padding_x",
-    "padding_y",
-    "mouse_scroll_multiplier",
-    "scrollbar_visibility",
-    "scrollbar_style",
-    "scrollback_history",
-    "inactive_tab_scrollback",
-    "command_palette_show_keybinds",
-];
-
 const SECTION_ORDER: &[&str] = &["colors", "tab_title"];
-
-const COLOR_KEY_ORDER: &[&str] = &[
-    "foreground",
-    "background",
-    "cursor",
-    "black",
-    "red",
-    "green",
-    "yellow",
-    "blue",
-    "magenta",
-    "cyan",
-    "white",
-    "bright_black",
-    "bright_red",
-    "bright_green",
-    "bright_yellow",
-    "bright_blue",
-    "bright_magenta",
-    "bright_cyan",
-    "bright_white",
-];
 
 pub fn prettify_config_contents(contents: &str) -> String {
     let mut root_settings: HashMap<String, String> = HashMap::new();
@@ -95,7 +40,10 @@ pub fn prettify_config_contents(contents: &str) -> String {
                 if key.eq_ignore_ascii_case("keybind") {
                     keybinds.push(value);
                 } else {
-                    root_settings.insert(canonical_root_key(key), value);
+                    let root_key = canonical_root_key(key)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| canonical_unknown_key(key));
+                    root_settings.insert(root_key, value);
                 }
             }
             Some("colors") => {
@@ -115,8 +63,12 @@ pub fn prettify_config_contents(contents: &str) -> String {
 
     let mut output = String::new();
 
-    for key in ROOT_KEY_ORDER {
-        if let Some(value) = root_settings.remove(*key) {
+    for spec in root_setting_specs() {
+        if spec.id == RootSettingId::Keybind {
+            continue;
+        }
+        if let Some(value) = root_settings.remove(spec.key) {
+            let key = spec.key;
             output.push_str(&format!("{} = {}\n", key, value));
         }
     }
@@ -142,7 +94,7 @@ pub fn prettify_config_contents(contents: &str) -> String {
         }
         output.push_str("[colors]\n");
 
-        for key in COLOR_KEY_ORDER {
+        for key in COLOR_SETTING_KEYS {
             if let Some(value) = colors.remove(*key) {
                 output.push_str(&format!("{} = {}\n", key, value));
             }
@@ -187,15 +139,6 @@ fn append_section(
 
     for (key, value) in section_values {
         output.push_str(&format!("{} = {}\n", key, value));
-    }
-}
-
-fn canonical_root_key(key: &str) -> String {
-    let normalized = canonical_unknown_key(key);
-    match normalized.as_str() {
-        "default_working_dir" => "working_dir_fallback".to_string(),
-        "scrollback" => "scrollback_history".to_string(),
-        _ => normalized,
     }
 }
 

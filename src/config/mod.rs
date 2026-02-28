@@ -11,10 +11,14 @@ use std::{
 
 pub use error::ConfigIoError;
 pub use io::{ensure_config_file, open_config_file, subscribe_config_changes};
-pub use mutate::{import_colors_from_json, set_config_value, set_theme_in_config};
+pub use mutate::{
+    import_colors_from_json, remove_root_setting, set_color_setting, set_keybind_lines,
+    set_root_setting,
+    set_theme_in_config,
+};
 pub use termy_config_core::{
     AppConfig, ConfigDiagnostic, ConfigDiagnosticKind, CursorStyle, CustomColors,
-    SHELL_DECIDE_THEME_ID, TabCloseVisibility, TabTitleConfig, TabTitleMode, TabTitleSource,
+    SHELL_DECIDE_THEME_ID, TabCloseVisibility, TabTitleConfig, TabTitleSource,
     TabWidthMode, TerminalScrollbarStyle, TerminalScrollbarVisibility, WorkingDirFallback,
 };
 

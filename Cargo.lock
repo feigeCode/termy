@@ -7183,6 +7183,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "termy_command_core",
+ "termy_config_core",
 ]
 
 [[package]]

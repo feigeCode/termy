@@ -83,6 +83,17 @@ fn duplicate_root_key_diagnostics_use_canonical_key_groups() {
 }
 
 #[test]
+fn optional_fields_accept_none_sentinel() {
+    let report = parse_report(
+        "working_dir = none\n\
+         inactive_tab_scrollback = none\n",
+    );
+    assert!(report.diagnostics.is_empty());
+    assert_eq!(report.config.working_dir, None);
+    assert_eq!(report.config.inactive_tab_scrollback, None);
+}
+
+#[test]
 fn tab_title_mode_sets_default_priority() {
     let config = parse(
         "tab_title_mode = static\n\

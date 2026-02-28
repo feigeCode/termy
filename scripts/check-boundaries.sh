@@ -18,5 +18,6 @@ check_forbidden_dep "termy_cli_install_core" "gpui"
 check_forbidden_dep "termy_cli" "gpui"
 
 cargo run -p xtask -- generate-keybindings-doc --check
+cargo run -p xtask -- generate-config-doc --check
 
 echo "Boundary checks passed"

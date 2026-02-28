@@ -1,70 +1,95 @@
 # Main settings
+# Current color scheme name
 theme = termy
-# TERM value for child shells and terminal apps
-term = xterm-256color
-# Startup directory for new terminal sessions (~ supported)
-# working_dir = ~/Documents
-# Warn before quitting when tabs are busy (running command/fullscreen TUI)
-# warn_on_quit_with_running_process = true
-# Tab title mode. Supported values: smart, shell, explicit, static
-# smart = manual rename > explicit title > shell/app title > fallback
+# Initial directory for new sessions
+# working_dir = none
+# Directory used when working_dir is unset
+# working_dir_fallback = home
+# Warn before quitting when a tab has an active process
+warn_on_quit_with_running_process = true
+# Exact source priority for tab titles
+tab_title_priority = manual, explicit, shell, fallback
+# How tab titles are determined
 tab_title_mode = smart
-# Export TERMY_* env vars for optional shell tab-title integration
+# Default tab title when no source is available
+tab_title_fallback = Terminal
+# Prefix used for explicit OSC title payloads
+tab_title_explicit_prefix = termy:tab:
+# Export TERMY_* environment values for shell hooks
 tab_title_shell_integration = true
-# Tab close button visibility: active_hover | hover | always
+# Template for prompt-derived tab titles
+tab_title_prompt_format = {cwd}
+# Template for command-derived tab titles
+tab_title_command_format = {command}
+# When tab close buttons are visible
 tab_close_visibility = active_hover
-# Tab width behavior: stable | active_grow | active_grow_sticky
+# How tab widths react to active state
 tab_width_mode = active_grow_sticky
-# Show/hide termy in the macOS titlebar (between traffic lights and tabs)
-# show_termy_in_titlebar = true
-# Optional: static fallback tab title
-# tab_title_fallback = Terminal
-# Advanced tab-title options are documented in docs/configuration.md:
-# tab_title_priority = manual, explicit, shell, fallback
-# tab_title_explicit_prefix = termy:tab:
-# tab_title_prompt_format = {cwd}
-# tab_title_command_format = {command}
-# Startup window size in pixels
+# Show or hide the termy branding in the titlebar
+show_termy_in_titlebar = true
+# Executable used for new sessions
+# shell = none
+# TERM value exposed to child applications
+term = xterm-256color
+# COLORTERM value exposed to child applications
+colorterm = truecolor
+# Default startup window width in pixels
 window_width = 1280
+# Default startup window height in pixels
 window_height = 820
-# Terminal font family
+# Font family used in terminal UI
 font_family = JetBrains Mono
 # Terminal font size in pixels
 font_size = 14
-# Cursor style shared by terminal and inline inputs (line|block)
-# cursor_style = block
-# Enable cursor blink for terminal and inline inputs
-# cursor_blink = true
-# Terminal background opacity (0.0 = fully transparent, 1.0 = opaque)
-# background_opacity = 1.0
-# Enable/disable platform blur for transparent backgrounds
-# background_blur = false
-# Inner terminal padding in pixels
+# Shape of the terminal cursor
+cursor_style = block
+# Enable blinking cursor animation
+cursor_blink = true
+# Window background opacity (0.0 to 1.0)
+background_opacity = 1
+# Enable blur effect for transparent backgrounds
+background_blur = false
+# Left and right terminal padding
 padding_x = 12
+# Top and bottom terminal padding
 padding_y = 8
 # Mouse wheel scroll speed multiplier
-# mouse_scroll_multiplier = 3
-# Terminal scrollbar visibility: always | on_scroll | off
-# (while scrolled up in history, scrollbar stays visible in all modes)
-# scrollbar_visibility = on_scroll
-# Scrollbar style: neutral | muted_theme | theme
-# scrollbar_style = neutral
+mouse_scroll_multiplier = 3
+# Terminal scrollbar visibility behavior
+scrollbar_visibility = on_scroll
+# Terminal scrollbar color style
+scrollbar_style = neutral
+# Lines retained in terminal scrollback
+scrollback_history = 2000
+# Scrollback limit for inactive tabs
+# inactive_tab_scrollback = none
+# Show shortcut badges in command palette rows
+command_palette_show_keybinds = true
 
-# Advanced runtime settings (usually leave these as defaults)
-# Preferred shell executable path
-# shell = /bin/zsh
-# Fallback startup directory when working_dir is unset: home or process
-# working_dir_fallback = home
-# Advertise 24-bit color support to child apps
-# colorterm = truecolor
-# Scrollback history lines (lower = less memory, max 100000)
-# scrollback_history = 2000
-# Scrollback for inactive tabs (saves memory with many tabs)
-# inactive_tab_scrollback = 500
-# Keybindings (Ghostty-style trigger overrides)
+# Keybindings (repeatable)
 # keybind = cmd-p=toggle_command_palette
 # keybind = cmd-c=copy
 # keybind = cmd-c=unbind
 # keybind = clear
-# Show/hide shortcut badges in command palette
-# command_palette_show_keybinds = true
+
+# Color overrides
+[colors]
+# foreground = #e7ebf5
+# background = #0b1020
+# cursor = #a7e9a3
+# black = #000000
+# red = #000000
+# green = #000000
+# yellow = #000000
+# blue = #000000
+# magenta = #000000
+# cyan = #000000
+# white = #000000
+# bright_black = #000000
+# bright_red = #000000
+# bright_green = #000000
+# bright_yellow = #000000
+# bright_blue = #000000
+# bright_magenta = #000000
+# bright_cyan = #000000
+# bright_white = #000000

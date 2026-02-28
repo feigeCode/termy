@@ -81,6 +81,7 @@ fn main() {
         #[cfg(target_os = "windows")]
         let titlebar = Some(gpui::TitlebarOptions {
             title: None,
+            appears_transparent: true,
             ..Default::default()
         });
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]

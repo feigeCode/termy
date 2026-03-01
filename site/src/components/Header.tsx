@@ -66,6 +66,12 @@ export function Header() {
           >
             Releases
           </Link>
+          <Link
+            to="/docs"
+            className="px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground rounded-lg hover:bg-secondary/50"
+          >
+            Docs
+          </Link>
           <a
             href="https://github.com/lassejlv/termy"
             target="_blank"
@@ -194,6 +200,13 @@ export function Header() {
             className="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
           >
             Releases
+          </Link>
+          <Link
+            to="/docs"
+            onClick={closeMobileMenu}
+            className="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+          >
+            Docs
           </Link>
           <a
             href="https://github.com/lassejlv/termy"

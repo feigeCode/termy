@@ -11,7 +11,9 @@
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ReleasesIndexRouteImport } from "./routes/releases/index"
+import { Route as DocsIndexRouteImport } from "./routes/docs/index"
 import { Route as ReleasesTagRouteImport } from "./routes/releases/$tag"
+import { Route as DocsSplatRouteImport } from "./routes/docs/$"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -23,39 +25,57 @@ const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
   path: "/releases/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: "/docs/",
+  path: "/docs/",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReleasesTagRoute = ReleasesTagRouteImport.update({
   id: "/releases/$tag",
   path: "/releases/$tag",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: "/docs/$",
+  path: "/docs/$",
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
+  "/docs/$": typeof DocsSplatRoute
   "/releases/$tag": typeof ReleasesTagRoute
+  "/docs/": typeof DocsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
+  "/docs/$": typeof DocsSplatRoute
   "/releases/$tag": typeof ReleasesTagRoute
+  "/docs": typeof DocsIndexRoute
   "/releases": typeof ReleasesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
+  "/docs/$": typeof DocsSplatRoute
   "/releases/$tag": typeof ReleasesTagRoute
+  "/docs/": typeof DocsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/" | "/releases/$tag" | "/releases/"
+  fullPaths: "/" | "/docs/$" | "/releases/$tag" | "/docs/" | "/releases/"
   fileRoutesByTo: FileRoutesByTo
-  to: "/" | "/releases/$tag" | "/releases"
-  id: "__root__" | "/" | "/releases/$tag" | "/releases/"
+  to: "/" | "/docs/$" | "/releases/$tag" | "/docs" | "/releases"
+  id: "__root__" | "/" | "/docs/$" | "/releases/$tag" | "/docs/" | "/releases/"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DocsSplatRoute: typeof DocsSplatRoute
   ReleasesTagRoute: typeof ReleasesTagRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
 }
 
@@ -75,6 +95,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ReleasesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/docs/": {
+      id: "/docs/"
+      path: "/docs"
+      fullPath: "/docs/"
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/releases/$tag": {
       id: "/releases/$tag"
       path: "/releases/$tag"
@@ -82,12 +109,21 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ReleasesTagRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/docs/$": {
+      id: "/docs/$"
+      path: "/docs/$"
+      fullPath: "/docs/$"
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DocsSplatRoute: DocsSplatRoute,
   ReleasesTagRoute: ReleasesTagRoute,
+  DocsIndexRoute: DocsIndexRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
 }
 export const routeTree = rootRouteImport

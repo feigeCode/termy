@@ -11,19 +11,22 @@ pub type MenuSection = u8;
 pub enum CommandPaletteVisibility {
     Always,
     MacOsOnly,
+    NotWindows,
 }
 
 impl CommandPaletteVisibility {
     pub fn is_visible(self) -> bool {
-        self.is_visible_on_macos(cfg!(target_os = "macos"))
+        self.is_visible_on_platform(cfg!(target_os = "macos"), cfg!(target_os = "windows"))
     }
 
-    pub const fn is_visible_on_macos(self, is_macos: bool) -> bool {
+    pub const fn is_visible_on_platform(self, is_macos: bool, is_windows: bool) -> bool {
         match self {
             Self::Always => true,
             Self::MacOsOnly => is_macos,
+            Self::NotWindows => !is_windows,
         }
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,19 +56,22 @@ impl MenuRoot {
 pub enum MenuVisibility {
     Always,
     MacOsOnly,
+    NotWindows,
 }
 
 impl MenuVisibility {
     pub fn is_visible(self) -> bool {
-        self.is_visible_on_macos(cfg!(target_os = "macos"))
+        self.is_visible_on_platform(cfg!(target_os = "macos"), cfg!(target_os = "windows"))
     }
 
-    pub const fn is_visible_on_macos(self, is_macos: bool) -> bool {
+    pub const fn is_visible_on_platform(self, is_macos: bool, is_windows: bool) -> bool {
         match self {
             Self::Always => true,
             Self::MacOsOnly => is_macos,
+            Self::NotWindows => !is_windows,
         }
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -439,13 +445,13 @@ define_commands!(
         Some(palette(
             "Tmux Sessions",
             "tmux sessions attach switch create manage",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         Some(menu(
             MenuRoot::File,
             1,
             "Tmux Sessions",
-            MenuVisibility::Always,
+            MenuVisibility::NotWindows,
             MenuActionRole::Normal
         ))
     ),
@@ -455,13 +461,13 @@ define_commands!(
         Some(palette(
             "Split Pane Vertical",
             "split pane vertical right",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         Some(menu(
             MenuRoot::File,
             1,
             "Split Pane Vertical",
-            MenuVisibility::Always,
+            MenuVisibility::NotWindows,
             MenuActionRole::Normal
         ))
     ),
@@ -471,13 +477,13 @@ define_commands!(
         Some(palette(
             "Split Pane Horizontal",
             "split pane horizontal down",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         Some(menu(
             MenuRoot::File,
             1,
             "Split Pane Horizontal",
-            MenuVisibility::Always,
+            MenuVisibility::NotWindows,
             MenuActionRole::Normal
         ))
     ),
@@ -487,7 +493,7 @@ define_commands!(
         Some(palette(
             "Close Pane",
             "kill close pane",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -497,7 +503,7 @@ define_commands!(
         Some(palette(
             "Focus Pane Left",
             "focus pane left",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -507,7 +513,7 @@ define_commands!(
         Some(palette(
             "Focus Pane Right",
             "focus pane right",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -517,7 +523,7 @@ define_commands!(
         Some(palette(
             "Focus Pane Up",
             "focus pane up",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -527,7 +533,7 @@ define_commands!(
         Some(palette(
             "Focus Pane Down",
             "focus pane down",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -537,13 +543,13 @@ define_commands!(
         Some(palette(
             "Focus Next Pane",
             "focus pane next cycle",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         Some(menu(
             MenuRoot::File,
             1,
             "Focus Next Pane",
-            MenuVisibility::Always,
+            MenuVisibility::NotWindows,
             MenuActionRole::Normal
         ))
     ),
@@ -553,7 +559,7 @@ define_commands!(
         Some(palette(
             "Focus Previous Pane",
             "focus pane previous cycle",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -563,7 +569,7 @@ define_commands!(
         Some(palette(
             "Resize Pane Left",
             "resize pane left",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -573,7 +579,7 @@ define_commands!(
         Some(palette(
             "Resize Pane Right",
             "resize pane right",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -583,7 +589,7 @@ define_commands!(
         Some(palette(
             "Resize Pane Up",
             "resize pane up",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -593,7 +599,7 @@ define_commands!(
         Some(palette(
             "Resize Pane Down",
             "resize pane down",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         None
     ),
@@ -603,13 +609,13 @@ define_commands!(
         Some(palette(
             "Toggle Pane Zoom",
             "zoom pane maximize",
-            CommandPaletteVisibility::Always
+            CommandPaletteVisibility::NotWindows
         )),
         Some(menu(
             MenuRoot::View,
             1,
             "Toggle Pane Zoom",
-            MenuVisibility::Always,
+            MenuVisibility::NotWindows,
             MenuActionRole::Normal
         ))
     ),
@@ -970,7 +976,9 @@ pub fn inline_input_keybindings() -> Vec<KeyBinding> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandAction, MenuActionRole, MenuRoot, MenuVisibility};
+    use super::{
+        CommandAction, CommandPaletteVisibility, MenuActionRole, MenuRoot, MenuVisibility,
+    };
     use std::collections::HashSet;
     use termy_command_core::{CommandCapabilities, CommandId, CommandUnavailableReason};
 
@@ -1046,6 +1054,7 @@ mod tests {
     fn file_menu_includes_requested_pane_actions() {
         let file_entries = CommandAction::menu_entries_for_root(MenuRoot::File);
 
+        #[cfg(not(target_os = "windows"))]
         for action in [
             CommandAction::ClosePaneOrTab,
             CommandAction::SplitPaneVertical,
@@ -1055,6 +1064,18 @@ mod tests {
             assert!(
                 file_entries.iter().any(|entry| entry.action == action),
                 "missing {action:?} from File menu"
+            );
+        }
+        #[cfg(target_os = "windows")]
+        for action in [
+            CommandAction::ManageTmuxSessions,
+            CommandAction::SplitPaneVertical,
+            CommandAction::SplitPaneHorizontal,
+            CommandAction::FocusPaneNext,
+        ] {
+            assert!(
+                !file_entries.iter().any(|entry| entry.action == action),
+                "unexpected {action:?} in File menu on Windows"
             );
         }
 
@@ -1095,7 +1116,10 @@ mod tests {
             .iter()
             .map(|entry| entry.section)
             .collect::<Vec<_>>();
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(sections, [0, 0, 1, 1, 1, 1, 1]);
+        #[cfg(target_os = "windows")]
+        assert_eq!(sections, [0, 0, 1]);
     }
 
     #[test]
@@ -1126,10 +1150,66 @@ mod tests {
 
     #[test]
     fn menu_visibility_filters_by_platform() {
-        assert!(MenuVisibility::Always.is_visible_on_macos(true));
-        assert!(MenuVisibility::Always.is_visible_on_macos(false));
-        assert!(MenuVisibility::MacOsOnly.is_visible_on_macos(true));
-        assert!(!MenuVisibility::MacOsOnly.is_visible_on_macos(false));
+        assert!(MenuVisibility::Always.is_visible_on_platform(true, true));
+        assert!(MenuVisibility::Always.is_visible_on_platform(false, false));
+        assert!(MenuVisibility::MacOsOnly.is_visible_on_platform(true, false));
+        assert!(!MenuVisibility::MacOsOnly.is_visible_on_platform(false, false));
+        assert!(MenuVisibility::NotWindows.is_visible_on_platform(true, false));
+        assert!(!MenuVisibility::NotWindows.is_visible_on_platform(false, true));
+    }
+
+    #[test]
+    fn palette_visibility_filters_by_platform() {
+        assert!(CommandPaletteVisibility::Always.is_visible_on_platform(true, true));
+        assert!(CommandPaletteVisibility::Always.is_visible_on_platform(false, false));
+        assert!(CommandPaletteVisibility::MacOsOnly.is_visible_on_platform(true, false));
+        assert!(!CommandPaletteVisibility::MacOsOnly.is_visible_on_platform(false, false));
+        assert!(CommandPaletteVisibility::NotWindows.is_visible_on_platform(false, false));
+        assert!(!CommandPaletteVisibility::NotWindows.is_visible_on_platform(false, true));
+    }
+
+    #[test]
+    fn windows_hides_tmux_commands_from_palette_entries() {
+        let entries = CommandAction::palette_entries();
+        #[cfg(target_os = "windows")]
+        {
+            for action in [
+                CommandAction::ManageTmuxSessions,
+                CommandAction::SplitPaneVertical,
+                CommandAction::SplitPaneHorizontal,
+                CommandAction::ClosePane,
+                CommandAction::FocusPaneLeft,
+                CommandAction::FocusPaneRight,
+                CommandAction::FocusPaneUp,
+                CommandAction::FocusPaneDown,
+                CommandAction::FocusPaneNext,
+                CommandAction::FocusPanePrevious,
+                CommandAction::ResizePaneLeft,
+                CommandAction::ResizePaneRight,
+                CommandAction::ResizePaneUp,
+                CommandAction::ResizePaneDown,
+                CommandAction::TogglePaneZoom,
+            ] {
+                assert!(
+                    !entries.iter().any(|entry| entry.action == action),
+                    "unexpected tmux palette action {action:?} on Windows"
+                );
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.action == CommandAction::ManageTmuxSessions)
+            );
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.action == CommandAction::SplitPaneVertical)
+            );
+        }
     }
 
     #[test]

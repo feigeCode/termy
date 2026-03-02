@@ -15,6 +15,7 @@ mod ui;
 use commands::{OpenConfig, OpenSettings};
 use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 use startup::StartupBlocker;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use termy_terminal_ui::TmuxClient;
 use terminal_view::{TerminalView, initial_window_background_appearance};
 
@@ -31,30 +32,31 @@ const WINDOWS_DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 #[cfg(target_os = "windows")]
 const WINDOWS_DEFAULT_WINDOW_HEIGHT: f32 = 820.0;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn preflight_tmux_runtime(config: &config::AppConfig) -> Result<(), StartupBlocker> {
     if !config.tmux_enabled {
         return Ok(());
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        let _ = config;
-        return Err(StartupBlocker::TmuxPreflight(
-            "tmux runtime is unsupported on Windows; supported platforms are macOS and Linux"
-                .to_string(),
-        ));
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        let _ = config;
-        return Err(StartupBlocker::TmuxPreflight(
-            "tmux runtime is unsupported on this platform".to_string(),
-        ));
-    }
-
     TmuxClient::verify_tmux_version(config.tmux_binary.as_str(), 3, 3)
         .map_err(|error| StartupBlocker::TmuxPreflight(format!("tmux preflight failed: {error}")))
+}
+
+#[cfg(target_os = "windows")]
+fn preflight_tmux_runtime(config: &config::AppConfig) -> Result<(), StartupBlocker> {
+    let _ = config;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn preflight_tmux_runtime(config: &config::AppConfig) -> Result<(), StartupBlocker> {
+    if !config.tmux_enabled {
+        return Ok(());
+    }
+
+    Err(StartupBlocker::TmuxPreflight(
+        "tmux runtime is unsupported on this platform".to_string(),
+    ))
 }
 
 fn main() {
@@ -81,7 +83,13 @@ fn main() {
         if let Err(blocker) = preflight_tmux_runtime(&app_config) {
             blocker.present_and_exit();
         }
-        keybindings::install_keybindings(cx, &app_config, app_config.tmux_enabled);
+        // Keep startup menus/keybinds aligned with the active runtime capability set.
+        let tmux_runtime_active = if cfg!(target_os = "windows") {
+            false
+        } else {
+            app_config.tmux_enabled
+        };
+        keybindings::install_keybindings(cx, &app_config, tmux_runtime_active);
         let window_background = initial_window_background_appearance(&app_config);
         let window_width = app_config.window_width;
         let window_height = app_config.window_height;

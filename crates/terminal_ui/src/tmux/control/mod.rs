@@ -8,4 +8,5 @@ pub(crate) use channel::{
     PENDING_QUEUE_BOUND, REQUEST_QUEUE_BOUND, try_enqueue_control_request,
 };
 pub(crate) use coalescer::NotificationCoalescer;
+#[cfg(unix)]
 pub(crate) use worker::spawn_control_threads;

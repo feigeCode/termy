@@ -21,6 +21,15 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if action == CommandAction::ManageTmuxSessions || action.to_command_id().is_tmux_only() {
+            // Defensive guard: custom keybinds can still target tmux actions even when
+            // Windows UI entries are hidden.
+            termy_toast::info("tmux integration is unsupported on Windows");
+            cx.notify();
+            return;
+        }
+
         // Keep runtime command gating aligned with command_core so every UI surface
         // and execution path applies the same capability rules.
         let availability = action.availability(CommandCapabilities {

@@ -767,7 +767,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(filtered_actions, vec![CommandAction::ManageTmuxSessions]);
+        #[cfg(target_os = "windows")]
+        assert!(filtered_actions.is_empty());
     }
 
     #[test]
@@ -778,10 +781,18 @@ mod tests {
             .find_map(|item| match item.kind {
                 CommandPaletteItemKind::Command(CommandAction::SplitPaneVertical) => Some(item),
                 _ => None,
-            })
-            .expect("missing split pane command");
-        assert!(!split.enabled);
-        assert_eq!(split.status_hint, Some("tmux required"));
+            });
+        #[cfg(not(target_os = "windows"))]
+        {
+            let split = split.expect("missing split pane command");
+            assert!(!split.enabled);
+            assert_eq!(split.status_hint, Some("tmux required"));
+        }
+        #[cfg(target_os = "windows")]
+        assert!(
+            split.is_none(),
+            "split pane command should be hidden from Windows command palette"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use flume::{Receiver, RecvTimeoutError, Sender, bounded};
+use flume::{Receiver, RecvTimeoutError, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -9,12 +9,18 @@ use super::command::{
     tmux_command_line,
 };
 use super::control::{
-    ControlRequest, FATAL_EXIT_QUEUE_BOUND, NOTIFICATION_QUEUE_BOUND, NotificationCoalescer,
-    PENDING_QUEUE_BOUND, REQUEST_QUEUE_BOUND, spawn_control_threads, try_enqueue_control_request,
+    ControlRequest, NotificationCoalescer, try_enqueue_control_request,
+};
+#[cfg(unix)]
+use super::control::{
+    FATAL_EXIT_QUEUE_BOUND, NOTIFICATION_QUEUE_BOUND, PENDING_QUEUE_BOUND, REQUEST_QUEUE_BOUND,
+    spawn_control_threads,
 };
 use super::launch::{
-    SessionLaunchPlan, managed_session_window_option_override_commands, spawn_tmux_control_mode,
+    SessionLaunchPlan, managed_session_window_option_override_commands,
 };
+#[cfg(unix)]
+use super::launch::spawn_tmux_control_mode;
 use super::payload::{
     capture_full_pane_args, sanitize_tmux_payload, unescape_tmux_payload,
 };
@@ -50,18 +56,13 @@ impl TmuxClient {
         super::launch::launch_plan(config)
     }
 
+    #[cfg(unix)]
     pub fn new(
         config: TmuxRuntimeConfig,
         cols: u16,
         rows: u16,
         event_wakeup_tx: Option<Sender<()>>,
     ) -> Result<Self> {
-        #[cfg(not(unix))]
-        {
-            let _ = (cols, rows, event_wakeup_tx);
-            return Err(anyhow!("tmux control mode is only supported on unix targets"));
-        }
-
         let launch_plan = Self::launch_plan(&config);
         let enforce_managed_session_ui =
             matches!(&config.launch, TmuxLaunchTarget::Managed { .. });
@@ -76,17 +77,13 @@ impl TmuxClient {
             launch_plan.attach_existing,
         )?;
 
-        let (request_tx, request_rx) = bounded::<ControlRequest>(REQUEST_QUEUE_BOUND);
-        let (pending_tx, pending_rx) = bounded(PENDING_QUEUE_BOUND);
+        let (request_tx, request_rx) = flume::bounded::<ControlRequest>(REQUEST_QUEUE_BOUND);
+        let (pending_tx, pending_rx) = flume::bounded(PENDING_QUEUE_BOUND);
         let (notifications_tx, notifications_rx) =
-            bounded::<TmuxNotification>(NOTIFICATION_QUEUE_BOUND);
-        let (fatal_exit_tx, fatal_exit_rx) = bounded::<Option<String>>(FATAL_EXIT_QUEUE_BOUND);
-        #[cfg(unix)]
+            flume::bounded::<TmuxNotification>(NOTIFICATION_QUEUE_BOUND);
+        let (fatal_exit_tx, fatal_exit_rx) = flume::bounded::<Option<String>>(FATAL_EXIT_QUEUE_BOUND);
         let control_client_pid = child.id();
-        #[cfg(not(unix))]
-        let control_client_pid = 0;
 
-        #[cfg(unix)]
         spawn_control_threads(
             child,
             child_stdin,
@@ -117,6 +114,17 @@ impl TmuxClient {
         }
         client.set_client_size(cols, rows)?;
         Ok(client)
+    }
+
+    #[cfg(not(unix))]
+    pub fn new(
+        config: TmuxRuntimeConfig,
+        cols: u16,
+        rows: u16,
+        event_wakeup_tx: Option<Sender<()>>,
+    ) -> Result<Self> {
+        let _ = (config, cols, rows, event_wakeup_tx);
+        Err(anyhow!("tmux control mode is only supported on unix targets"))
     }
 
     pub fn set_client_size(&self, cols: u16, rows: u16) -> Result<()> {
@@ -793,6 +801,18 @@ mod tests {
         assert_eq!(
             trim_trailing_line_terminators(b"abc \t"),
             b"abc \t".as_slice()
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn new_reports_unsupported_platform_on_non_unix() {
+        let error = TmuxClient::new(TmuxRuntimeConfig::default(), 120, 40, None::<flume::Sender<()>>)
+            .expect_err("non-unix targets must reject tmux runtime startup");
+        assert!(
+            error
+                .to_string()
+                .contains("tmux control mode is only supported on unix targets")
         );
     }
 }

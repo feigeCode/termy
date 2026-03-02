@@ -172,7 +172,7 @@ impl SettingsWindow {
     }
 
     pub(super) fn render_terminal_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let mut section = div()
             .flex()
             .flex_col()
             .gap_2()
@@ -183,8 +183,14 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_terminal_cursor_group(cx))
-            .child(self.render_terminal_shell_group(cx))
-            .child(self.render_terminal_tmux_group(cx))
+            .child(self.render_terminal_shell_group(cx));
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            section = section.child(self.render_terminal_tmux_group(cx));
+        }
+
+        section
             .child(self.render_terminal_scrolling_group(cx))
             .child(self.render_terminal_ui_group(cx))
     }
@@ -270,6 +276,7 @@ impl SettingsWindow {
         self.render_settings_group("SHELL", rows)
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub(super) fn render_terminal_tmux_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let enabled_meta = Self::setting_metadata_or_fallback("tmux_enabled");
         let persistence_meta = Self::setting_metadata_or_fallback("tmux_persistence");

@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use anyhow::{Context, Result, anyhow};
 #[cfg(unix)]
 use std::fs::File;
@@ -7,8 +8,10 @@ use std::{
     os::fd::{FromRawFd, IntoRawFd},
     process::Stdio,
 };
+#[cfg(unix)]
 use std::process::Command;
 
+#[cfg(unix)]
 use super::session::append_socket_args;
 use super::types::{
     TmuxLaunchTarget, TmuxRuntimeConfig, TmuxShutdownMode, TmuxSocketTarget,

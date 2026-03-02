@@ -267,6 +267,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             labels,
             vec![
@@ -282,6 +283,14 @@ mod tests {
             .into_iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            labels,
+            vec!["New Tab", "Rename Tab", "<separator>", "Close Pane or Tab"]
+                .into_iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
         );
     }
 

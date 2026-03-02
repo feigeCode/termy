@@ -102,6 +102,9 @@ const SEARCH_BAR_WIDTH: f32 = 320.0;
 const SEARCH_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_DEBOUNCE_MS: u64 = 50;
 const TMUX_RESIZE_ERROR_TOAST_DEBOUNCE_MS: u64 = 2000;
+#[cfg(target_os = "windows")]
+const TMUX_UNSUPPORTED_WINDOWS_TOAST: &str =
+    "tmux integration is unsupported on Windows; using native runtime instead.";
 const INPUT_SCROLL_SUPPRESS_MS: u64 = 160;
 const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
@@ -1572,6 +1575,11 @@ impl TerminalView {
             #[cfg(target_os = "macos")]
             update_check_toast_id: None,
         };
+        #[cfg(target_os = "windows")]
+        if config.tmux_enabled {
+            // Surface explicit feedback when a synced/shared config requests tmux on Windows.
+            termy_toast::warning(TMUX_UNSUPPORTED_WINDOWS_TOAST);
+        }
         match initial_snapshot {
             Some(initial_snapshot) => view.apply_tmux_snapshot(initial_snapshot),
             None => {
@@ -1631,8 +1639,16 @@ impl TerminalView {
             enabled: self.tab_title.shell_integration,
             explicit_prefix: self.tab_title.explicit_prefix.clone(),
         };
+        #[cfg(target_os = "windows")]
+        if !self.tmux_enabled_config && config.tmux_enabled {
+            // Keep this visible on config reload so users understand why runtime did not switch.
+            termy_toast::warning(TMUX_UNSUPPORTED_WINDOWS_TOAST);
+        }
+        #[cfg(not(target_os = "windows"))]
         let next_runtime_kind = Self::runtime_kind_from_app_config(&config);
+        #[cfg(not(target_os = "windows"))]
         let tmux_enabled_changed = config.tmux_enabled != self.tmux_enabled_config;
+        #[cfg(not(target_os = "windows"))]
         if next_runtime_kind != self.runtime_kind() && tmux_enabled_changed {
             termy_toast::info(
                 "tmux startup default saved. Use Tmux Sessions to switch runtime now.",
@@ -2062,9 +2078,15 @@ mod tests {
         );
 
         config.tmux_enabled = true;
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             TerminalView::runtime_kind_from_app_config(&config),
             RuntimeKind::Tmux
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            TerminalView::runtime_kind_from_app_config(&config),
+            RuntimeKind::Native
         );
     }
 

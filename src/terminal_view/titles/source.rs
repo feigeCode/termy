@@ -137,6 +137,35 @@ impl TerminalView {
         Some(Self::truncate_tab_title(resolved))
     }
 
+    fn smart_mode_shell_fallback_enabled(tab_title: &TabTitleConfig) -> bool {
+        tab_title.mode == termy_config_core::TabTitleMode::Smart
+            && !tab_title.shell_integration
+            && tab_title.priority.contains(&TabTitleSource::Explicit)
+            && tab_title.priority.contains(&TabTitleSource::Shell)
+    }
+
+    fn title_source_candidate<'a>(
+        source: TabTitleSource,
+        manual_title: Option<&'a str>,
+        explicit_title: Option<&'a str>,
+        shell_title: Option<&'a str>,
+        fallback_title: &'a str,
+        smart_mode_shell_fallback: bool,
+    ) -> Option<&'a str> {
+        match source {
+            TabTitleSource::Manual => manual_title,
+            TabTitleSource::Explicit if smart_mode_shell_fallback => {
+                // Smart mode seeds an explicit title before the shell emits a title.
+                // When shell integration is disabled, prefer live shell titles once
+                // available while keeping explicit as a fallback.
+                shell_title.or(explicit_title)
+            }
+            TabTitleSource::Explicit => explicit_title,
+            TabTitleSource::Shell => shell_title,
+            TabTitleSource::Fallback => Some(fallback_title),
+        }
+    }
+
     fn parse_explicit_title(&self, title: &str) -> Option<ExplicitTitlePayload> {
         let prefix = self.tab_title.explicit_prefix.trim();
         if prefix.is_empty() {
@@ -182,21 +211,26 @@ impl TerminalView {
 
     pub(crate) fn resolved_tab_title(&self, index: usize) -> String {
         let tab = &self.tabs[index];
+        let fallback_title = self.fallback_title();
+        let smart_mode_shell_fallback =
+            Self::smart_mode_shell_fallback_enabled(&self.tab_title);
 
         for source in &self.tab_title.priority {
-            let candidate = match source {
-                TabTitleSource::Manual => tab.manual_title.as_deref(),
-                TabTitleSource::Explicit => tab.explicit_title.as_deref(),
-                TabTitleSource::Shell => tab.shell_title.as_deref(),
-                TabTitleSource::Fallback => Some(self.fallback_title()),
-            };
+            let candidate = Self::title_source_candidate(
+                *source,
+                tab.manual_title.as_deref(),
+                tab.explicit_title.as_deref(),
+                tab.shell_title.as_deref(),
+                fallback_title,
+                smart_mode_shell_fallback,
+            );
 
             if let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) {
                 return Self::truncate_tab_title(candidate);
             }
         }
 
-        Self::truncate_tab_title(self.fallback_title())
+        Self::truncate_tab_title(fallback_title)
     }
 
     pub(crate) fn refresh_tab_title(&mut self, index: usize) -> bool {
@@ -329,6 +363,53 @@ mod tests {
 
         let title = TerminalView::predicted_prompt_seed_title(&config, None);
         assert!(title.is_none());
+    }
+
+    #[test]
+    fn smart_mode_shell_fallback_enabled_when_shell_integration_is_off() {
+        let mut config = TabTitleConfig::default();
+        config.shell_integration = false;
+        assert!(TerminalView::smart_mode_shell_fallback_enabled(&config));
+    }
+
+    #[test]
+    fn smart_mode_shell_fallback_disabled_when_shell_integration_is_on() {
+        let config = TabTitleConfig::default();
+        assert!(!TerminalView::smart_mode_shell_fallback_enabled(&config));
+    }
+
+    #[test]
+    fn smart_mode_shell_fallback_disabled_for_non_smart_mode() {
+        let mut config = TabTitleConfig::default();
+        config.mode = termy_config_core::TabTitleMode::Shell;
+        config.shell_integration = false;
+        assert!(!TerminalView::smart_mode_shell_fallback_enabled(&config));
+    }
+
+    #[test]
+    fn title_source_candidate_prefers_shell_when_smart_shell_fallback_is_enabled() {
+        let candidate = TerminalView::title_source_candidate(
+            TabTitleSource::Explicit,
+            None,
+            Some("explicit"),
+            Some("shell"),
+            "fallback",
+            true,
+        );
+        assert_eq!(candidate, Some("shell"));
+    }
+
+    #[test]
+    fn title_source_candidate_uses_explicit_when_shell_is_unavailable() {
+        let candidate = TerminalView::title_source_candidate(
+            TabTitleSource::Explicit,
+            None,
+            Some("explicit"),
+            None,
+            "fallback",
+            true,
+        );
+        assert_eq!(candidate, Some("explicit"));
     }
 
     #[test]

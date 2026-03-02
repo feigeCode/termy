@@ -60,6 +60,102 @@ fn row_text_from_terminal(terminal: &Terminal, row: usize, cols: usize) -> Vec<c
     line
 }
 
+fn pane_cell_for_position(
+    pane: &TerminalPane,
+    x: f32,
+    y: f32,
+    padding_x: f32,
+    padding_y: f32,
+    clamp: bool,
+    allow_clamp_outside: bool,
+) -> Option<CellPos> {
+    let size = pane.terminal.size();
+    if size.cols == 0 || size.rows == 0 {
+        return None;
+    }
+    let cell_width: f32 = size.cell_width.into();
+    let cell_height: f32 = size.cell_height.into();
+    if cell_width <= f32::EPSILON || cell_height <= f32::EPSILON {
+        return None;
+    }
+
+    let origin_x = padding_x + (f32::from(pane.left) * cell_width);
+    let origin_y = padding_y + (f32::from(pane.top) * cell_height);
+    let width = f32::from(size.cols) * cell_width;
+    let height = f32::from(size.rows) * cell_height;
+    if width <= f32::EPSILON || height <= f32::EPSILON {
+        return None;
+    }
+
+    let mut local_x = x - origin_x;
+    let mut local_y = y - origin_y;
+    let is_inside = local_x >= 0.0 && local_x < width && local_y >= 0.0 && local_y < height;
+    if !is_inside {
+        if !clamp || !allow_clamp_outside {
+            return None;
+        }
+        local_x = local_x.clamp(0.0, width - f32::EPSILON);
+        local_y = local_y.clamp(0.0, height - f32::EPSILON);
+    }
+
+    let max_col = i32::from(size.cols) - 1;
+    let max_row = i32::from(size.rows) - 1;
+    if max_col < 0 || max_row < 0 {
+        return None;
+    }
+
+    let mut col = (local_x / cell_width).floor() as i32;
+    let mut row = (local_y / cell_height).floor() as i32;
+    if clamp {
+        col = col.clamp(0, max_col);
+        row = row.clamp(0, max_row);
+    } else if col < 0 || col > max_col || row < 0 || row > max_row {
+        return None;
+    }
+
+    Some(CellPos {
+        col: col as usize,
+        row: row as usize,
+    })
+}
+
+fn resolve_pane_cell_for_position(
+    panes: &[TerminalPane],
+    active_pane_id: Option<&str>,
+    x: f32,
+    y: f32,
+    padding_x: f32,
+    padding_y: f32,
+    clamp: bool,
+) -> Option<(String, CellPos)> {
+    let pointer_inside_any_pane = panes.iter().any(|pane| {
+        pane_cell_for_position(pane, x, y, padding_x, padding_y, false, false).is_some()
+    });
+
+    // When clamping points that are outside all panes, prefer the active pane first
+    // so we never return a clamped hit for an inactive pane before the active pane.
+    if clamp
+        && !pointer_inside_any_pane
+        && let Some(active_pane_id) = active_pane_id
+        && let Some(active_pane) = panes
+            .iter()
+            .find(|pane| pane.id.as_str() == active_pane_id)
+        && let Some(cell) =
+            pane_cell_for_position(active_pane, x, y, padding_x, padding_y, true, true)
+    {
+        return Some((active_pane.id.clone(), cell));
+    }
+
+    for pane in panes {
+        if let Some(cell) = pane_cell_for_position(pane, x, y, padding_x, padding_y, clamp, false)
+        {
+            return Some((pane.id.clone(), cell));
+        }
+    }
+
+    None
+}
+
 impl TerminalView {
     pub(in super::super) fn position_to_pane_cell(
         &self,
@@ -69,89 +165,15 @@ impl TerminalView {
         let tab = self.tabs.get(self.active_tab)?;
         let (padding_x, padding_y) = self.effective_terminal_padding();
         let (x, y) = self.terminal_content_position(position);
-        let active_pane_id = tab.active_pane_id();
-
-        let evaluate_pane = |pane: &TerminalPane, allow_clamp_outside: bool| -> Option<CellPos> {
-            let size = pane.terminal.size();
-            if size.cols == 0 || size.rows == 0 {
-                return None;
-            }
-            let cell_width: f32 = size.cell_width.into();
-            let cell_height: f32 = size.cell_height.into();
-            if cell_width <= f32::EPSILON || cell_height <= f32::EPSILON {
-                return None;
-            }
-
-            let origin_x = padding_x + (f32::from(pane.left) * cell_width);
-            let origin_y = padding_y + (f32::from(pane.top) * cell_height);
-            let width = f32::from(size.cols) * cell_width;
-            let height = f32::from(size.rows) * cell_height;
-            if width <= f32::EPSILON || height <= f32::EPSILON {
-                return None;
-            }
-
-            let mut local_x = x - origin_x;
-            let mut local_y = y - origin_y;
-            let is_inside =
-                local_x >= 0.0 && local_x < width && local_y >= 0.0 && local_y < height;
-            if !is_inside {
-                if !clamp || !allow_clamp_outside {
-                    return None;
-                }
-                local_x = local_x.clamp(0.0, width - f32::EPSILON);
-                local_y = local_y.clamp(0.0, height - f32::EPSILON);
-            }
-
-            let max_col = i32::from(size.cols) - 1;
-            let max_row = i32::from(size.rows) - 1;
-            if max_col < 0 || max_row < 0 {
-                return None;
-            }
-
-            let mut col = (local_x / cell_width).floor() as i32;
-            let mut row = (local_y / cell_height).floor() as i32;
-            if clamp {
-                col = col.clamp(0, max_col);
-                row = row.clamp(0, max_row);
-            } else if col < 0 || col > max_col || row < 0 || row > max_row {
-                return None;
-            }
-
-            Some(CellPos {
-                col: col as usize,
-                row: row as usize,
-            })
-        };
-
-        let pointer_inside_any_pane = tab
-            .panes
-            .iter()
-            .any(|pane| evaluate_pane(pane, false).is_some());
-
-        // When clamping points that are outside all panes, prefer the active pane first
-        // so we never return a clamped hit for an inactive pane before the active pane.
-        if clamp
-            && !pointer_inside_any_pane
-            && let Some(active_pane_id) = active_pane_id
-            && let Some(active_pane) = tab
-                .panes
-                .iter()
-                .find(|pane| pane.id.as_str() == active_pane_id)
-            && let Some(cell) = evaluate_pane(active_pane, true)
-        {
-            return Some((active_pane.id.clone(), cell));
-        }
-
-        for pane in &tab.panes {
-            if active_pane_id == Some(pane.id.as_str()) && clamp {
-                continue;
-            }
-            if let Some(cell) = evaluate_pane(pane, false) {
-                return Some((pane.id.clone(), cell));
-            }
-        }
-
-        None
+        resolve_pane_cell_for_position(
+            &tab.panes,
+            tab.active_pane_id(),
+            x,
+            y,
+            padding_x,
+            padding_y,
+            clamp,
+        )
     }
 
     pub(in super::super) fn has_selection(&self) -> bool {
@@ -463,5 +485,68 @@ mod tests {
         let row = ((content_y - origin_y) / cell_height).floor() as i32;
 
         assert_eq!(row, expected_row);
+    }
+
+    #[test]
+    fn clamped_pane_lookup_returns_active_pane_when_pointer_inside_active_pane() {
+        let rows = 6u16;
+        let left_cols = 8u16;
+        let right_cols = 8u16;
+        let left_terminal = Terminal::new_tmux(
+            TerminalSize {
+                cols: left_cols,
+                rows,
+                ..TerminalSize::default()
+            },
+            128,
+        );
+        let right_terminal = Terminal::new_tmux(
+            TerminalSize {
+                cols: right_cols,
+                rows,
+                ..TerminalSize::default()
+            },
+            128,
+        );
+
+        let panes = vec![
+            TerminalPane {
+                id: "%left".to_string(),
+                left: 0,
+                top: 0,
+                width: left_cols,
+                height: rows,
+                degraded: false,
+                terminal: left_terminal,
+            },
+            TerminalPane {
+                id: "%right".to_string(),
+                left: left_cols,
+                top: 0,
+                width: right_cols,
+                height: rows,
+                degraded: false,
+                terminal: right_terminal,
+            },
+        ];
+
+        let cell_width: f32 = panes[0].terminal.size().cell_width.into();
+        let cell_height: f32 = panes[0].terminal.size().cell_height.into();
+        let pointer_x = (2.0 * cell_width) + 0.5;
+        let pointer_y = (3.0 * cell_height) + 0.5;
+
+        let resolved = resolve_pane_cell_for_position(
+            &panes,
+            Some("%left"),
+            pointer_x,
+            pointer_y,
+            0.0,
+            0.0,
+            true,
+        );
+        assert_eq!(
+            resolved,
+            Some(("%left".to_string(), CellPos { col: 2, row: 3 }))
+        );
     }
 }

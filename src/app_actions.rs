@@ -7,7 +7,28 @@ pub(crate) fn open_config_file() -> Result<(), String> {
     config::open_config_file().map_err(|error| error.to_string())
 }
 
+fn focus_existing_settings_window(cx: &mut App) -> bool {
+    if let Some(settings_window) = cx
+        .windows()
+        .into_iter()
+        .find_map(|handle| handle.downcast::<SettingsWindow>())
+    {
+        let _ = settings_window.update(cx, |_view, window, _cx| {
+            window.activate_window();
+        });
+        true
+    } else {
+        false
+    }
+}
+
 pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
+    // Key-repeat and repeated action dispatch should raise the existing settings window,
+    // not spawn duplicate windows.
+    if focus_existing_settings_window(cx) {
+        return Ok(());
+    }
+
     let initial_window_size = size(px(1080.0), px(675.0));
     let bounds = Bounds::centered(None, initial_window_size, cx);
     let mut settings_config_error = None;
@@ -50,4 +71,58 @@ pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
     )
     .map(|_| ())
     .map_err(|error| format!("Failed to open settings window: {}", error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AnyWindowHandle, TestAppContext};
+
+    fn settings_window_count(cx: &TestAppContext) -> usize {
+        cx.windows()
+            .into_iter()
+            .filter(|handle| handle.downcast::<SettingsWindow>().is_some())
+            .count()
+    }
+
+    #[gpui::test]
+    fn open_settings_window_reuses_existing_window(cx: &mut TestAppContext) {
+        assert_eq!(settings_window_count(cx), 0);
+
+        cx.update(|app| {
+            open_settings_window(app).expect("settings window should open");
+        });
+        assert_eq!(settings_window_count(cx), 1);
+
+        cx.update(|app| {
+            open_settings_window(app).expect("settings window should be reused");
+            open_settings_window(app).expect("settings window should be reused");
+        });
+        assert_eq!(settings_window_count(cx), 1);
+    }
+
+    #[gpui::test]
+    fn open_settings_window_does_not_duplicate_when_called_from_settings_update(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|app| {
+            open_settings_window(app).expect("settings window should open");
+        });
+        assert_eq!(settings_window_count(cx), 1);
+
+        let settings_window = cx
+            .windows()
+            .into_iter()
+            .find_map(|handle| handle.downcast::<SettingsWindow>())
+            .expect("settings window should exist");
+        let settings_window_any: AnyWindowHandle = settings_window.into();
+
+        settings_window_any
+            .update(cx, |_view, _window, app| {
+                open_settings_window(app).expect("settings window should be reused");
+            })
+            .expect("settings window update should succeed");
+
+        assert_eq!(settings_window_count(cx), 1);
+    }
 }

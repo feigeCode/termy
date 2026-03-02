@@ -1,7 +1,7 @@
 mod color_keys;
 mod constants;
-mod document;
 mod diagnostics;
+mod document;
 mod parser;
 mod path;
 mod render;
@@ -10,25 +10,24 @@ mod types;
 
 pub use color_keys::{ColorEntryError, apply_color_entry, canonical_color_key};
 pub use constants::{SHELL_DECIDE_THEME_ID, VALID_ROOT_KEYS, VALID_SECTIONS};
+pub use diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
 pub use document::{
     ColorSettingUpdate, apply_color_updates, remove_root_setting, replace_keybind_lines,
     upsert_root_setting,
 };
-pub use diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
 pub use parser::parse_theme_id;
 pub use path::config_path;
 pub use render::{DEFAULT_CONFIG_TEMPLATE, prettify_config_contents};
 pub use schema::{
-    COLOR_SETTING_KEYS, COLOR_SETTING_SPECS, ROOT_SETTING_ALL_KEYS, ROOT_SETTING_KEYS,
-    ROOT_SETTING_SPECS, ColorSettingId, ColorSettingSpec, EnumChoice, RootSettingId,
-    RootSettingSpec, RootSettingValueKind, SettingsSection,
-    canonical_color_key as schema_canonical_color_key,
+    COLOR_SETTING_KEYS, COLOR_SETTING_SPECS, ColorSettingId, ColorSettingSpec, EnumChoice,
+    ROOT_SETTING_ALL_KEYS, ROOT_SETTING_KEYS, ROOT_SETTING_SPECS, RootSettingId, RootSettingSpec,
+    RootSettingValueKind, SettingsSection, canonical_color_key as schema_canonical_color_key,
     canonical_root_key as schema_canonical_root_key, color_setting_from_key, color_setting_spec,
     color_setting_specs, root_setting_default_value, root_setting_enum_choices,
     root_setting_from_key, root_setting_spec, root_setting_specs, root_setting_value_kind,
 };
 pub use types::{
-    AppConfig, CursorStyle, CustomColors, KeybindConfigLine, PaneFocusEffect, Rgb8,
+    AiProvider, AppConfig, CursorStyle, CustomColors, KeybindConfigLine, PaneFocusEffect, Rgb8,
     TabCloseVisibility, TabTitleConfig, TabTitleMode, TabTitleSource, TabWidthMode,
     TerminalScrollbarStyle, TerminalScrollbarVisibility, ThemeId, WorkingDirFallback,
 };

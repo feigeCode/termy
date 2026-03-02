@@ -8,9 +8,9 @@ use crate::constants::{
 use crate::diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
 use crate::schema::{RootSettingId, root_setting_from_key, root_setting_spec};
 use crate::types::{
-    AppConfig, CursorStyle, KeybindConfigLine, PaneFocusEffect, TabCloseVisibility, TabTitleMode,
-    TabTitleSource, TabWidthMode, TerminalScrollbarStyle, TerminalScrollbarVisibility, ThemeId,
-    WorkingDirFallback,
+    AiProvider, AppConfig, CursorStyle, KeybindConfigLine, PaneFocusEffect, TabCloseVisibility,
+    TabTitleMode, TabTitleSource, TabWidthMode, TerminalScrollbarStyle,
+    TerminalScrollbarVisibility, ThemeId, WorkingDirFallback,
 };
 
 impl AppConfig {
@@ -513,8 +513,27 @@ impl AppConfig {
                         config.command_palette_show_keybinds = parsed;
                     }
                 }
+                RootSettingId::AiProvider => {
+                    if let Some(parsed) = AiProvider::from_str(value) {
+                        config.ai_provider = parsed;
+                    } else {
+                        push_invalid_value(
+                            &mut diagnostics,
+                            line_number,
+                            key,
+                            value,
+                            "one of: openai, gemini",
+                        );
+                    }
+                }
                 RootSettingId::OpenaiApiKey => {
                     config.openai_api_key = parse_optional_string_value(value);
+                }
+                RootSettingId::GeminiApiKey => {
+                    config.gemini_api_key = parse_optional_string_value(value);
+                }
+                RootSettingId::OpenaiModel => {
+                    config.openai_model = parse_optional_string_value(value);
                 }
                 RootSettingId::Keybind => {
                     if let Some(parsed) = parse_string_field(

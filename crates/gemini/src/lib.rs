@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const DEFAULT_MODEL: &str = "gpt-5-mini";
+pub const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 
 #[derive(Error, Debug)]
-pub enum OpenAiError {
+pub enum GeminiError {
     #[error("HTTP request failed: {0}")]
     RequestFailed(#[from] ureq::Error),
 
@@ -19,9 +19,6 @@ pub enum OpenAiError {
 
     #[error("No response content")]
     NoContent,
-
-    #[error("API key not configured")]
-    ApiKeyMissing,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,13 +39,6 @@ pub enum ChatContent {
 pub enum ContentPart {
     #[serde(rename = "text")]
     Text { text: String },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrl },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ImageUrl {
-    pub url: String,
 }
 
 impl ChatMessage {
@@ -62,13 +52,6 @@ impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: "system".to_string(),
-            content: ChatContent::Text(content.into()),
-        }
-    }
-
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: "assistant".to_string(),
             content: ChatContent::Text(content.into()),
         }
     }
@@ -132,17 +115,17 @@ struct ApiErrorResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiModel {
+pub struct GeminiModel {
     pub id: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct OpenAiClient {
+pub struct GeminiClient {
     api_key: String,
     model: String,
 }
 
-impl OpenAiClient {
+impl GeminiClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
@@ -155,56 +138,20 @@ impl OpenAiClient {
         self
     }
 
-    /// Blocking chat API call
-    pub fn chat(&self, messages: Vec<ChatMessage>) -> Result<String, OpenAiError> {
-        self.chat_with_options(messages, None, None)
-    }
-
-    /// Blocking chat API call with options
-    pub fn chat_with_options(
-        &self,
-        messages: Vec<ChatMessage>,
-        max_tokens: Option<u32>,
-        temperature: Option<f32>,
-    ) -> Result<String, OpenAiError> {
-        let request = ChatRequest {
-            model: self.model.clone(),
-            messages,
-            max_tokens,
-            temperature,
-        };
-
-        let response = ureq::post("https://api.openai.com/v1/chat/completions")
-            .set("Authorization", &format!("Bearer {}", self.api_key))
-            .set("Content-Type", "application/json")
-            .send_json(&request)?;
-
-        let chat_response: ChatResponse = response.into_json()?;
-
-        if let Some(error) = chat_response.error {
-            return Err(OpenAiError::ApiError {
-                message: error.message,
-            });
+    fn normalized_model_id(&self) -> String {
+        let trimmed = self.model.trim();
+        if trimmed.starts_with("models/") {
+            trimmed.to_string()
+        } else {
+            format!("models/{trimmed}")
         }
-
-        chat_response
-            .choices
-            .and_then(|choices| choices.into_iter().next())
-            .and_then(|choice| choice.message.content)
-            .ok_or(OpenAiError::NoContent)
     }
 
-    /// Simple message without any context
-    pub fn simple_message(&self, user_message: impl Into<String>) -> Result<String, OpenAiError> {
-        self.chat(vec![ChatMessage::user(user_message)])
-    }
-
-    /// Message with terminal context
     pub fn message_with_terminal_context(
         &self,
         user_message: impl Into<String>,
         terminal_content: impl Into<String>,
-    ) -> Result<String, OpenAiError> {
+    ) -> Result<String, GeminiError> {
         let system = ChatMessage::system(
             "You are a helpful terminal assistant. The user will provide terminal context \
              (recent commands and output). Help them with their question. When suggesting \
@@ -213,69 +160,63 @@ impl OpenAiClient {
         );
         let user = ChatMessage::user_with_file(user_message, terminal_content);
 
-        self.chat(vec![system, user])
+        let request = ChatRequest {
+            model: self.normalized_model_id(),
+            messages: vec![system, user],
+            max_tokens: None,
+            temperature: None,
+        };
+
+        let response =
+            ureq::post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+                .set("Authorization", &format!("Bearer {}", self.api_key))
+                .set("Content-Type", "application/json")
+                .send_json(&request)?;
+        let chat_response: ChatResponse = response.into_json()?;
+
+        if let Some(error) = chat_response.error {
+            return Err(GeminiError::ApiError {
+                message: error.message,
+            });
+        }
+
+        chat_response
+            .choices
+            .and_then(|choices| choices.into_iter().next())
+            .and_then(|choice| choice.message.content)
+            .ok_or(GeminiError::NoContent)
     }
 
-    /// Fetch all available models for this API key.
-    pub fn fetch_models(&self) -> Result<Vec<OpenAiModel>, OpenAiError> {
-        let response = ureq::get("https://api.openai.com/v1/models")
+    pub fn fetch_models(&self) -> Result<Vec<GeminiModel>, GeminiError> {
+        let response = ureq::get("https://generativelanguage.googleapis.com/v1beta/openai/models")
             .set("Authorization", &format!("Bearer {}", self.api_key))
             .set("Content-Type", "application/json")
             .call()?;
 
         let models_response: ModelsResponse = response.into_json()?;
         if let Some(error) = models_response.error {
-            return Err(OpenAiError::ApiError {
+            return Err(GeminiError::ApiError {
                 message: error.message,
             });
         }
 
-        let mut models: Vec<OpenAiModel> = models_response
+        let mut models: Vec<GeminiModel> = models_response
             .data
             .into_iter()
-            .map(|model| OpenAiModel { id: model.id })
+            .map(|model| GeminiModel {
+                id: model.id.trim_start_matches("models/").to_string(),
+            })
             .collect();
         models.sort_by(|left, right| left.id.cmp(&right.id));
         models.dedup_by(|left, right| left.id == right.id);
         Ok(models)
     }
 
-    /// Fetch models likely usable for chat-style prompts.
-    pub fn fetch_chat_models(&self) -> Result<Vec<OpenAiModel>, OpenAiError> {
+    pub fn fetch_chat_models(&self) -> Result<Vec<GeminiModel>, GeminiError> {
         let models = self.fetch_models()?;
         Ok(models
             .into_iter()
-            .filter(|model| {
-                model.id.starts_with("gpt-")
-                    || model.id.starts_with("o")
-                    || model.id.starts_with("chatgpt-")
-            })
+            .filter(|model| model.id.starts_with("gemini-"))
             .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_chat_message_creation() {
-        let user_msg = ChatMessage::user("Hello");
-        assert_eq!(user_msg.role, "user");
-
-        let system_msg = ChatMessage::system("You are a helpful assistant");
-        assert_eq!(system_msg.role, "system");
-
-        let assistant_msg = ChatMessage::assistant("How can I help?");
-        assert_eq!(assistant_msg.role, "assistant");
-    }
-
-    #[test]
-    fn test_client_creation() {
-        let client = OpenAiClient::new("test-key");
-        assert_eq!(client.model, DEFAULT_MODEL);
-
-        let client = client.with_model("gpt-4");
-        assert_eq!(client.model, "gpt-4");
     }
 }

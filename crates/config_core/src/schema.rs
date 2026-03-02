@@ -1,6 +1,6 @@
 use crate::types::{
-    AppConfig, CursorStyle, PaneFocusEffect, TabCloseVisibility, TabTitleMode, TabWidthMode,
-    TerminalScrollbarStyle, TerminalScrollbarVisibility, WorkingDirFallback,
+    AiProvider, AppConfig, CursorStyle, PaneFocusEffect, TabCloseVisibility, TabTitleMode,
+    TabWidthMode, TerminalScrollbarStyle, TerminalScrollbarVisibility, WorkingDirFallback,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -295,6 +295,17 @@ pub const PANE_FOCUS_EFFECT_ENUM_CHOICES: &[EnumChoice] = &[
     },
 ];
 
+pub const AI_PROVIDER_ENUM_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        value: "openai",
+        label: "OpenAI",
+    },
+    EnumChoice {
+        value: "gemini",
+        label: "Gemini",
+    },
+];
+
 define_root_settings! {
     (Theme, "theme", [], Appearance, "THEME", "Theme", "Current color scheme name", ["color", "scheme", "appearance"], RootSettingValueKind::Special, false),
     (TmuxEnabled, "tmux_enabled", [], Terminal, "TMUX", "Tmux Enabled", "Enable tmux runtime integration", ["tmux", "runtime", "integration", "enabled"], RootSettingValueKind::Boolean, false),
@@ -335,7 +346,10 @@ define_root_settings! {
     (PaneFocusEffect, "pane_focus_effect", [], Terminal, "UI", "Pane Focus Effect", "How inactive panes are visually dimmed when a pane is active", ["pane", "focus", "dimming", "effect"], RootSettingValueKind::Enum, false),
     (PaneFocusStrength, "pane_focus_strength", [], Terminal, "UI", "Pane Focus Strength", "Strength of active pane emphasis (0.0 to 2.0)", ["pane", "focus", "strength", "dimming"], RootSettingValueKind::Numeric, false),
     (CommandPaletteShowKeybinds, "command_palette_show_keybinds", [], Terminal, "UI", "Show Keybindings In Palette", "Show shortcut badges in command palette rows", ["palette", "keybinds", "shortcuts"], RootSettingValueKind::Boolean, false),
+    (AiProvider, "ai_provider", [], Advanced, "AI", "AI Provider", "Provider used for AI input and model listing", ["ai", "provider", "openai", "gemini"], RootSettingValueKind::Enum, false),
     (OpenaiApiKey, "openai_api_key", ["openai_key"], Advanced, "AI", "OpenAI API Key", "API key for OpenAI integration", ["openai", "api", "key", "ai", "gpt"], RootSettingValueKind::Text, false),
+    (GeminiApiKey, "gemini_api_key", ["google_ai_api_key"], Advanced, "AI", "Gemini API Key", "API key for Google Gemini integration", ["gemini", "google", "api", "key", "ai"], RootSettingValueKind::Text, false),
+    (OpenaiModel, "openai_model", ["ai_model"], Advanced, "AI", "AI Model", "Model used for AI input requests", ["openai", "gemini", "model", "ai", "gpt"], RootSettingValueKind::Text, false),
     (Keybind, "keybind", [], Keybindings, "KEYBINDS", "Keybind Directive", "Keybinding override directive", ["keybind", "shortcut", "command"], RootSettingValueKind::Special, true),
 }
 
@@ -383,6 +397,7 @@ pub fn root_setting_enum_choices(id: RootSettingId) -> Option<&'static [EnumChoi
         RootSettingId::ScrollbarVisibility => Some(SCROLLBAR_VISIBILITY_ENUM_CHOICES),
         RootSettingId::ScrollbarStyle => Some(SCROLLBAR_STYLE_ENUM_CHOICES),
         RootSettingId::PaneFocusEffect => Some(PANE_FOCUS_EFFECT_ENUM_CHOICES),
+        RootSettingId::AiProvider => Some(AI_PROVIDER_ENUM_CHOICES),
         _ => None,
     }
 }
@@ -426,7 +441,9 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
         }),
         RootSettingId::TabTitleFallback => Some(config.tab_title.fallback.clone()),
         RootSettingId::TabTitleExplicitPrefix => Some(config.tab_title.explicit_prefix.clone()),
-        RootSettingId::TabTitleShellIntegration => Some(config.tab_title.shell_integration.to_string()),
+        RootSettingId::TabTitleShellIntegration => {
+            Some(config.tab_title.shell_integration.to_string())
+        }
         RootSettingId::TabTitlePromptFormat => Some(config.tab_title.prompt_format.clone()),
         RootSettingId::TabTitleCommandFormat => Some(config.tab_title.command_format.clone()),
         RootSettingId::TabCloseVisibility => Some(match config.tab_close_visibility {
@@ -468,7 +485,9 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
             TerminalScrollbarStyle::Theme => "theme".to_string(),
         }),
         RootSettingId::ScrollbackHistory => Some(config.scrollback_history.to_string()),
-        RootSettingId::InactiveTabScrollback => config.inactive_tab_scrollback.map(|v| v.to_string()),
+        RootSettingId::InactiveTabScrollback => {
+            config.inactive_tab_scrollback.map(|v| v.to_string())
+        }
         RootSettingId::PaneFocusEffect => Some(match config.pane_focus_effect {
             PaneFocusEffect::Off => "off".to_string(),
             PaneFocusEffect::SoftSpotlight => "soft_spotlight".to_string(),
@@ -476,8 +495,16 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
             PaneFocusEffect::Minimal => "minimal".to_string(),
         }),
         RootSettingId::PaneFocusStrength => Some(config.pane_focus_strength.to_string()),
-        RootSettingId::CommandPaletteShowKeybinds => Some(config.command_palette_show_keybinds.to_string()),
+        RootSettingId::CommandPaletteShowKeybinds => {
+            Some(config.command_palette_show_keybinds.to_string())
+        }
+        RootSettingId::AiProvider => Some(match config.ai_provider {
+            AiProvider::OpenAi => "openai".to_string(),
+            AiProvider::Gemini => "gemini".to_string(),
+        }),
         RootSettingId::OpenaiApiKey => config.openai_api_key.clone(),
+        RootSettingId::GeminiApiKey => config.gemini_api_key.clone(),
+        RootSettingId::OpenaiModel => config.openai_model.clone(),
         RootSettingId::Keybind => None,
     }
 }
@@ -566,6 +593,15 @@ mod tests {
         assert_eq!(
             enum_choice_values(RootSettingId::PaneFocusEffect),
             vec!["off", "soft_spotlight", "cinematic", "minimal"]
+        );
+
+        assert_eq!(
+            root_setting_value_kind(RootSettingId::AiProvider),
+            RootSettingValueKind::Enum
+        );
+        assert_eq!(
+            enum_choice_values(RootSettingId::AiProvider),
+            vec!["openai", "gemini"]
         );
     }
 

@@ -75,28 +75,55 @@ impl TerminalView {
             &mut self.last_config_error_message,
             "ai_input config load",
         );
-        let api_key = match loaded.config.openai_api_key {
+        let provider = loaded.config.ai_provider;
+        let api_key = match loaded.config.ai_provider {
+            config::AiProvider::OpenAi => loaded.config.openai_api_key,
+            config::AiProvider::Gemini => loaded.config.gemini_api_key,
+        };
+        let api_key = match api_key {
             Some(key) if !key.is_empty() => key,
             _ => {
-                termy_toast::error(
-                    "OpenAI API key not configured. Set it in Settings > Advanced > AI.",
-                );
+                let provider_name = match provider {
+                    config::AiProvider::OpenAi => "OpenAI",
+                    config::AiProvider::Gemini => "Gemini",
+                };
+                termy_toast::error(format!(
+                    "{provider_name} API key not configured. Set it in Settings > Advanced > AI."
+                ));
                 return;
             }
         };
+        let model = loaded
+            .config
+            .openai_model
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| match provider {
+                config::AiProvider::OpenAi => termy_openai::DEFAULT_MODEL.to_string(),
+                config::AiProvider::Gemini => termy_gemini::DEFAULT_MODEL.to_string(),
+            });
 
         // Get terminal context
         let terminal_context = self.get_terminal_context_for_ai();
 
         // Close the input
         self.close_ai_input(cx);
-        let loading_toast_id = termy_toast::loading("Sending to AI...");
+        let loading_toast_id = termy_toast::loading(format!("Sending to AI ({model})..."));
 
         // Spawn async task to call OpenAI (using smol::unblock for blocking HTTP client)
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = smol::unblock(move || {
-                let client = termy_openai::OpenAiClient::new(api_key);
-                client.message_with_terminal_context(&user_message, &terminal_context)
+            let result = smol::unblock(move || match provider {
+                config::AiProvider::OpenAi => {
+                    let client = termy_openai::OpenAiClient::new(api_key).with_model(model);
+                    client
+                        .message_with_terminal_context(&user_message, &terminal_context)
+                        .map_err(|error| error.to_string())
+                }
+                config::AiProvider::Gemini => {
+                    let client = termy_gemini::GeminiClient::new(api_key).with_model(model);
+                    client
+                        .message_with_terminal_context(&user_message, &terminal_context)
+                        .map_err(|error| error.to_string())
+                }
             })
             .await;
 

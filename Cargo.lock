@@ -5557,6 +5557,7 @@ dependencies = [
  "termy_cli_install_core",
  "termy_command_core",
  "termy_config_core",
+ "termy_gemini",
  "termy_native_sdk",
  "termy_openai",
  "termy_search",
@@ -5621,6 +5622,16 @@ name = "termy_config_core"
 version = "0.1.0"
 dependencies = [
  "termy_theme_core",
+]
+
+[[package]]
+name = "termy_gemini"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ureq",
 ]
 
 [[package]]

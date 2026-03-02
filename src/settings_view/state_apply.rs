@@ -38,7 +38,10 @@ impl SettingsWindow {
             | EditableField::WorkingDirFallback
             | EditableField::WindowWidth
             | EditableField::WindowHeight
-            | EditableField::OpenaiApiKey => self.apply_advanced_field(field, value),
+            | EditableField::AiProvider
+            | EditableField::OpenaiApiKey
+            | EditableField::GeminiApiKey
+            | EditableField::OpenaiModel => self.apply_advanced_field(field, value),
             EditableField::Color(id) => self.apply_color_field(id, value),
         }
     }
@@ -62,9 +65,10 @@ impl SettingsWindow {
                 Ok(())
             }
             EditableField::BackgroundOpacity => {
-                let parsed = value.trim_end_matches('%').parse::<f32>().map_err(|_| {
-                    "Background opacity must be a number from 0 to 100".to_string()
-                })?;
+                let parsed = value
+                    .trim_end_matches('%')
+                    .parse::<f32>()
+                    .map_err(|_| "Background opacity must be a number from 0 to 100".to_string())?;
                 let opacity = (parsed / 100.0).clamp(0.0, 1.0);
                 config::set_root_setting(
                     termy_config_core::RootSettingId::BackgroundOpacity,
@@ -89,7 +93,10 @@ impl SettingsWindow {
                     return Err("Font size must be greater than 0".to_string());
                 }
                 self.config.font_size = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::FontSize, &format!("{}", parsed))
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::FontSize,
+                    &format!("{}", parsed),
+                )
             }
             EditableField::PaddingX => {
                 let parsed = value
@@ -99,7 +106,10 @@ impl SettingsWindow {
                     return Err("Horizontal padding cannot be negative".to_string());
                 }
                 self.config.padding_x = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::PaddingX, &format!("{}", parsed))
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::PaddingX,
+                    &format!("{}", parsed),
+                )
             }
             EditableField::PaddingY => {
                 let parsed = value
@@ -109,7 +119,10 @@ impl SettingsWindow {
                     return Err("Vertical padding cannot be negative".to_string());
                 }
                 self.config.padding_y = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::PaddingY, &format!("{}", parsed))
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::PaddingY,
+                    &format!("{}", parsed),
+                )
             }
             _ => unreachable!("invalid appearance field"),
         }
@@ -206,8 +219,14 @@ impl SettingsWindow {
                 let parsed = match value.to_ascii_lowercase().as_str() {
                     "off" => termy_config_core::TerminalScrollbarVisibility::Off,
                     "always" => termy_config_core::TerminalScrollbarVisibility::Always,
-                    "on_scroll" | "onscroll" => termy_config_core::TerminalScrollbarVisibility::OnScroll,
-                    _ => return Err("Scrollbar visibility must be off, always, or on_scroll".to_string()),
+                    "on_scroll" | "onscroll" => {
+                        termy_config_core::TerminalScrollbarVisibility::OnScroll
+                    }
+                    _ => {
+                        return Err(
+                            "Scrollbar visibility must be off, always, or on_scroll".to_string()
+                        );
+                    }
                 };
                 self.config.terminal_scrollbar_visibility = parsed;
                 let canonical = match parsed {
@@ -215,14 +234,23 @@ impl SettingsWindow {
                     termy_config_core::TerminalScrollbarVisibility::Always => "always",
                     termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
                 };
-                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarVisibility, canonical)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::ScrollbarVisibility,
+                    canonical,
+                )
             }
             EditableField::ScrollbarStyle => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
                     "neutral" => termy_config_core::TerminalScrollbarStyle::Neutral,
-                    "muted_theme" | "mutedtheme" => termy_config_core::TerminalScrollbarStyle::MutedTheme,
+                    "muted_theme" | "mutedtheme" => {
+                        termy_config_core::TerminalScrollbarStyle::MutedTheme
+                    }
                     "theme" => termy_config_core::TerminalScrollbarStyle::Theme,
-                    _ => return Err("Scrollbar style must be neutral, muted_theme, or theme".to_string()),
+                    _ => {
+                        return Err(
+                            "Scrollbar style must be neutral, muted_theme, or theme".to_string()
+                        );
+                    }
                 };
                 self.config.terminal_scrollbar_style = parsed;
                 let canonical = match parsed {
@@ -230,23 +258,25 @@ impl SettingsWindow {
                     termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
                     termy_config_core::TerminalScrollbarStyle::Theme => "theme",
                 };
-                config::set_root_setting(termy_config_core::RootSettingId::ScrollbarStyle, canonical)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::ScrollbarStyle,
+                    canonical,
+                )
             }
             EditableField::PaneFocusEffect => {
-                let parsed = match value.to_ascii_lowercase().as_str() {
-                    "off" => termy_config_core::PaneFocusEffect::Off,
-                    "soft_spotlight" | "softspotlight" | "soft-spotlight" => {
-                        termy_config_core::PaneFocusEffect::SoftSpotlight
-                    }
-                    "cinematic" => termy_config_core::PaneFocusEffect::Cinematic,
-                    "minimal" => termy_config_core::PaneFocusEffect::Minimal,
-                    _ => {
-                        return Err(
+                let parsed =
+                    match value.to_ascii_lowercase().as_str() {
+                        "off" => termy_config_core::PaneFocusEffect::Off,
+                        "soft_spotlight" | "softspotlight" | "soft-spotlight" => {
+                            termy_config_core::PaneFocusEffect::SoftSpotlight
+                        }
+                        "cinematic" => termy_config_core::PaneFocusEffect::Cinematic,
+                        "minimal" => termy_config_core::PaneFocusEffect::Minimal,
+                        _ => return Err(
                             "Pane focus effect must be off, soft_spotlight, cinematic, or minimal"
                                 .to_string(),
-                        )
-                    }
-                };
+                        ),
+                    };
                 self.config.pane_focus_effect = parsed;
                 let canonical = match parsed {
                     termy_config_core::PaneFocusEffect::Off => "off",
@@ -324,7 +354,11 @@ impl SettingsWindow {
                     "shell" => termy_config_core::TabTitleMode::Shell,
                     "explicit" => termy_config_core::TabTitleMode::Explicit,
                     "static" => termy_config_core::TabTitleMode::Static,
-                    _ => return Err("Tab title mode must be smart, shell, explicit, or static".to_string()),
+                    _ => {
+                        return Err(
+                            "Tab title mode must be smart, shell, explicit, or static".to_string()
+                        );
+                    }
                 };
                 self.config.tab_title.mode = parsed;
                 let canonical = match parsed {
@@ -340,28 +374,44 @@ impl SettingsWindow {
                     return Err("Explicit prefix cannot be empty".to_string());
                 }
                 self.config.tab_title.explicit_prefix = value.to_string();
-                config::set_root_setting(termy_config_core::RootSettingId::TabTitleExplicitPrefix, value)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::TabTitleExplicitPrefix,
+                    value,
+                )
             }
             EditableField::TabTitlePromptFormat => {
                 if value.is_empty() {
                     return Err("Prompt format cannot be empty".to_string());
                 }
                 self.config.tab_title.prompt_format = value.to_string();
-                config::set_root_setting(termy_config_core::RootSettingId::TabTitlePromptFormat, value)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::TabTitlePromptFormat,
+                    value,
+                )
             }
             EditableField::TabTitleCommandFormat => {
                 if value.is_empty() {
                     return Err("Command format cannot be empty".to_string());
                 }
                 self.config.tab_title.command_format = value.to_string();
-                config::set_root_setting(termy_config_core::RootSettingId::TabTitleCommandFormat, value)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::TabTitleCommandFormat,
+                    value,
+                )
             }
             EditableField::TabCloseVisibility => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
-                    "active_hover" | "activehover" | "active+hover" => termy_config_core::TabCloseVisibility::ActiveHover,
+                    "active_hover" | "activehover" | "active+hover" => {
+                        termy_config_core::TabCloseVisibility::ActiveHover
+                    }
                     "hover" => termy_config_core::TabCloseVisibility::Hover,
                     "always" => termy_config_core::TabCloseVisibility::Always,
-                    _ => return Err("Tab close visibility must be active_hover, hover, or always".to_string()),
+                    _ => {
+                        return Err(
+                            "Tab close visibility must be active_hover, hover, or always"
+                                .to_string(),
+                        );
+                    }
                 };
                 self.config.tab_close_visibility = parsed;
                 let canonical = match parsed {
@@ -369,16 +419,26 @@ impl SettingsWindow {
                     termy_config_core::TabCloseVisibility::Hover => "hover",
                     termy_config_core::TabCloseVisibility::Always => "always",
                 };
-                config::set_root_setting(termy_config_core::RootSettingId::TabCloseVisibility, canonical)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::TabCloseVisibility,
+                    canonical,
+                )
             }
             EditableField::TabWidthMode => {
                 let parsed = match value.to_ascii_lowercase().as_str() {
                     "stable" => termy_config_core::TabWidthMode::Stable,
-                    "active_grow" | "activegrow" | "active-grow" => termy_config_core::TabWidthMode::ActiveGrow,
+                    "active_grow" | "activegrow" | "active-grow" => {
+                        termy_config_core::TabWidthMode::ActiveGrow
+                    }
                     "active_grow_sticky" | "activegrowsticky" | "active-grow-sticky" => {
                         termy_config_core::TabWidthMode::ActiveGrowSticky
                     }
-                    _ => return Err("Tab width mode must be stable, active_grow, or active_grow_sticky".to_string()),
+                    _ => {
+                        return Err(
+                            "Tab width mode must be stable, active_grow, or active_grow_sticky"
+                                .to_string(),
+                        );
+                    }
                 };
                 self.config.tab_width_mode = parsed;
                 let canonical = match parsed {
@@ -418,7 +478,10 @@ impl SettingsWindow {
                     termy_config_core::WorkingDirFallback::Home => "home",
                     termy_config_core::WorkingDirFallback::Process => "process",
                 };
-                config::set_root_setting(termy_config_core::RootSettingId::WorkingDirFallback, canonical)
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::WorkingDirFallback,
+                    canonical,
+                )
             }
             EditableField::WindowWidth => {
                 let parsed = value
@@ -428,7 +491,10 @@ impl SettingsWindow {
                     return Err("Default width must be greater than 0".to_string());
                 }
                 self.config.window_width = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::WindowWidth, &parsed.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::WindowWidth,
+                    &parsed.to_string(),
+                )
             }
             EditableField::WindowHeight => {
                 let parsed = value
@@ -438,15 +504,79 @@ impl SettingsWindow {
                     return Err("Default height must be greater than 0".to_string());
                 }
                 self.config.window_height = parsed;
-                config::set_root_setting(termy_config_core::RootSettingId::WindowHeight, &parsed.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::WindowHeight,
+                    &parsed.to_string(),
+                )
+            }
+            EditableField::AiProvider => {
+                let parsed = match value.to_ascii_lowercase().as_str() {
+                    "openai" => termy_config_core::AiProvider::OpenAi,
+                    "gemini" => termy_config_core::AiProvider::Gemini,
+                    _ => return Err("AI provider must be openai or gemini".to_string()),
+                };
+                self.config.ai_provider = parsed;
+                let default_model = match parsed {
+                    termy_config_core::AiProvider::OpenAi => {
+                        termy_openai::DEFAULT_MODEL.to_string()
+                    }
+                    termy_config_core::AiProvider::Gemini => {
+                        termy_gemini::DEFAULT_MODEL.to_string()
+                    }
+                };
+                self.config.openai_model = Some(default_model.clone());
+                self.openai_model_options.clear();
+                self.openai_models_loaded_for_api_key = None;
+                self.openai_models_loading = false;
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::AiProvider,
+                    match parsed {
+                        termy_config_core::AiProvider::OpenAi => "openai",
+                        termy_config_core::AiProvider::Gemini => "gemini",
+                    },
+                )?;
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::OpenaiModel,
+                    &default_model,
+                )
             }
             EditableField::OpenaiApiKey => {
                 if value.is_empty() {
                     self.config.openai_api_key = None;
+                    self.openai_model_options.clear();
+                    self.openai_models_loaded_for_api_key = None;
+                    self.openai_models_loading = false;
                     config::set_root_setting(termy_config_core::RootSettingId::OpenaiApiKey, "none")
                 } else {
                     self.config.openai_api_key = Some(value.to_string());
+                    self.openai_model_options.clear();
+                    self.openai_models_loaded_for_api_key = None;
+                    self.openai_models_loading = false;
                     config::set_root_setting(termy_config_core::RootSettingId::OpenaiApiKey, value)
+                }
+            }
+            EditableField::GeminiApiKey => {
+                if value.is_empty() {
+                    self.config.gemini_api_key = None;
+                    self.openai_model_options.clear();
+                    self.openai_models_loaded_for_api_key = None;
+                    self.openai_models_loading = false;
+                    config::set_root_setting(termy_config_core::RootSettingId::GeminiApiKey, "none")
+                } else {
+                    self.config.gemini_api_key = Some(value.to_string());
+                    self.openai_model_options.clear();
+                    self.openai_models_loaded_for_api_key = None;
+                    self.openai_models_loading = false;
+                    config::set_root_setting(termy_config_core::RootSettingId::GeminiApiKey, value)
+                }
+            }
+            EditableField::OpenaiModel => {
+                if value.is_empty() {
+                    self.config.openai_model = None;
+                    config::set_root_setting(termy_config_core::RootSettingId::OpenaiModel, "none")
+                } else {
+                    self.config.openai_model = Some(value.to_string());
+                    config::set_root_setting(termy_config_core::RootSettingId::OpenaiModel, value)
                 }
             }
             _ => unreachable!("invalid advanced field"),

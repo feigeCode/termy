@@ -2,9 +2,8 @@ use crate::constants::{
     DEFAULT_COLORTERM, DEFAULT_CURSOR_BLINK, DEFAULT_INACTIVE_TAB_SCROLLBACK,
     DEFAULT_MOUSE_SCROLL_MULTIPLIER, DEFAULT_PANE_FOCUS_STRENGTH, DEFAULT_SCROLLBACK_HISTORY,
     DEFAULT_TAB_TITLE_COMMAND_FORMAT, DEFAULT_TAB_TITLE_EXPLICIT_PREFIX,
-    DEFAULT_TAB_TITLE_FALLBACK, DEFAULT_TAB_TITLE_PROMPT_FORMAT, DEFAULT_TERM,
-    DEFAULT_TMUX_BINARY, DEFAULT_TMUX_ENABLED, DEFAULT_TMUX_PERSISTENCE,
-    DEFAULT_TMUX_SHOW_ACTIVE_PANE_BORDER,
+    DEFAULT_TAB_TITLE_FALLBACK, DEFAULT_TAB_TITLE_PROMPT_FORMAT, DEFAULT_TERM, DEFAULT_TMUX_BINARY,
+    DEFAULT_TMUX_ENABLED, DEFAULT_TMUX_PERSISTENCE, DEFAULT_TMUX_SHOW_ACTIVE_PANE_BORDER,
     DEFAULT_WARN_ON_QUIT_WITH_RUNNING_PROCESS,
 };
 
@@ -238,6 +237,23 @@ impl PaneFocusEffect {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiProvider {
+    #[default]
+    OpenAi,
+    Gemini,
+}
+
+impl AiProvider {
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "openai" | "open_ai" => Some(Self::OpenAi),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CustomColors {
     pub foreground: Option<Rgb8>,
@@ -281,7 +297,10 @@ pub struct AppConfig {
     pub pane_focus_effect: PaneFocusEffect,
     pub pane_focus_strength: f32,
     pub command_palette_show_keybinds: bool,
+    pub ai_provider: AiProvider,
     pub openai_api_key: Option<String>,
+    pub gemini_api_key: Option<String>,
+    pub openai_model: Option<String>,
     pub keybind_lines: Vec<KeybindConfigLine>,
     pub colors: CustomColors,
 }
@@ -328,7 +347,10 @@ impl Default for AppConfig {
             pane_focus_effect: PaneFocusEffect::default(),
             pane_focus_strength: DEFAULT_PANE_FOCUS_STRENGTH,
             command_palette_show_keybinds: true,
+            ai_provider: AiProvider::default(),
             openai_api_key: None,
+            gemini_api_key: None,
+            openai_model: None,
             keybind_lines: Vec::new(),
             colors: CustomColors::default(),
         }

@@ -1,5 +1,5 @@
-use super::*;
 use super::search::SettingMetadata;
+use super::*;
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
@@ -41,7 +41,9 @@ impl SettingsWindow {
                 SettingsSection::Tabs => self.render_tabs_section(cx).into_any_element(),
                 SettingsSection::Advanced => self.render_advanced_section(cx).into_any_element(),
                 SettingsSection::Colors => self.render_colors_section(cx).into_any_element(),
-                SettingsSection::Keybindings => self.render_keybindings_section(cx).into_any_element(),
+                SettingsSection::Keybindings => {
+                    self.render_keybindings_section(cx).into_any_element()
+                }
             })
             .into_any_element()
     }
@@ -62,37 +64,35 @@ impl SettingsWindow {
         let padding_y_meta = Self::setting_metadata_or_fallback("padding_y");
 
         let theme_rows = vec![self.render_editable_row(
-                "theme",
-                EditableField::Theme,
-                theme_meta.title,
-                theme_meta.description,
-                theme,
-                cx,
-            )];
+            "theme",
+            EditableField::Theme,
+            theme_meta.title,
+            theme_meta.description,
+            theme,
+            cx,
+        )];
         let theme_group = self.render_settings_group("THEME", theme_rows);
 
         let window_rows = vec![
             self.render_setting_row(
-                    "background_blur",
-                    "blur-toggle",
-                    blur_meta.title,
-                    blur_meta.description,
-                    background_blur,
-                    cx,
-                    |view, _cx| {
-                        let next = !view.config.background_blur;
-                        match config::set_root_setting(
-                            RootSettingId::BackgroundBlur,
-                            &next.to_string(),
-                        ) {
-                            Ok(()) => {
-                                view.config.background_blur = next;
-                                termy_toast::success("Saved");
-                            }
-                            Err(error) => termy_toast::error(error),
+                "background_blur",
+                "blur-toggle",
+                blur_meta.title,
+                blur_meta.description,
+                background_blur,
+                cx,
+                |view, _cx| {
+                    let next = !view.config.background_blur;
+                    match config::set_root_setting(RootSettingId::BackgroundBlur, &next.to_string())
+                    {
+                        Ok(()) => {
+                            view.config.background_blur = next;
+                            termy_toast::success("Saved");
                         }
-                    },
-                ),
+                        Err(error) => termy_toast::error(error),
+                    }
+                },
+            ),
             self.render_background_opacity_row(
                 "background_opacity",
                 opacity_meta.title,
@@ -310,7 +310,10 @@ impl SettingsWindow {
                 cx,
                 |view, _cx| {
                     let next = !view.config.tmux_persistence;
-                    match config::set_root_setting(RootSettingId::TmuxPersistence, &next.to_string()) {
+                    match config::set_root_setting(
+                        RootSettingId::TmuxPersistence,
+                        &next.to_string(),
+                    ) {
                         Ok(()) => {
                             view.config.tmux_persistence = next;
                             termy_toast::success("Saved");
@@ -486,11 +489,9 @@ impl SettingsWindow {
         let title_mode_meta = Self::setting_metadata_or_fallback("tab_title_mode");
         let fallback_meta = Self::setting_metadata_or_fallback("tab_title_fallback");
         let title_priority_meta = Self::setting_metadata_or_fallback("tab_title_priority");
-        let explicit_prefix_meta =
-            Self::setting_metadata_or_fallback("tab_title_explicit_prefix");
+        let explicit_prefix_meta = Self::setting_metadata_or_fallback("tab_title_explicit_prefix");
         let prompt_format_meta = Self::setting_metadata_or_fallback("tab_title_prompt_format");
-        let command_format_meta =
-            Self::setting_metadata_or_fallback("tab_title_command_format");
+        let command_format_meta = Self::setting_metadata_or_fallback("tab_title_command_format");
 
         let rows = vec![
             self.render_editable_row(
@@ -600,26 +601,26 @@ impl SettingsWindow {
         let show_termy_meta = Self::setting_metadata_or_fallback("show_termy_in_titlebar");
 
         let rows = vec![self.render_setting_row(
-                "show_termy_in_titlebar",
-                "show_termy_in_titlebar-toggle",
-                show_termy_meta.title,
-                show_termy_meta.description,
-                show_termy,
-                cx,
-                |view, _cx| {
-                    let next = !view.config.show_termy_in_titlebar;
-                    match config::set_root_setting(
-                        RootSettingId::ShowTermyInTitlebar,
-                        &next.to_string(),
-                    ) {
-                        Ok(()) => {
-                            view.config.show_termy_in_titlebar = next;
-                            termy_toast::success("Saved");
-                        }
-                        Err(error) => termy_toast::error(error),
+            "show_termy_in_titlebar",
+            "show_termy_in_titlebar-toggle",
+            show_termy_meta.title,
+            show_termy_meta.description,
+            show_termy,
+            cx,
+            |view, _cx| {
+                let next = !view.config.show_termy_in_titlebar;
+                match config::set_root_setting(
+                    RootSettingId::ShowTermyInTitlebar,
+                    &next.to_string(),
+                ) {
+                    Ok(()) => {
+                        view.config.show_termy_in_titlebar = next;
+                        termy_toast::success("Saved");
                     }
-                },
-            )];
+                    Err(error) => termy_toast::error(error),
+                }
+            },
+        )];
 
         self.render_settings_group("TITLE BAR", rows)
     }
@@ -676,26 +677,26 @@ impl SettingsWindow {
         let startup_group = self.render_settings_group("STARTUP", startup_rows);
 
         let safety_rows = vec![self.render_setting_row(
-                "warn_on_quit_with_running_process",
-                "warn_on_quit-toggle",
-                warn_on_quit_meta.title,
-                warn_on_quit_meta.description,
-                warn_on_quit,
-                cx,
-                |view, _cx| {
-                    let next = !view.config.warn_on_quit_with_running_process;
-                    match config::set_root_setting(
-                        RootSettingId::WarnOnQuitWithRunningProcess,
-                        &next.to_string(),
-                    ) {
-                        Ok(()) => {
-                            view.config.warn_on_quit_with_running_process = next;
-                            termy_toast::success("Saved");
-                        }
-                        Err(error) => termy_toast::error(error),
+            "warn_on_quit_with_running_process",
+            "warn_on_quit-toggle",
+            warn_on_quit_meta.title,
+            warn_on_quit_meta.description,
+            warn_on_quit,
+            cx,
+            |view, _cx| {
+                let next = !view.config.warn_on_quit_with_running_process;
+                match config::set_root_setting(
+                    RootSettingId::WarnOnQuitWithRunningProcess,
+                    &next.to_string(),
+                ) {
+                    Ok(()) => {
+                        view.config.warn_on_quit_with_running_process = next;
+                        termy_toast::success("Saved");
                     }
-                },
-            )];
+                    Err(error) => termy_toast::error(error),
+                }
+            },
+        )];
         let safety_group = self.render_settings_group("SAFETY", safety_rows);
 
         let window_rows = vec![
@@ -718,20 +719,72 @@ impl SettingsWindow {
         ];
         let window_group = self.render_settings_group("WINDOW", window_rows);
 
+        let ai_provider_meta = Self::setting_metadata_or_fallback("ai_provider");
         let openai_api_key_meta = Self::setting_metadata_or_fallback("openai_api_key");
-        let openai_api_key = self
-            .config
-            .openai_api_key
-            .clone()
-            .unwrap_or_else(|| "Not configured".to_string());
-        let ai_rows = vec![self.render_editable_row(
-            "openai_api_key",
-            EditableField::OpenaiApiKey,
-            openai_api_key_meta.title,
-            openai_api_key_meta.description,
-            openai_api_key,
-            cx,
-        )];
+        let gemini_api_key_meta = Self::setting_metadata_or_fallback("gemini_api_key");
+        let openai_model_meta = Self::setting_metadata_or_fallback("openai_model");
+        let ai_provider = self.editable_field_value(EditableField::AiProvider);
+        let (api_key_setting_key, api_key_field, api_key_title, api_key_description, api_key_value) =
+            match self.config.ai_provider {
+                termy_config_core::AiProvider::OpenAi => (
+                    "openai_api_key",
+                    EditableField::OpenaiApiKey,
+                    openai_api_key_meta.title,
+                    openai_api_key_meta.description,
+                    self.config
+                        .openai_api_key
+                        .clone()
+                        .unwrap_or_else(|| "Not configured".to_string()),
+                ),
+                termy_config_core::AiProvider::Gemini => (
+                    "gemini_api_key",
+                    EditableField::GeminiApiKey,
+                    gemini_api_key_meta.title,
+                    gemini_api_key_meta.description,
+                    self.config
+                        .gemini_api_key
+                        .clone()
+                        .unwrap_or_else(|| "Not configured".to_string()),
+                ),
+            };
+        let openai_model =
+            self.config
+                .openai_model
+                .clone()
+                .unwrap_or_else(|| match self.config.ai_provider {
+                    termy_config_core::AiProvider::OpenAi => {
+                        termy_openai::DEFAULT_MODEL.to_string()
+                    }
+                    termy_config_core::AiProvider::Gemini => {
+                        termy_gemini::DEFAULT_MODEL.to_string()
+                    }
+                });
+        let ai_rows = vec![
+            self.render_editable_row(
+                "ai_provider",
+                EditableField::AiProvider,
+                ai_provider_meta.title,
+                ai_provider_meta.description,
+                ai_provider,
+                cx,
+            ),
+            self.render_editable_row(
+                api_key_setting_key,
+                api_key_field,
+                api_key_title,
+                api_key_description,
+                api_key_value,
+                cx,
+            ),
+            self.render_editable_row(
+                "openai_model",
+                EditableField::OpenaiModel,
+                openai_model_meta.title,
+                openai_model_meta.description,
+                openai_model,
+                cx,
+            ),
+        ];
         let ai_group = self.render_settings_group("AI", ai_rows);
 
         let config_file_card = div()
@@ -772,10 +825,7 @@ impl SettingsWindow {
                     .child("Open Config File")
                     .on_click(cx.listener(|_view, _, _, cx| {
                         if let Err(error) = crate::config::open_config_file() {
-                            log::error!(
-                                "Failed to open config file from settings: {}",
-                                error
-                            );
+                            log::error!("Failed to open config file from settings: {}", error);
                             termy_toast::error(error.to_string());
                         }
                         cx.notify();
@@ -801,5 +851,4 @@ impl SettingsWindow {
             .child(ai_group)
             .child(config_group)
     }
-
 }

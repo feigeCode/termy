@@ -36,7 +36,10 @@ pub(super) enum EditableField {
     WorkingDirFallback,
     WindowWidth,
     WindowHeight,
+    AiProvider,
     OpenaiApiKey,
+    GeminiApiKey,
+    OpenaiModel,
     Color(termy_config_core::ColorSettingId),
 }
 
@@ -96,6 +99,7 @@ impl ActiveTextInput {
 pub(super) enum FieldCodec {
     Theme,
     FontFamily,
+    OpenAiModel,
     Enum,
     Numeric,
     Text,
@@ -118,7 +122,9 @@ pub(super) struct FieldSpec {
 }
 
 impl SettingsWindow {
-    pub(super) fn parse_tab_title_source_token(token: &str) -> Option<termy_config_core::TabTitleSource> {
+    pub(super) fn parse_tab_title_source_token(
+        token: &str,
+    ) -> Option<termy_config_core::TabTitleSource> {
         match token.trim().to_ascii_lowercase().as_str() {
             "manual" => Some(termy_config_core::TabTitleSource::Manual),
             "explicit" => Some(termy_config_core::TabTitleSource::Explicit),
@@ -128,7 +134,10 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn custom_color_for_id(&self, id: termy_config_core::ColorSettingId) -> Option<termy_config_core::Rgb8> {
+    pub(super) fn custom_color_for_id(
+        &self,
+        id: termy_config_core::ColorSettingId,
+    ) -> Option<termy_config_core::Rgb8> {
         let colors = &self.config.colors;
         match id {
             termy_config_core::ColorSettingId::Foreground => colors.foreground,
@@ -234,6 +243,8 @@ impl SettingsWindow {
             RootSettingId::WarnOnQuitWithRunningProcess,
             RootSettingId::WindowWidth,
             RootSettingId::WindowHeight,
+            RootSettingId::AiProvider,
+            RootSettingId::OpenaiModel,
         ];
 
         match section {
@@ -273,7 +284,10 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn reset_root_setting_to_default(&mut self, setting: RootSettingId) -> Result<(), String> {
+    pub(super) fn reset_root_setting_to_default(
+        &mut self,
+        setting: RootSettingId,
+    ) -> Result<(), String> {
         if let Some(default_value) = Self::default_root_setting_value(setting) {
             config::set_root_setting(setting, &default_value)
         } else {
@@ -281,7 +295,11 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn reset_setting_to_default(&mut self, setting_key: &'static str, cx: &mut Context<Self>) {
+    pub(super) fn reset_setting_to_default(
+        &mut self,
+        setting_key: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         let result = if let Some(setting) = root_setting_from_key(setting_key) {
             self.reset_root_setting_to_default(setting)
         } else if let Some(color_setting) = color_setting_from_key(setting_key) {
@@ -302,7 +320,11 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn reset_section_to_defaults(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+    pub(super) fn reset_section_to_defaults(
+        &mut self,
+        section: SettingsSection,
+        cx: &mut Context<Self>,
+    ) {
         if section == SettingsSection::Keybindings {
             self.reset_keybinds_to_defaults(cx);
             return;
@@ -365,7 +387,10 @@ impl SettingsWindow {
             | EditableField::WorkingDirFallback
             | EditableField::WindowWidth
             | EditableField::WindowHeight
-            | EditableField::OpenaiApiKey => Self::advanced_field_spec(field),
+            | EditableField::AiProvider
+            | EditableField::OpenaiApiKey
+            | EditableField::GeminiApiKey
+            | EditableField::OpenaiModel => Self::advanced_field_spec(field),
             EditableField::Color(_) => FieldSpec {
                 root_setting: None,
                 codec: FieldCodec::Color,
@@ -387,7 +412,11 @@ impl SettingsWindow {
                 root_setting: Some(RootSettingId::BackgroundOpacity),
                 codec: FieldCodec::Numeric,
                 dropdown_click_only: false,
-                numeric_step: Some(NumericStepSpec { delta: 0.05, min: 0.0, max: 1.0 }),
+                numeric_step: Some(NumericStepSpec {
+                    delta: 0.05,
+                    min: 0.0,
+                    max: 1.0,
+                }),
             },
             EditableField::FontFamily => FieldSpec {
                 root_setting: Some(RootSettingId::FontFamily),
@@ -399,19 +428,31 @@ impl SettingsWindow {
                 root_setting: Some(RootSettingId::FontSize),
                 codec: FieldCodec::Numeric,
                 dropdown_click_only: false,
-                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 1.0, max: 4096.0 }),
+                numeric_step: Some(NumericStepSpec {
+                    delta: 1.0,
+                    min: 1.0,
+                    max: 4096.0,
+                }),
             },
             EditableField::PaddingX => FieldSpec {
                 root_setting: Some(RootSettingId::PaddingX),
                 codec: FieldCodec::Numeric,
                 dropdown_click_only: false,
-                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 0.0, max: 4096.0 }),
+                numeric_step: Some(NumericStepSpec {
+                    delta: 1.0,
+                    min: 0.0,
+                    max: 4096.0,
+                }),
             },
             EditableField::PaddingY => FieldSpec {
                 root_setting: Some(RootSettingId::PaddingY),
                 codec: FieldCodec::Numeric,
                 dropdown_click_only: false,
-                numeric_step: Some(NumericStepSpec { delta: 1.0, min: 0.0, max: 4096.0 }),
+                numeric_step: Some(NumericStepSpec {
+                    delta: 1.0,
+                    min: 0.0,
+                    max: 4096.0,
+                }),
             },
             _ => unreachable!("invalid appearance field"),
         }
@@ -421,30 +462,38 @@ impl SettingsWindow {
         match field {
             EditableField::Shell => Self::text_field_spec(Some(RootSettingId::Shell)),
             EditableField::Term => Self::text_field_spec(Some(RootSettingId::Term)),
-            EditableField::Colorterm => {
-                Self::text_field_spec(Some(RootSettingId::Colorterm))
-            }
-            EditableField::TmuxBinary => {
-                Self::text_field_spec(Some(RootSettingId::TmuxBinary))
-            }
+            EditableField::Colorterm => Self::text_field_spec(Some(RootSettingId::Colorterm)),
+            EditableField::TmuxBinary => Self::text_field_spec(Some(RootSettingId::TmuxBinary)),
             EditableField::ScrollbackHistory => Self::numeric_field_spec(
                 RootSettingId::ScrollbackHistory,
-                NumericStepSpec { delta: 100.0, min: 0.0, max: 100_000.0 },
+                NumericStepSpec {
+                    delta: 100.0,
+                    min: 0.0,
+                    max: 100_000.0,
+                },
             ),
             EditableField::InactiveTabScrollback => Self::numeric_field_spec(
                 RootSettingId::InactiveTabScrollback,
-                NumericStepSpec { delta: 100.0, min: 0.0, max: 100_000.0 },
+                NumericStepSpec {
+                    delta: 100.0,
+                    min: 0.0,
+                    max: 100_000.0,
+                },
             ),
             EditableField::ScrollMultiplier => Self::numeric_field_spec(
                 RootSettingId::MouseScrollMultiplier,
-                NumericStepSpec { delta: 0.1, min: 0.1, max: 1000.0 },
+                NumericStepSpec {
+                    delta: 0.1,
+                    min: 0.1,
+                    max: 1000.0,
+                },
             ),
             EditableField::CursorStyle => Self::enum_field_spec(RootSettingId::CursorStyle),
-            EditableField::ScrollbarVisibility => Self::enum_field_spec(RootSettingId::ScrollbarVisibility),
-            EditableField::ScrollbarStyle => Self::enum_field_spec(RootSettingId::ScrollbarStyle),
-            EditableField::PaneFocusEffect => {
-                Self::enum_field_spec(RootSettingId::PaneFocusEffect)
+            EditableField::ScrollbarVisibility => {
+                Self::enum_field_spec(RootSettingId::ScrollbarVisibility)
             }
+            EditableField::ScrollbarStyle => Self::enum_field_spec(RootSettingId::ScrollbarStyle),
+            EditableField::PaneFocusEffect => Self::enum_field_spec(RootSettingId::PaneFocusEffect),
             EditableField::PaneFocusStrength => Self::numeric_field_spec(
                 RootSettingId::PaneFocusStrength,
                 NumericStepSpec {
@@ -485,19 +534,37 @@ impl SettingsWindow {
 
     pub(super) fn advanced_field_spec(field: EditableField) -> FieldSpec {
         match field {
-            EditableField::WorkingDirectory => Self::text_field_spec(Some(RootSettingId::WorkingDir)),
+            EditableField::WorkingDirectory => {
+                Self::text_field_spec(Some(RootSettingId::WorkingDir))
+            }
             EditableField::WorkingDirFallback => {
                 Self::enum_field_spec(RootSettingId::WorkingDirFallback)
             }
             EditableField::WindowWidth => Self::numeric_field_spec(
                 RootSettingId::WindowWidth,
-                NumericStepSpec { delta: 10.0, min: 100.0, max: 10000.0 },
+                NumericStepSpec {
+                    delta: 10.0,
+                    min: 100.0,
+                    max: 10000.0,
+                },
             ),
             EditableField::WindowHeight => Self::numeric_field_spec(
                 RootSettingId::WindowHeight,
-                NumericStepSpec { delta: 10.0, min: 100.0, max: 10000.0 },
+                NumericStepSpec {
+                    delta: 10.0,
+                    min: 100.0,
+                    max: 10000.0,
+                },
             ),
+            EditableField::AiProvider => Self::enum_field_spec(RootSettingId::AiProvider),
             EditableField::OpenaiApiKey => Self::text_field_spec(Some(RootSettingId::OpenaiApiKey)),
+            EditableField::GeminiApiKey => Self::text_field_spec(Some(RootSettingId::GeminiApiKey)),
+            EditableField::OpenaiModel => FieldSpec {
+                root_setting: Some(RootSettingId::OpenaiModel),
+                codec: FieldCodec::OpenAiModel,
+                dropdown_click_only: false,
+                numeric_step: None,
+            },
             _ => unreachable!("invalid advanced field"),
         }
     }
@@ -511,7 +578,10 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn numeric_field_spec(root_setting: RootSettingId, numeric_step: NumericStepSpec) -> FieldSpec {
+    pub(super) fn numeric_field_spec(
+        root_setting: RootSettingId,
+        numeric_step: NumericStepSpec,
+    ) -> FieldSpec {
         FieldSpec {
             root_setting: Some(root_setting),
             codec: FieldCodec::Numeric,
@@ -541,7 +611,7 @@ impl SettingsWindow {
     pub(super) fn field_uses_dropdown(field: EditableField) -> bool {
         matches!(
             Self::field_spec(field).codec,
-            FieldCodec::Theme | FieldCodec::FontFamily | FieldCodec::Enum
+            FieldCodec::Theme | FieldCodec::FontFamily | FieldCodec::OpenAiModel | FieldCodec::Enum
         )
     }
 
@@ -562,7 +632,11 @@ impl SettingsWindow {
             .collect()
     }
 
-    pub(super) fn filtered_enum_suggestions(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+    pub(super) fn filtered_enum_suggestions(
+        &self,
+        field: EditableField,
+        query: &str,
+    ) -> Vec<DropdownOption> {
         let Some(setting) = Self::enum_root_setting_for_field(field) else {
             return Vec::new();
         };
@@ -608,13 +682,10 @@ impl SettingsWindow {
             .collect::<Vec<_>>();
 
         if !trimmed_query.is_empty()
-            && !matched
-                .iter()
-                .any(|option| {
-                    option.value.eq_ignore_ascii_case(trimmed_query)
-                        || Self::normalize_dropdown_query_token(&option.value)
-                            == normalized_compact
-                })
+            && !matched.iter().any(|option| {
+                option.value.eq_ignore_ascii_case(trimmed_query)
+                    || Self::normalize_dropdown_query_token(&option.value) == normalized_compact
+            })
         {
             matched.insert(0, DropdownOption::raw(trimmed_query.to_string()));
         }
@@ -622,7 +693,11 @@ impl SettingsWindow {
         matched
     }
 
-    pub(super) fn dropdown_options_for_field(&self, field: EditableField, query: &str) -> Vec<DropdownOption> {
+    pub(super) fn dropdown_options_for_field(
+        &self,
+        field: EditableField,
+        query: &str,
+    ) -> Vec<DropdownOption> {
         if field == EditableField::Theme {
             return self
                 .filtered_theme_suggestions(query)
@@ -637,8 +712,60 @@ impl SettingsWindow {
                 .map(DropdownOption::raw)
                 .collect();
         }
+        if field == EditableField::OpenaiModel {
+            return self.filtered_openai_model_suggestions(query);
+        }
 
         self.filtered_enum_suggestions(field, query)
+    }
+
+    pub(super) fn filtered_openai_model_suggestions(&self, query: &str) -> Vec<DropdownOption> {
+        let trimmed_query = query.trim();
+        let normalized_query = trimmed_query.to_ascii_lowercase();
+        let normalized_compact = Self::normalize_dropdown_query_token(trimmed_query);
+
+        let mut options = self
+            .openai_model_options
+            .iter()
+            .cloned()
+            .map(DropdownOption::raw)
+            .collect::<Vec<_>>();
+
+        if normalized_query.is_empty() {
+            let current_value = self.editable_field_value(EditableField::OpenaiModel);
+            if let Some(index) = options
+                .iter()
+                .position(|option| option.value.eq_ignore_ascii_case(&current_value))
+            {
+                let selected = options.remove(index);
+                options.insert(0, selected);
+            } else if !current_value.trim().is_empty() {
+                options.insert(0, DropdownOption::raw(current_value));
+            }
+            return options;
+        }
+
+        let mut matched = options
+            .into_iter()
+            .filter(|option| {
+                let value_lower = option.value.to_ascii_lowercase();
+                let value_compact = Self::normalize_dropdown_query_token(&option.value);
+                value_lower.contains(&normalized_query)
+                    || (!normalized_compact.is_empty()
+                        && value_compact.contains(&normalized_compact))
+            })
+            .collect::<Vec<_>>();
+
+        if !trimmed_query.is_empty()
+            && !matched.iter().any(|option| {
+                option.value.eq_ignore_ascii_case(trimmed_query)
+                    || Self::normalize_dropdown_query_token(&option.value) == normalized_compact
+            })
+        {
+            matched.insert(0, DropdownOption::raw(trimmed_query.to_string()));
+        }
+
+        matched
     }
 
     pub(super) fn dropdown_display_value(&self, field: EditableField, raw_value: &str) -> String {
@@ -729,22 +856,18 @@ impl SettingsWindow {
                 termy_config_core::CursorStyle::Block => "block",
             }
             .to_string(),
-            EditableField::ScrollbarVisibility => {
-                match self.config.terminal_scrollbar_visibility {
-                    termy_config_core::TerminalScrollbarVisibility::Off => "off",
-                    termy_config_core::TerminalScrollbarVisibility::Always => "always",
-                    termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
-                }
-                .to_string()
+            EditableField::ScrollbarVisibility => match self.config.terminal_scrollbar_visibility {
+                termy_config_core::TerminalScrollbarVisibility::Off => "off",
+                termy_config_core::TerminalScrollbarVisibility::Always => "always",
+                termy_config_core::TerminalScrollbarVisibility::OnScroll => "on_scroll",
             }
-            EditableField::ScrollbarStyle => {
-                match self.config.terminal_scrollbar_style {
-                    termy_config_core::TerminalScrollbarStyle::Neutral => "neutral",
-                    termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
-                    termy_config_core::TerminalScrollbarStyle::Theme => "theme",
-                }
-                .to_string()
+            .to_string(),
+            EditableField::ScrollbarStyle => match self.config.terminal_scrollbar_style {
+                termy_config_core::TerminalScrollbarStyle::Neutral => "neutral",
+                termy_config_core::TerminalScrollbarStyle::MutedTheme => "muted_theme",
+                termy_config_core::TerminalScrollbarStyle::Theme => "theme",
             }
+            .to_string(),
             EditableField::PaneFocusEffect => match self.config.pane_focus_effect {
                 termy_config_core::PaneFocusEffect::Off => "off",
                 termy_config_core::PaneFocusEffect::SoftSpotlight => "soft_spotlight",
@@ -752,7 +875,9 @@ impl SettingsWindow {
                 termy_config_core::PaneFocusEffect::Minimal => "minimal",
             }
             .to_string(),
-            EditableField::PaneFocusStrength => format!("{}", self.pane_focus_strength_display_percent()),
+            EditableField::PaneFocusStrength => {
+                format!("{}", self.pane_focus_strength_display_percent())
+            }
             EditableField::TabFallbackTitle => self.config.tab_title.fallback.clone(),
             EditableField::TabTitlePriority => self
                 .config
@@ -797,7 +922,25 @@ impl SettingsWindow {
             .to_string(),
             EditableField::WindowWidth => format!("{}", self.config.window_width.round() as i32),
             EditableField::WindowHeight => format!("{}", self.config.window_height.round() as i32),
+            EditableField::AiProvider => match self.config.ai_provider {
+                termy_config_core::AiProvider::OpenAi => "openai".to_string(),
+                termy_config_core::AiProvider::Gemini => "gemini".to_string(),
+            },
             EditableField::OpenaiApiKey => self.config.openai_api_key.clone().unwrap_or_default(),
+            EditableField::GeminiApiKey => self.config.gemini_api_key.clone().unwrap_or_default(),
+            EditableField::OpenaiModel => {
+                self.config
+                    .openai_model
+                    .clone()
+                    .unwrap_or_else(|| match self.config.ai_provider {
+                        termy_config_core::AiProvider::OpenAi => {
+                            termy_openai::DEFAULT_MODEL.to_string()
+                        }
+                        termy_config_core::AiProvider::Gemini => {
+                            termy_gemini::DEFAULT_MODEL.to_string()
+                        }
+                    })
+            }
             EditableField::Color(id) => self
                 .custom_color_for_id(id)
                 .map(|rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b))
@@ -812,7 +955,6 @@ impl SettingsWindow {
             .round() as i32
     }
 
-
     pub(super) fn begin_editing_field(
         &mut self,
         field: EditableField,
@@ -825,6 +967,9 @@ impl SettingsWindow {
             field,
             self.editable_field_value(field),
         ));
+        if field == EditableField::OpenaiModel {
+            self.refresh_openai_model_options(false, cx);
+        }
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -837,39 +982,62 @@ impl SettingsWindow {
         !Self::is_numeric_field(field) && !Self::field_uses_click_only_dropdown(field)
     }
 
-    pub(super) fn step_numeric_field(&mut self, field: EditableField, delta: i32, cx: &mut Context<Self>) {
+    pub(super) fn step_numeric_field(
+        &mut self,
+        field: EditableField,
+        delta: i32,
+        cx: &mut Context<Self>,
+    ) {
         let Some(step) = Self::field_spec(field).numeric_step else {
             termy_toast::error("Invalid numeric setting");
             return;
         };
         let result = match field {
             EditableField::BackgroundOpacity => {
-                let next =
-                    (self.config.background_opacity + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next = (self.config.background_opacity + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
                 self.config.background_opacity = next;
-                config::set_root_setting(termy_config_core::RootSettingId::BackgroundOpacity, &format!("{:.3}", next))
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::BackgroundOpacity,
+                    &format!("{:.3}", next),
+                )
             }
             EditableField::FontSize => {
-                let next = (self.config.font_size + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next =
+                    (self.config.font_size + (delta as f32 * step.delta)).clamp(step.min, step.max);
                 self.config.font_size = next;
-                config::set_root_setting(termy_config_core::RootSettingId::FontSize, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::FontSize,
+                    &next.to_string(),
+                )
             }
             EditableField::PaddingX => {
-                let next = (self.config.padding_x + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next =
+                    (self.config.padding_x + (delta as f32 * step.delta)).clamp(step.min, step.max);
                 self.config.padding_x = next;
-                config::set_root_setting(termy_config_core::RootSettingId::PaddingX, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::PaddingX,
+                    &next.to_string(),
+                )
             }
             EditableField::PaddingY => {
-                let next = (self.config.padding_y + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next =
+                    (self.config.padding_y + (delta as f32 * step.delta)).clamp(step.min, step.max);
                 self.config.padding_y = next;
-                config::set_root_setting(termy_config_core::RootSettingId::PaddingY, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::PaddingY,
+                    &next.to_string(),
+                )
             }
             EditableField::ScrollbackHistory => {
                 let next = (self.config.scrollback_history as f32 + (delta as f32 * step.delta))
                     .round()
                     .clamp(step.min, step.max) as usize;
                 self.config.scrollback_history = next;
-                config::set_root_setting(termy_config_core::RootSettingId::ScrollbackHistory, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::ScrollbackHistory,
+                    &next.to_string(),
+                )
             }
             EditableField::InactiveTabScrollback => {
                 let current = self.config.inactive_tab_scrollback.unwrap_or(0);
@@ -877,11 +1045,14 @@ impl SettingsWindow {
                     .round()
                     .clamp(step.min, step.max) as usize;
                 self.config.inactive_tab_scrollback = Some(next);
-                config::set_root_setting(termy_config_core::RootSettingId::InactiveTabScrollback, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::InactiveTabScrollback,
+                    &next.to_string(),
+                )
             }
             EditableField::ScrollMultiplier => {
-                let next =
-                    (self.config.mouse_scroll_multiplier + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next = (self.config.mouse_scroll_multiplier + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
                 self.config.mouse_scroll_multiplier = next;
                 config::set_root_setting(
                     termy_config_core::RootSettingId::MouseScrollMultiplier,
@@ -889,8 +1060,8 @@ impl SettingsWindow {
                 )
             }
             EditableField::PaneFocusStrength => {
-                let next =
-                    (self.config.pane_focus_strength + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next = (self.config.pane_focus_strength + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
                 self.config.pane_focus_strength = next;
                 config::set_root_setting(
                     termy_config_core::RootSettingId::PaneFocusStrength,
@@ -898,14 +1069,22 @@ impl SettingsWindow {
                 )
             }
             EditableField::WindowWidth => {
-                let next = (self.config.window_width + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next = (self.config.window_width + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
                 self.config.window_width = next;
-                config::set_root_setting(termy_config_core::RootSettingId::WindowWidth, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::WindowWidth,
+                    &next.to_string(),
+                )
             }
             EditableField::WindowHeight => {
-                let next = (self.config.window_height + (delta as f32 * step.delta)).clamp(step.min, step.max);
+                let next = (self.config.window_height + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
                 self.config.window_height = next;
-                config::set_root_setting(termy_config_core::RootSettingId::WindowHeight, &next.to_string())
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::WindowHeight,
+                    &next.to_string(),
+                )
             }
             _ => Err(format!("Unsupported numeric field: {:?}", field)),
         };
@@ -967,10 +1146,7 @@ impl SettingsWindow {
             }
         }
         matched.extend(rest);
-        matched
-            .into_iter()
-            .take(MAX_THEME_SUGGESTIONS)
-            .collect()
+        matched.into_iter().take(MAX_THEME_SUGGESTIONS).collect()
     }
 
     pub(super) fn filtered_font_suggestions(&self, query: &str) -> Vec<String> {
@@ -1009,7 +1185,6 @@ impl SettingsWindow {
         self.active_input = None;
         cx.notify();
     }
-
 }
 
 #[cfg(test)]
@@ -1049,7 +1224,10 @@ mod tests {
             EditableField::WorkingDirFallback,
             EditableField::WindowWidth,
             EditableField::WindowHeight,
+            EditableField::AiProvider,
             EditableField::OpenaiApiKey,
+            EditableField::GeminiApiKey,
+            EditableField::OpenaiModel,
             EditableField::Color(termy_config_core::ColorSettingId::Foreground),
         ];
 
@@ -1075,6 +1253,7 @@ mod tests {
             EditableField::TabCloseVisibility,
             EditableField::TabWidthMode,
             EditableField::WorkingDirFallback,
+            EditableField::AiProvider,
         ];
 
         for field in enum_fields {

@@ -16,6 +16,7 @@ members = [
   "crates/xtask",
   "crates/cli",
   "crates/openai",
+  "crates/gemini",
 ]
 resolver = "2"
 
@@ -71,6 +72,7 @@ termy_config_core = { path = "crates/config_core" }
 termy_command_core = { path = "crates/command_core" }
 termy_cli_install_core = { path = "crates/cli_install_core" }
 termy_openai = { path = "crates/openai" }
+termy_gemini = { path = "crates/gemini" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Pin core-text to 21.0.0 to avoid core-graphics version conflict on macOS.

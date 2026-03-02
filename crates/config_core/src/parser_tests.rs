@@ -1,6 +1,6 @@
 use crate::{
-    AppConfig, ConfigDiagnosticKind, ConfigParseReport, CursorStyle, PaneFocusEffect, Rgb8,
-    TabCloseVisibility, TabTitleMode, TabTitleSource, TabWidthMode, TerminalScrollbarStyle,
+    AiProvider, AppConfig, ConfigDiagnosticKind, ConfigParseReport, CursorStyle, PaneFocusEffect,
+    Rgb8, TabCloseVisibility, TabTitleMode, TabTitleSource, TabWidthMode, TerminalScrollbarStyle,
     TerminalScrollbarVisibility, WorkingDirFallback,
 };
 
@@ -388,7 +388,10 @@ fn numeric_keys_parse_table_driven() {
         defaults.background_opacity
     );
 
-    assert_eq!(parse("pane_focus_strength = -0.5\n").pane_focus_strength, 0.0);
+    assert_eq!(
+        parse("pane_focus_strength = -0.5\n").pane_focus_strength,
+        0.0
+    );
     assert_eq!(parse("pane_focus_strength = 4\n").pane_focus_strength, 2.0);
     let nan_pane_focus_strength = parse_report("pane_focus_strength = NaN\n");
     assert_eq!(
@@ -441,6 +444,21 @@ fn runtime_env_options_parse() {
 }
 
 #[test]
+fn ai_provider_and_keys_parse() {
+    let config = parse(
+        "ai_provider = gemini\n\
+         openai_api_key = sk-openai\n\
+         gemini_api_key = sk-gemini\n\
+         openai_model = gemini-2.0-flash\n",
+    );
+
+    assert_eq!(config.ai_provider, AiProvider::Gemini);
+    assert_eq!(config.openai_api_key.as_deref(), Some("sk-openai"));
+    assert_eq!(config.gemini_api_key.as_deref(), Some("sk-gemini"));
+    assert_eq!(config.openai_model.as_deref(), Some("gemini-2.0-flash"));
+}
+
+#[test]
 fn tmux_runtime_options_parse() {
     let config = parse(
         "tmux_enabled = true\n\
@@ -461,14 +479,20 @@ fn tmux_runtime_options_parse() {
 fn removed_tmux_persist_scrollback_key_produces_unknown_root_key_diagnostic() {
     let report = parse_report("tmux_persist_scrollback = true\n");
     assert_eq!(report.diagnostics.len(), 1);
-    assert_eq!(report.diagnostics[0].kind, ConfigDiagnosticKind::UnknownRootKey);
+    assert_eq!(
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::UnknownRootKey
+    );
 }
 
 #[test]
 fn removed_tmux_session_name_key_produces_unknown_root_key_diagnostic() {
     let report = parse_report("tmux_session_name = work\n");
     assert_eq!(report.diagnostics.len(), 1);
-    assert_eq!(report.diagnostics[0].kind, ConfigDiagnosticKind::UnknownRootKey);
+    assert_eq!(
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::UnknownRootKey
+    );
 }
 
 #[test]

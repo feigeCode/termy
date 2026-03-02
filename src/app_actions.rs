@@ -13,19 +13,31 @@ fn focus_existing_settings_window(cx: &mut App) -> bool {
         .into_iter()
         .find_map(|handle| handle.downcast::<SettingsWindow>())
     {
-        let _ = settings_window.update(cx, |_view, window, _cx| {
-            window.activate_window();
-        });
-        true
+        settings_window
+            .update(cx, |_view, window, _cx| {
+                window.activate_window();
+            })
+            .is_ok()
     } else {
         false
     }
+}
+
+fn has_settings_window(cx: &App) -> bool {
+    cx.windows()
+        .into_iter()
+        .any(|handle| handle.downcast::<SettingsWindow>().is_some())
 }
 
 pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
     // Key-repeat and repeated action dispatch should raise the existing settings window,
     // not spawn duplicate windows.
     if focus_existing_settings_window(cx) {
+        return Ok(());
+    }
+    // If a settings window still exists after a failed focus attempt (for example,
+    // during a re-entrant update), do not open a duplicate.
+    if has_settings_window(cx) {
         return Ok(());
     }
 

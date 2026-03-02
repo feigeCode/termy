@@ -1,4 +1,5 @@
 use regex::{Regex, RegexBuilder};
+use unicode_width::UnicodeWidthChar;
 
 use crate::matcher::{SearchMatch, SearchResults};
 
@@ -92,16 +93,15 @@ impl SearchEngine {
             return Vec::new();
         };
 
-        let mut utf8_char_boundaries: Vec<usize> = text.char_indices().map(|(idx, _)| idx).collect();
-        utf8_char_boundaries.push(text.len());
+        let (utf8_char_boundaries, cell_columns) = compute_cell_columns(text);
 
         regex
             .find_iter(text)
             .map(|m| {
                 SearchMatch::new(
                     line_idx,
-                    byte_offset_to_column(m.start(), &utf8_char_boundaries),
-                    byte_offset_to_column(m.end(), &utf8_char_boundaries),
+                    byte_offset_to_cell_column(m.start(), &utf8_char_boundaries, &cell_columns),
+                    byte_offset_to_cell_column(m.end(), &utf8_char_boundaries, &cell_columns),
                 )
             })
             .collect()
@@ -131,8 +131,33 @@ impl SearchEngine {
     }
 }
 
-fn byte_offset_to_column(byte_offset: usize, utf8_char_boundaries: &[usize]) -> usize {
-    utf8_char_boundaries.partition_point(|boundary| *boundary < byte_offset)
+fn compute_cell_columns(text: &str) -> (Vec<usize>, Vec<usize>) {
+    let mut utf8_char_boundaries = Vec::with_capacity(text.chars().count() + 1);
+    let mut cell_columns = Vec::with_capacity(text.chars().count() + 1);
+    let mut cell_col = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        utf8_char_boundaries.push(idx);
+        cell_columns.push(cell_col);
+        cell_col += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+
+    utf8_char_boundaries.push(text.len());
+    cell_columns.push(cell_col);
+
+    (utf8_char_boundaries, cell_columns)
+}
+
+fn byte_offset_to_cell_column(
+    byte_offset: usize,
+    utf8_char_boundaries: &[usize],
+    cell_columns: &[usize],
+) -> usize {
+    match utf8_char_boundaries.binary_search(&byte_offset) {
+        Ok(index) => cell_columns[index],
+        Err(0) => 0,
+        Err(index) => cell_columns[index - 1],
+    }
 }
 
 #[cfg(test)]
@@ -257,9 +282,9 @@ mod tests {
         let matches = engine.search_line(0, "Hello \u{1F600} World \u{1F600}");
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].start_col, 6);
-        assert_eq!(matches[0].end_col, 7);
-        assert_eq!(matches[1].start_col, 14);
-        assert_eq!(matches[1].end_col, 15);
+        assert_eq!(matches[0].end_col, 8);
+        assert_eq!(matches[1].start_col, 15);
+        assert_eq!(matches[1].end_col, 17);
     }
 
     #[test]
@@ -285,5 +310,43 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start_col, 3);
         assert_eq!(matches[0].end_col, 7);
+    }
+
+    #[test]
+    fn test_literal_search_uses_cell_columns_for_cjk_wide_characters() {
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        engine.set_pattern("界").unwrap();
+
+        let matches = engine.search_line(0, "a界b界");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].start_col, 1);
+        assert_eq!(matches[0].end_col, 3);
+        assert_eq!(matches[1].start_col, 4);
+        assert_eq!(matches[1].end_col, 6);
+    }
+
+    #[test]
+    fn test_literal_search_uses_cell_columns_for_combining_characters() {
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        engine.set_pattern("a\u{0301}").unwrap();
+
+        let matches = engine.search_line(0, "x a\u{0301} z");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start_col, 2);
+        assert_eq!(matches[0].end_col, 3);
+    }
+
+    #[test]
+    fn test_regex_search_uses_cell_columns_for_emoji_with_combining_mark() {
+        let mut engine = SearchEngine::new(SearchConfig {
+            case_sensitive: false,
+            mode: SearchMode::Regex,
+        });
+        engine.set_pattern("\u{1F600}\u{0301}").unwrap();
+
+        let matches = engine.search_line(0, "ab\u{1F600}\u{0301}cd");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start_col, 2);
+        assert_eq!(matches[0].end_col, 4);
     }
 }

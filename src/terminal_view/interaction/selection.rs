@@ -549,4 +549,91 @@ mod tests {
             Some(("%left".to_string(), CellPos { col: 2, row: 3 }))
         );
     }
+
+    #[test]
+    fn clamped_pane_lookup_falls_back_to_active_pane_when_pointer_outside_all_panes() {
+        let rows = 6u16;
+        let left_cols = 8u16;
+        let right_cols = 8u16;
+        let left_terminal = Terminal::new_tmux(
+            TerminalSize {
+                cols: left_cols,
+                rows,
+                ..TerminalSize::default()
+            },
+            128,
+        );
+        let right_terminal = Terminal::new_tmux(
+            TerminalSize {
+                cols: right_cols,
+                rows,
+                ..TerminalSize::default()
+            },
+            128,
+        );
+
+        let panes = vec![
+            TerminalPane {
+                id: "%left".to_string(),
+                left: 0,
+                top: 0,
+                width: left_cols,
+                height: rows,
+                degraded: false,
+                terminal: left_terminal,
+            },
+            TerminalPane {
+                id: "%right".to_string(),
+                left: left_cols,
+                top: 0,
+                width: right_cols,
+                height: rows,
+                degraded: false,
+                terminal: right_terminal,
+            },
+        ];
+
+        let active_pane = &panes[0];
+        let size = active_pane.terminal.size();
+        let cell_width: f32 = size.cell_width.into();
+        let cell_height: f32 = size.cell_height.into();
+        let padding_x = 0.0;
+        let padding_y = 0.0;
+        let active_origin_x = padding_x + (f32::from(active_pane.left) * cell_width);
+        let active_origin_y = padding_y + (f32::from(active_pane.top) * cell_height);
+        let active_width = f32::from(active_pane.width) * cell_width;
+        let active_height = f32::from(active_pane.height) * cell_height;
+
+        // Outside both panes (to the far right and below) while clamp=true should
+        // still return a clamped position in the active pane.
+        let pointer_x = active_origin_x + active_width + (f32::from(right_cols) * cell_width);
+        let pointer_y = active_origin_y + active_height + (2.0 * cell_height);
+
+        let clamped_x = (pointer_x - active_origin_x).clamp(0.0, active_width - f32::EPSILON);
+        let clamped_y = (pointer_y - active_origin_y).clamp(0.0, active_height - f32::EPSILON);
+        let expected_col =
+            ((clamped_x / cell_width).floor() as i32).clamp(0, i32::from(size.cols) - 1) as usize;
+        let expected_row = ((clamped_y / cell_height).floor() as i32)
+            .clamp(0, i32::from(size.rows) - 1) as usize;
+
+        let resolved = resolve_pane_cell_for_position(
+            &panes,
+            Some("%left"),
+            pointer_x,
+            pointer_y,
+            padding_x,
+            padding_y,
+            true,
+        );
+        assert_eq!(
+            resolved,
+            Some((
+                "%left".to_string(),
+                CellPos {
+                    col: expected_col,
+                    row: expected_row,
+                },
+            ))
+        );
+    }
 }

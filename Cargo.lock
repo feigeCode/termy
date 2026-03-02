@@ -5648,6 +5648,7 @@ name = "termy_search"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

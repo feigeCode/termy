@@ -1,4 +1,9 @@
-import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  useNavigate,
+} from "@tanstack/react-router";
 import { getDocBySlug, getAllDocs, extractHeadings } from "@/lib/docs";
 import { Sidebar } from "@/components/docs/Sidebar";
 import { TableOfContents } from "@/components/docs/TableOfContents";
@@ -35,7 +40,10 @@ function generateId(text: string): string {
 function highlightText(text: string, query: string): ReactNode {
   if (!query.trim()) return text;
 
-  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+  const regex = new RegExp(
+    `(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+    "gi",
+  );
   const parts = text.split(regex);
 
   if (parts.length === 1) return text;
@@ -47,7 +55,7 @@ function highlightText(text: string, query: string): ReactNode {
       </mark>
     ) : (
       part
-    )
+    ),
   );
 }
 
@@ -66,7 +74,7 @@ function createMarkdownComponents(query: string): Components {
           <span key={i}>{highlightText(child, query)}</span>
         ) : (
           child
-        )
+        ),
       );
     }
 
@@ -126,19 +134,23 @@ function DocPage() {
         replace: true,
       });
     },
-    [navigate]
+    [navigate],
   );
 
   const markdownComponents = useMemo(
     () => createMarkdownComponents(search),
-    [search]
+    [search],
   );
 
   return (
     <section className="pt-24 pb-20">
       <div className="flex gap-8">
         {/* Sidebar */}
-        <Sidebar currentSlug={doc.slug} search={search} onSearchChange={handleSearchChange} />
+        <Sidebar
+          currentSlug={doc.slug}
+          search={search}
+          onSearchChange={handleSearchChange}
+        />
 
         {/* Main content */}
         <main className="flex-1 min-w-0">

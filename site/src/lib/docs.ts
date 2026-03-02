@@ -13,7 +13,10 @@ export interface Doc extends DocMeta {
 }
 
 // Parse frontmatter from markdown content
-function parseFrontmatter(content: string): { meta: Record<string, string>; content: string } {
+function parseFrontmatter(content: string): {
+  meta: Record<string, string>;
+  content: string;
+} {
   const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
   const match = content.match(frontmatterRegex);
 
@@ -47,9 +50,7 @@ const modules = import.meta.glob("/src/content/**/*.md", {
 // Process all docs
 function processDoc(path: string, rawContent: string): Doc {
   // Extract slug from path: /src/content/foo/bar.md -> foo/bar or /src/content/bar.md -> bar
-  const slug = path
-    .replace("/src/content/", "")
-    .replace(".md", "");
+  const slug = path.replace("/src/content/", "").replace(".md", "");
 
   const { meta, content } = parseFrontmatter(rawContent);
 

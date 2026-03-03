@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Element, Font, FontWeight, Hsla, IntoElement, Pixels, SharedString, Size,
-    TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
+    App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, Pixels, SharedString,
+    Size, TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
 };
 
 /// Info needed to render a single cell.
@@ -123,6 +123,64 @@ impl BlockElementGeometry {
 
     fn rects(&self) -> &[BlockRectSpec] {
         &self.rects[..self.rect_count]
+    }
+}
+
+#[derive(Clone)]
+struct TextBatch {
+    start_col: usize,
+    row: usize,
+    text: String,
+    bold: bool,
+    fg: Hsla,
+    underline: Option<UnderlineStyle>,
+    cell_len: usize,
+}
+
+#[derive(Clone, Copy)]
+struct TextBatchKey {
+    bold: bool,
+    fg: Hsla,
+}
+
+impl TextBatch {
+    fn new(
+        start_col: usize,
+        row: usize,
+        c: char,
+        key: TextBatchKey,
+        underline: Option<UnderlineStyle>,
+    ) -> Self {
+        let mut text = String::with_capacity(16);
+        text.push(c);
+        Self {
+            start_col,
+            row,
+            text,
+            bold: key.bold,
+            fg: key.fg,
+            underline,
+            cell_len: 1,
+        }
+    }
+
+    fn can_append(
+        &self,
+        col: usize,
+        row: usize,
+        key: TextBatchKey,
+        underline: &Option<UnderlineStyle>,
+    ) -> bool {
+        self.row == row
+            && self.start_col + self.cell_len == col
+            && self.bold == key.bold
+            && self.fg == key.fg
+            && self.underline == *underline
+    }
+
+    fn append_char(&mut self, c: char) {
+        self.text.push(c);
+        self.cell_len += 1;
     }
 }
 
@@ -413,14 +471,17 @@ impl Element for TerminalGrid {
             }
         }
 
-        // Pre-create font structs to avoid cloning font_family for every cell
+        // Pre-create font structs to avoid cloning font_family for every batch.
+        let terminal_font_features = FontFeatures::disable_ligatures();
         let font_normal = Font {
             family: self.font_family.clone(),
+            features: terminal_font_features.clone(),
             weight: FontWeight::NORMAL,
             ..Default::default()
         };
         let font_bold = Font {
             family: self.font_family.clone(),
+            features: terminal_font_features,
             weight: FontWeight::BOLD,
             ..Default::default()
         };
@@ -439,61 +500,26 @@ impl Element for TerminalGrid {
             a: 1.0,
         };
 
-        for cell in &self.cells {
-            if !cell.render_text || cell.char == ' ' || cell.char == '\0' || cell.char.is_control()
-            {
-                continue;
-            }
-
-            let x = origin.x + self.cell_size.width * cell.col as f32;
-            let y = origin.y + self.cell_size.height * cell.row as f32;
-
-            let fg_color = if cell.is_cursor && self.cursor_style == TerminalCursorStyle::Block {
-                cursor_fg
-            } else if cell.selected {
-                self.selection_fg
-            } else if cell.search_current || cell.search_match {
-                highlight_fg
-            } else {
-                cell.fg
-            };
-
-            if let Some(geometry) = block_element_geometry(cell.char) {
-                let cell_bounds = Bounds {
-                    origin: point(x, y),
-                    size: self.cell_size,
-                };
-                paint_block_element_quad(window, cell_bounds, geometry, fg_color);
-                continue;
-            }
-
-            let text: SharedString = cell.char.to_string().into();
-            let font = if cell.bold { &font_bold } else { &font_normal };
-
+        let text_batches = self.collect_text_batches(cursor_fg, highlight_fg);
+        for batch in text_batches {
+            let x = origin.x + self.cell_size.width * batch.start_col as f32;
+            let y = origin.y + self.cell_size.height * batch.row as f32;
+            let font = if batch.bold { &font_bold } else { &font_normal };
             let run = TextRun {
-                len: text.len(),
+                len: batch.text.len(),
                 font: font.clone(),
-                color: fg_color,
+                color: batch.fg,
                 background_color: None,
-                underline: self
-                    .hovered_link_range
-                    .and_then(|(row, start_col, end_col)| {
-                        if cell.row == row && cell.col >= start_col && cell.col <= end_col {
-                            Some(UnderlineStyle {
-                                thickness: px(1.0),
-                                color: Some(fg_color),
-                                wavy: false,
-                            })
-                        } else {
-                            None
-                        }
-                    }),
+                underline: batch.underline,
                 strikethrough: None,
             };
 
-            let line = window
-                .text_system()
-                .shape_line(text, self.font_size, &[run], None);
+            let line = window.text_system().shape_line(
+                batch.text.into(),
+                self.font_size,
+                &[run],
+                Some(self.cell_size.width),
+            );
             let _ = line.paint(
                 point(x, y),
                 self.cell_size.height,
@@ -503,6 +529,100 @@ impl Element for TerminalGrid {
                 cx,
             );
         }
+
+        // Keep block-element rendering on its existing quad path to preserve hard-edge
+        // behavior while text glyphs use batched shaping.
+        for cell in &self.cells {
+            if !Self::cell_is_drawable_text(cell) {
+                continue;
+            }
+            let Some(geometry) = block_element_geometry(cell.char) else {
+                continue;
+            };
+            let x = origin.x + self.cell_size.width * cell.col as f32;
+            let y = origin.y + self.cell_size.height * cell.row as f32;
+            let cell_bounds = Bounds {
+                origin: point(x, y),
+                size: self.cell_size,
+            };
+            let fg_color = self.cell_fg_color(cell, cursor_fg, highlight_fg);
+            paint_block_element_quad(window, cell_bounds, geometry, fg_color);
+        }
+    }
+}
+
+impl TerminalGrid {
+    fn cell_is_drawable_text(cell: &CellRenderInfo) -> bool {
+        cell.render_text && cell.char != ' ' && cell.char != '\0' && !cell.char.is_control()
+    }
+
+    fn cell_fg_color(&self, cell: &CellRenderInfo, cursor_fg: Hsla, highlight_fg: Hsla) -> Hsla {
+        if cell.is_cursor && self.cursor_style == TerminalCursorStyle::Block {
+            cursor_fg
+        } else if cell.selected {
+            self.selection_fg
+        } else if cell.search_current || cell.search_match {
+            highlight_fg
+        } else {
+            cell.fg
+        }
+    }
+
+    fn cell_underline(&self, row: usize, col: usize, color: Hsla) -> Option<UnderlineStyle> {
+        self.hovered_link_range.and_then(|(link_row, start_col, end_col)| {
+            if row == link_row && col >= start_col && col <= end_col {
+                Some(UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(color),
+                    wavy: false,
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    fn collect_text_batches(&self, cursor_fg: Hsla, highlight_fg: Hsla) -> Vec<TextBatch> {
+        let mut batches = Vec::new();
+        let mut current: Option<TextBatch> = None;
+
+        for cell in &self.cells {
+            if !Self::cell_is_drawable_text(cell) || block_element_geometry(cell.char).is_some() {
+                if let Some(batch) = current.take() {
+                    batches.push(batch);
+                }
+                continue;
+            }
+
+            let fg = self.cell_fg_color(cell, cursor_fg, highlight_fg);
+            let underline = self.cell_underline(cell.row, cell.col, fg);
+            let key = TextBatchKey {
+                bold: cell.bold,
+                fg,
+            };
+
+            let should_append = current
+                .as_ref()
+                .is_some_and(|batch| batch.can_append(cell.col, cell.row, key, &underline));
+
+            if should_append {
+                if let Some(batch) = current.as_mut() {
+                    batch.append_char(cell.char);
+                }
+                continue;
+            }
+
+            if let Some(batch) = current.take() {
+                batches.push(batch);
+            }
+            current = Some(TextBatch::new(cell.col, cell.row, cell.char, key, underline));
+        }
+
+        if let Some(batch) = current {
+            batches.push(batch);
+        }
+
+        batches
     }
 }
 
@@ -510,6 +630,66 @@ impl Element for TerminalGrid {
 mod tests {
     use super::*;
     use gpui::{Bounds, Size, point, px};
+
+    fn test_color(h: f32, s: f32, l: f32) -> Hsla {
+        Hsla { h, s, l, a: 1.0 }
+    }
+
+    fn test_cell(col: usize, row: usize, c: char) -> CellRenderInfo {
+        CellRenderInfo {
+            col,
+            row,
+            char: c,
+            fg: test_color(0.4, 0.5, 0.6),
+            bg: test_color(0.0, 0.0, 0.0),
+            bold: false,
+            render_text: true,
+            is_cursor: false,
+            selected: false,
+            search_current: false,
+            search_match: false,
+        }
+    }
+
+    fn test_grid(cells: Vec<CellRenderInfo>, hovered: Option<(usize, usize, usize)>) -> TerminalGrid {
+        TerminalGrid {
+            cells,
+            cell_size: Size {
+                width: px(10.0),
+                height: px(20.0),
+            },
+            cols: 120,
+            rows: 40,
+            clear_bg: Hsla::transparent_black(),
+            default_bg: Hsla::transparent_black(),
+            cursor_color: test_color(0.1, 0.1, 0.1),
+            selection_bg: test_color(0.2, 0.2, 0.2),
+            selection_fg: test_color(0.3, 0.3, 0.3),
+            search_match_bg: test_color(0.4, 0.4, 0.4),
+            search_current_bg: test_color(0.5, 0.5, 0.5),
+            hovered_link_range: hovered,
+            font_family: SharedString::from("JetBrains Mono"),
+            font_size: px(14.0),
+            cursor_style: TerminalCursorStyle::Block,
+        }
+    }
+
+    fn collect_batches(grid: &TerminalGrid) -> Vec<TextBatch> {
+        grid.collect_text_batches(
+            Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: 1.0,
+            },
+            Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.08,
+                a: 1.0,
+            },
+        )
+    }
 
     #[test]
     fn block_element_geometry_is_complete_for_unicode_range() {
@@ -562,5 +742,101 @@ mod tests {
     fn fast_path_excludes_non_block_glyphs() {
         assert!(block_element_geometry('\u{2579}').is_none());
         assert!(block_element_geometry('A').is_none());
+    }
+
+    #[test]
+    fn batches_merge_adjacent_cells_with_same_style() {
+        let grid = test_grid(vec![test_cell(0, 0, 'a'), test_cell(1, 0, 'b')], None);
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].row, 0);
+        assert_eq!(batches[0].start_col, 0);
+        assert_eq!(batches[0].text, "ab");
+    }
+
+    #[test]
+    fn batches_split_on_row_change() {
+        let grid = test_grid(vec![test_cell(0, 0, 'a'), test_cell(0, 1, 'b')], None);
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].text, "a");
+        assert_eq!(batches[1].text, "b");
+        assert_eq!(batches[0].row, 0);
+        assert_eq!(batches[1].row, 1);
+    }
+
+    #[test]
+    fn batches_split_on_bold_or_color_change() {
+        let first = test_cell(0, 0, 'a');
+        let mut second = test_cell(1, 0, 'b');
+        let mut third = test_cell(2, 0, 'c');
+        second.bold = true;
+        third.fg = test_color(0.8, 0.4, 0.3);
+        let grid = test_grid(vec![first, second, third], None);
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].text, "a");
+        assert_eq!(batches[1].text, "b");
+        assert_eq!(batches[2].text, "c");
+    }
+
+    #[test]
+    fn batches_split_on_hover_underline_boundary() {
+        let grid = test_grid(
+            vec![test_cell(0, 0, 'a'), test_cell(1, 0, 'b'), test_cell(2, 0, 'c')],
+            Some((0, 1, 2)),
+        );
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].text, "a");
+        assert!(batches[0].underline.is_none());
+        assert_eq!(batches[1].text, "bc");
+        assert!(batches[1].underline.is_some());
+    }
+
+    #[test]
+    fn batches_split_on_non_render_text_cells_and_controls() {
+        let mut spacer = test_cell(1, 0, 'x');
+        spacer.render_text = false;
+        let mut control = test_cell(2, 0, '\u{001B}');
+        control.render_text = true;
+        let grid = test_grid(
+            vec![
+                test_cell(0, 0, 'a'),
+                spacer,
+                control,
+                test_cell(3, 0, ' '),
+                test_cell(4, 0, '\0'),
+                test_cell(5, 0, 'b'),
+            ],
+            None,
+        );
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].text, "a");
+        assert_eq!(batches[1].text, "b");
+    }
+
+    #[test]
+    fn batches_do_not_include_block_element_glyphs() {
+        let grid = test_grid(
+            vec![test_cell(0, 0, 'a'), test_cell(1, 0, '\u{2588}'), test_cell(2, 0, 'b')],
+            None,
+        );
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].text, "a");
+        assert_eq!(batches[1].text, "b");
+    }
+
+    #[test]
+    fn batches_break_around_wide_char_spacer_boundaries() {
+        let mut spacer = test_cell(1, 0, ' ');
+        spacer.render_text = false;
+        let grid = test_grid(vec![test_cell(0, 0, '你'), spacer, test_cell(2, 0, 'x')], None);
+        let batches = collect_batches(&grid);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].text, "你");
+        assert_eq!(batches[1].text, "x");
     }
 }

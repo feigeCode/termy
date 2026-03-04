@@ -14,11 +14,39 @@ export interface Doc extends DocMeta {
   content: string;
 }
 
-// Parse frontmatter from markdown content
-function parseFrontmatter(content: string): {
+interface ParsedFrontmatter {
   meta: Record<string, string>;
   content: string;
-} {
+}
+
+function toTitleFromSlug(slug: string): string {
+  return slug
+    .split("/")
+    .pop()!
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function toDocOrder(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return Number.parseInt(value, 10);
+}
+
+function compareDocs(a: Doc, b: Doc): number {
+  if (a.order !== undefined && b.order !== undefined) {
+    return a.order - b.order;
+  }
+  if (a.order !== undefined) return -1;
+  if (b.order !== undefined) return 1;
+  return a.title.localeCompare(b.title);
+}
+
+// Parse frontmatter from markdown content
+function parseFrontmatter(content: string): ParsedFrontmatter {
   const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
   const match = content.match(frontmatterRegex);
 
@@ -29,12 +57,12 @@ function parseFrontmatter(content: string): {
   const frontmatter = match[1];
   const meta: Record<string, string> = {};
 
-  frontmatter.split("\n").forEach((line) => {
+  for (const line of frontmatter.split("\n")) {
     const [key, ...valueParts] = line.split(":");
     if (key && valueParts.length > 0) {
       meta[key.trim()] = valueParts.join(":").trim();
     }
-  });
+  }
 
   return {
     meta,
@@ -56,21 +84,13 @@ function processDoc(path: string, rawContent: string): Doc {
 
   const { meta, content } = parseFrontmatter(rawContent);
 
-  // Generate title from slug if not in frontmatter
-  const title =
-    meta.title ||
-    slug
-      .split("/")
-      .pop()!
-      .split("-")
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ");
+  const title = meta.title ?? toTitleFromSlug(slug);
 
   return {
     slug,
     title,
     description: meta.description,
-    order: meta.order ? parseInt(meta.order, 10) : undefined,
+    order: toDocOrder(meta.order),
     category: meta.category,
     content,
   };
@@ -80,15 +100,7 @@ function processDoc(path: string, rawContent: string): Doc {
 export function getAllDocs(): Doc[] {
   return Object.entries(modules)
     .map(([path, content]) => processDoc(path, content))
-    .sort((a, b) => {
-      // Sort by order if available, then by title
-      if (a.order !== undefined && b.order !== undefined) {
-        return a.order - b.order;
-      }
-      if (a.order !== undefined) return -1;
-      if (b.order !== undefined) return 1;
-      return a.title.localeCompare(b.title);
-    });
+    .sort(compareDocs);
 }
 
 // Get docs grouped by category
@@ -96,13 +108,11 @@ export function getDocsByCategory(): Record<string, Doc[]> {
   const docs = getAllDocs();
   const grouped: Record<string, Doc[]> = {};
 
-  docs.forEach((doc) => {
-    const category = doc.category || "General";
-    if (!grouped[category]) {
-      grouped[category] = [];
-    }
+  for (const doc of docs) {
+    const category = doc.category ?? "General";
+    grouped[category] ??= [];
     grouped[category].push(doc);
-  });
+  }
 
   return grouped;
 }

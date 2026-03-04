@@ -280,10 +280,14 @@ impl SettingsWindow {
                     .bg(knob_color)
                     .shadow_sm(),
             )
-            .on_click(cx.listener(move |view, _, _, cx| {
-                on_toggle(view, cx);
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _event: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                    on_toggle(view, cx);
+                    cx.notify();
+                }),
+            )
     }
 
     pub(super) fn active_dropdown_options(

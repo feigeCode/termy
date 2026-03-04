@@ -2264,6 +2264,7 @@ impl TerminalView {
 
     fn process_native_terminal_events(&mut self, cx: &mut Context<Self>) -> bool {
         let mut should_redraw = false;
+        let mut should_quit = false;
         let active_tab = self.active_tab;
 
         for index in 0..self.tabs.len() {
@@ -2276,7 +2277,18 @@ impl TerminalView {
 
                 for event in events {
                     match event {
-                        TerminalEvent::Wakeup | TerminalEvent::Bell | TerminalEvent::Exit => {
+                        TerminalEvent::Wakeup | TerminalEvent::Bell => {
+                            if index == active_tab {
+                                should_redraw = true;
+                            }
+                        }
+                        TerminalEvent::Exit => {
+                            if Self::native_exit_should_quit_app(
+                                self.tabs.len(),
+                                self.tabs[index].panes.len(),
+                            ) {
+                                should_quit = true;
+                            }
                             if index == active_tab {
                                 should_redraw = true;
                             }
@@ -2302,7 +2314,17 @@ impl TerminalView {
             }
         }
 
+        if should_quit {
+            // Shell `exit` in the last native pane should close the app immediately.
+            self.allow_quit_without_prompt = true;
+            cx.quit();
+        }
+
         should_redraw
+    }
+
+    fn native_exit_should_quit_app(tab_count: usize, pane_count: usize) -> bool {
+        tab_count == 1 && pane_count == 1
     }
 
     fn clear_selection(&mut self) -> bool {
@@ -2341,6 +2363,14 @@ mod tests {
         assert!(TerminalRenderMetricsState::parse_env_flag("TRUE"));
         assert!(TerminalRenderMetricsState::parse_env_flag("yes"));
         assert!(TerminalRenderMetricsState::parse_env_flag("on"));
+    }
+
+    #[test]
+    fn native_exit_quits_only_for_single_tab_single_pane() {
+        assert!(TerminalView::native_exit_should_quit_app(1, 1));
+        assert!(!TerminalView::native_exit_should_quit_app(1, 2));
+        assert!(!TerminalView::native_exit_should_quit_app(2, 1));
+        assert!(!TerminalView::native_exit_should_quit_app(0, 0));
     }
 
     #[cfg(debug_assertions)]

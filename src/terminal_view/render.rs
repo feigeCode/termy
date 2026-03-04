@@ -238,10 +238,7 @@ fn effective_pane_focus_active_border_alpha(
     runtime_uses_tmux: bool,
     tmux_show_active_pane_border: bool,
 ) -> f32 {
-    if !runtime_uses_tmux {
-        return 0.0;
-    }
-    if !tmux_show_active_pane_border {
+    if runtime_uses_tmux && !tmux_show_active_pane_border {
         return 0.0;
     }
     active_border_alpha
@@ -1430,6 +1427,23 @@ impl TerminalView {
         } else {
             None
         };
+        let chrome_height = self.chrome_height();
+        let terminal_overlay = (command_palette_overlay.is_some()
+            || search_overlay.is_some()
+            || ai_input_overlay.is_some())
+        .then(|| {
+            div()
+                .id("terminal-scoped-overlay")
+                .absolute()
+                .top(px(chrome_height))
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .children(command_palette_overlay)
+                .children(search_overlay)
+                .children(ai_input_overlay)
+                .into_any_element()
+        });
         let toast_overlay = self.render_toast_overlay(&colors, cx);
 
         #[cfg(target_os = "macos")]
@@ -1461,9 +1475,7 @@ impl TerminalView {
             .left_0()
             .size_full()
             .children(banner_overlay)
-            .children(command_palette_overlay)
-            .children(search_overlay)
-            .children(ai_input_overlay)
+            .children(terminal_overlay)
             .children(toast_overlay)
             .into_any_element()
     }

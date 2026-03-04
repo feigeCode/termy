@@ -199,7 +199,7 @@ impl TerminalView {
             self.search_debounce_token = self.search_debounce_token.wrapping_add(1);
             self.search_state.clear_results_preserving_query();
             self.clear_terminal_scrollbar_marker_cache();
-            cx.notify();
+            self.notify_search_inline_input(cx);
             return;
         }
 
@@ -214,7 +214,7 @@ impl TerminalView {
                     if view.search_debounce_token == token {
                         view.perform_search();
                         view.scroll_to_current_match(cx);
-                        cx.notify();
+                        view.notify_search_inline_input(cx);
                     }
                 })
             });

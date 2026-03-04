@@ -23,7 +23,6 @@ enum InlineInputTarget {
     AiInput,
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InlineInputNotifyTarget {
     Parent,
@@ -869,7 +868,6 @@ impl IntoElement for InlineInputElement {
 }
 
 impl TerminalView {
-    #[cfg(test)]
     fn inline_input_notify_target_for_target(target: InlineInputTarget) -> InlineInputNotifyTarget {
         match target {
             InlineInputTarget::CommandPalette | InlineInputTarget::AiInput => {
@@ -879,6 +877,17 @@ impl TerminalView {
                 InlineInputNotifyTarget::Parent
             }
         }
+    }
+
+    fn notify_for_inline_input_target(&mut self, target: InlineInputTarget, cx: &mut Context<Self>) {
+        match Self::inline_input_notify_target_for_target(target) {
+            InlineInputNotifyTarget::Parent => cx.notify(),
+            InlineInputNotifyTarget::Overlay => self.notify_overlay(cx),
+        }
+    }
+
+    pub(super) fn notify_search_inline_input(&mut self, cx: &mut Context<Self>) {
+        self.notify_for_inline_input_target(InlineInputTarget::Search, cx);
     }
 
     fn active_inline_input_target(&self) -> Option<InlineInputTarget> {
@@ -960,7 +969,7 @@ impl TerminalView {
 
     pub(super) fn command_palette_query_changed(&mut self, cx: &mut Context<Self>) {
         self.refresh_command_palette_matches(true, cx);
-        self.notify_overlay(cx);
+        self.notify_for_inline_input_target(InlineInputTarget::CommandPalette, cx);
     }
 
     fn enforce_tab_rename_limit(&mut self) {
@@ -997,11 +1006,11 @@ impl TerminalView {
             Some(InlineInputTarget::RenameTab) => {
                 mutate(&mut self.rename_input);
                 self.enforce_tab_rename_limit();
-                cx.notify();
+                self.notify_for_inline_input_target(InlineInputTarget::RenameTab, cx);
             }
             Some(InlineInputTarget::AiInput) => {
                 mutate(self.ai_input_mut());
-                self.notify_overlay(cx);
+                self.notify_for_inline_input_target(InlineInputTarget::AiInput, cx);
             }
             None => {}
         }

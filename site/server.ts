@@ -42,6 +42,35 @@ const latestReleaseCache: GitHubReleaseCache = {
 
 const notra = NOTRA_API_KEY ? new Notra({ bearerAuth: NOTRA_API_KEY }) : null;
 
+const NOTRA_CACHE_TTL_MS = Math.max(
+  Number(process.env.NOTRA_CACHE_TTL_MS) || 3_600_000,
+  1_000,
+);
+
+interface NotraCacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
+const notraChangelogsCache: NotraCacheEntry<unknown> = {
+  data: null,
+  expiresAt: 0,
+};
+
+const notraPostCache = new Map<string, NotraCacheEntry<unknown>>();
+
+function pruneExpiredPostCache(now: number): void {
+  for (const [key, entry] of notraPostCache) {
+    if (entry.expiresAt <= now) {
+      notraPostCache.delete(key);
+    }
+  }
+}
+
+function getNotraCacheMaxAgeSeconds(): number {
+  return Math.max(Math.floor(NOTRA_CACHE_TTL_MS / 1000), 1);
+}
+
 interface NotraConfig {
   client: Notra;
   organizationId: string;
@@ -135,6 +164,18 @@ app.get("/api/github/releases/latest", async (c) => {
 });
 
 app.get("/api/changelogs", async (c) => {
+  const now = Date.now();
+  const maxAge = getNotraCacheMaxAgeSeconds();
+
+  if (notraChangelogsCache.data && notraChangelogsCache.expiresAt > now) {
+    c.header(
+      "Cache-Control",
+      `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+    );
+    c.header("X-Cache", "HIT");
+    return c.json(notraChangelogsCache.data);
+  }
+
   const config = getNotraConfig(c);
   if (config instanceof Response) {
     return config;
@@ -149,14 +190,43 @@ app.get("/api/changelogs", async (c) => {
       limit: 100,
     });
 
-    c.header("Cache-Control", "public, max-age=300");
+    notraChangelogsCache.data = result;
+    notraChangelogsCache.expiresAt = now + NOTRA_CACHE_TTL_MS;
+
+    c.header(
+      "Cache-Control",
+      `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+    );
+    c.header("X-Cache", "MISS");
     return c.json(result);
   } catch {
+    if (notraChangelogsCache.data) {
+      c.header(
+        "Cache-Control",
+        `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+      );
+      c.header("X-Cache", "STALE");
+      return c.json(notraChangelogsCache.data);
+    }
     return c.json({ error: "Failed to fetch changelogs from Notra" }, 502);
   }
 });
 
 app.get("/api/changelogs/:id", async (c) => {
+  const postId = c.req.param("id");
+  const now = Date.now();
+  const maxAge = getNotraCacheMaxAgeSeconds();
+  const cached = notraPostCache.get(postId);
+
+  if (cached && cached.expiresAt > now) {
+    c.header(
+      "Cache-Control",
+      `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+    );
+    c.header("X-Cache", "HIT");
+    return c.json(cached.data);
+  }
+
   const config = getNotraConfig(c);
   if (config instanceof Response) {
     return config;
@@ -165,12 +235,27 @@ app.get("/api/changelogs/:id", async (c) => {
   try {
     const result = await config.client.content.getPost({
       organizationId: config.organizationId,
-      postId: c.req.param("id"),
+      postId,
     });
 
-    c.header("Cache-Control", "public, max-age=300");
+    pruneExpiredPostCache(now);
+    notraPostCache.set(postId, { data: result, expiresAt: now + NOTRA_CACHE_TTL_MS });
+
+    c.header(
+      "Cache-Control",
+      `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+    );
+    c.header("X-Cache", "MISS");
     return c.json(result);
   } catch {
+    if (cached) {
+      c.header(
+        "Cache-Control",
+        `public, max-age=${maxAge}, stale-while-revalidate=${maxAge * 2}`,
+      );
+      c.header("X-Cache", "STALE");
+      return c.json(cached.data);
+    }
     return c.json({ error: "Failed to fetch changelog from Notra" }, 502);
   }
 });

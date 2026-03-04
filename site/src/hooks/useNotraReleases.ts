@@ -29,10 +29,15 @@ async function fetchChangelogById(id: string): Promise<NotraPost | null> {
   return data.post ?? null;
 }
 
+const CHANGELOGS_STALE_TIME = 5 * 60_000;
+const CHANGELOGS_GC_TIME = 30 * 60_000;
+
 export function useNotraChangelogs(): UseQueryResult<NotraPost[], Error> {
   return useQuery({
     queryKey: ["notra-changelogs"],
     queryFn: fetchChangelogs,
+    staleTime: CHANGELOGS_STALE_TIME,
+    gcTime: CHANGELOGS_GC_TIME,
   });
 }
 
@@ -45,5 +50,7 @@ export function useNotraChangelogById(
       return fetchChangelogById(id);
     },
     enabled: Boolean(id),
+    staleTime: CHANGELOGS_STALE_TIME,
+    gcTime: CHANGELOGS_GC_TIME,
   });
 }

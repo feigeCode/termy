@@ -10,8 +10,14 @@ const PORT = Number(process.env.PORT) || 3000;
 const THEME_STORE_API_URL = process.env.THEME_STORE_API_URL || "http://127.0.0.1:8080";
 const GITHUB_LATEST_RELEASE_URL =
   "https://api.github.com/repos/lassejlv/termy/releases/latest";
+const GITHUB_CONTRIBUTORS_URL =
+  "https://api.github.com/repos/lassejlv/termy/stats/contributors";
 const GITHUB_RELEASE_CACHE_TTL_MS = Math.max(
   Number(process.env.GITHUB_RELEASE_CACHE_TTL_MS) || 3_600_000,
+  1_000,
+);
+const GITHUB_CONTRIBUTORS_CACHE_TTL_MS = Math.max(
+  Number(process.env.GITHUB_CONTRIBUTORS_CACHE_TTL_MS) || 3_600_000,
   1_000,
 );
 
@@ -37,6 +43,38 @@ interface GitHubReleaseCache {
 
 const latestReleaseCache: GitHubReleaseCache = {
   release: null,
+  expiresAt: 0,
+  etag: null,
+};
+
+interface GitHubContributorWeek {
+  w: number;
+  a: number;
+  d: number;
+  c: number;
+}
+
+interface GitHubContributorAuthor {
+  login: string;
+  id: number;
+  avatar_url: string;
+  html_url: string;
+}
+
+interface GitHubContributor {
+  total: number;
+  weeks: GitHubContributorWeek[];
+  author: GitHubContributorAuthor;
+}
+
+interface GitHubContributorsCache {
+  contributors: GitHubContributor[] | null;
+  expiresAt: number;
+  etag: string | null;
+}
+
+const contributorsCache: GitHubContributorsCache = {
+  contributors: null,
   expiresAt: 0,
   etag: null,
 };
@@ -161,6 +199,72 @@ app.get("/api/github/releases/latest", async (c) => {
     }
 
     return c.json({ error: "Failed to fetch latest release from GitHub" }, 502);
+  }
+});
+
+app.get("/api/github/contributors", async (c) => {
+  const now = Date.now();
+  const maxAge = Math.max(Math.floor(GITHUB_CONTRIBUTORS_CACHE_TTL_MS / 1000), 1);
+
+  if (contributorsCache.contributors && contributorsCache.expiresAt > now) {
+    c.header("Cache-Control", `public, max-age=${maxAge}`);
+    c.header("X-Cache", "HIT");
+    return c.json(contributorsCache.contributors);
+  }
+
+  try {
+    const headers = new Headers({
+      Accept: "application/vnd.github+json",
+      "User-Agent": "termy-site-server",
+    });
+
+    if (contributorsCache.etag) {
+      headers.set("If-None-Match", contributorsCache.etag);
+    }
+
+    let response = await fetch(GITHUB_CONTRIBUTORS_URL, { headers });
+
+    // GitHub returns 202 while computing stats — retry up to 5 times
+    let retries = 0;
+    while (response.status === 202 && retries < 5) {
+      retries++;
+      await new Promise((r) => setTimeout(r, 2000));
+      response = await fetch(GITHUB_CONTRIBUTORS_URL, { headers });
+    }
+
+    if (response.status === 304 && contributorsCache.contributors) {
+      contributorsCache.expiresAt = now + GITHUB_CONTRIBUTORS_CACHE_TTL_MS;
+      c.header("Cache-Control", `public, max-age=${maxAge}`);
+      c.header("X-Cache", "REVALIDATED");
+      return c.json(contributorsCache.contributors);
+    }
+
+    if (!response.ok) {
+      if (contributorsCache.contributors) {
+        c.header("Cache-Control", `public, max-age=${maxAge}`);
+        c.header("X-Cache", "STALE");
+        return c.json(contributorsCache.contributors);
+      }
+      return c.json({ error: `GitHub API returned ${response.status}` }, 502);
+    }
+
+    const data = (await response.json()) as GitHubContributor[];
+    const sorted = data.sort((a, b) => b.total - a.total);
+
+    contributorsCache.contributors = sorted;
+    contributorsCache.expiresAt = now + GITHUB_CONTRIBUTORS_CACHE_TTL_MS;
+    contributorsCache.etag = response.headers.get("ETag");
+
+    c.header("Cache-Control", `public, max-age=${maxAge}`);
+    c.header("X-Cache", "MISS");
+    return c.json(sorted);
+  } catch {
+    if (contributorsCache.contributors) {
+      c.header("Cache-Control", `public, max-age=${maxAge}`);
+      c.header("X-Cache", "STALE");
+      return c.json(contributorsCache.contributors);
+    }
+    return c.json({ error: "Failed to fetch contributors from GitHub" }, 502);
   }
 });
 

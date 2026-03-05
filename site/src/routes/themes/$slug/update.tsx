@@ -45,14 +45,18 @@ function ThemeUpdatePage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loginUrl = useMemo(() => getThemeLoginUrl(`/themes/${slug}/update`), [slug]);
+  const loginUrl = useMemo(
+    () => getThemeLoginUrl(`/themes/${slug}/update`),
+    [slug],
+  );
 
   const isOwner =
     Boolean(user) &&
     Boolean(theme) &&
     (theme?.githubUserIdClaim != null
       ? theme.githubUserIdClaim === user?.githubUserId
-      : theme?.githubUsernameClaim.toLowerCase() === user?.githubLogin.toLowerCase());
+      : theme?.githubUsernameClaim.toLowerCase() ===
+        user?.githubLogin.toLowerCase());
 
   useEffect(() => {
     void bootstrap();
@@ -180,12 +184,18 @@ function ThemeUpdatePage(): JSX.Element {
           </Button>
         </div>
 
-        <div className="rounded-3xl border border-border/50 bg-gradient-to-br from-card via-card to-secondary/50 p-6 md:p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Theme Update
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">{theme.name}</h1>
-          <p className="mt-3 text-muted-foreground">
+        {/* Hero */}
+        <div className="text-center max-w-3xl mx-auto px-6">
+          <h1
+            className="text-4xl md:text-6xl font-bold tracking-tight animate-blur-in"
+            style={{ animationDelay: "0ms" }}
+          >
+            <span className="gradient-text">{theme.name}</span>
+          </h1>
+          <p
+            className="mt-4 text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "100ms" }}
+          >
             Owner: @{theme.githubUsernameClaim}
           </p>
         </div>
@@ -203,19 +213,24 @@ function ThemeUpdatePage(): JSX.Element {
         )}
 
         {!user && (
-          <Card className="border-border/60">
-            <CardHeader>
-              <CardTitle>Authentication Required</CardTitle>
-              <CardDescription>
-                You must sign in with GitHub to update this theme.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <a href={loginUrl}>
-                <Button>Login with GitHub</Button>
-              </a>
-            </CardContent>
-          </Card>
+          <div
+            className="animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
+            <Card className="border-border/60">
+              <CardHeader>
+                <CardTitle>Authentication Required</CardTitle>
+                <CardDescription>
+                  You must sign in with GitHub to update this theme.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <a href={loginUrl}>
+                  <Button>Login with GitHub</Button>
+                </a>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {user && !isOwner && (
@@ -231,7 +246,10 @@ function ThemeUpdatePage(): JSX.Element {
         )}
 
         {user && isOwner && (
-          <>
+          <div
+            className="space-y-6 animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
             <Card className="border-border/60">
               <CardHeader>
                 <CardTitle>Update metadata</CardTitle>
@@ -262,7 +280,9 @@ function ThemeUpdatePage(): JSX.Element {
                     <input
                       type="checkbox"
                       checked={updateIsPublic}
-                      onChange={(event) => setUpdateIsPublic(event.target.checked)}
+                      onChange={(event) =>
+                        setUpdateIsPublic(event.target.checked)
+                      }
                       disabled={isSubmitting}
                     />
                     Public theme
@@ -306,14 +326,18 @@ function ThemeUpdatePage(): JSX.Element {
                     className="min-h-20 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     placeholder="Changelog"
                     value={publishChangelog}
-                    onChange={(event) => setPublishChangelog(event.target.value)}
+                    onChange={(event) =>
+                      setPublishChangelog(event.target.value)
+                    }
                     disabled={isSubmitting}
                   />
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     placeholder="Checksum SHA256 (optional)"
                     value={publishChecksum}
-                    onChange={(event) => setPublishChecksum(event.target.value)}
+                    onChange={(event) =>
+                      setPublishChecksum(event.target.value)
+                    }
                     disabled={isSubmitting}
                   />
                   <Button type="submit" disabled={isSubmitting}>
@@ -322,35 +346,42 @@ function ThemeUpdatePage(): JSX.Element {
                 </form>
               </CardContent>
             </Card>
-          </>
+          </div>
         )}
 
-        <Card className="border-border/60">
-          <CardHeader>
-            <CardTitle>Version history</CardTitle>
-            <CardDescription>{versions.length} published versions</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {versions.map((version) => (
-              <div
-                key={version.id}
-                className="rounded-lg border border-border/60 px-3 py-2"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">{version.version}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(version.publishedAt).toLocaleString()}
-                  </span>
+        <div
+          className="animate-blur-in"
+          style={{ animationDelay: "300ms" }}
+        >
+          <Card className="border-border/60">
+            <CardHeader>
+              <CardTitle>Version history</CardTitle>
+              <CardDescription>
+                {versions.length} published versions
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {versions.map((version) => (
+                <div
+                  key={version.id}
+                  className="rounded-lg border border-border/60 border-l-2 border-l-green-500/60 px-4 py-3"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{version.version}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(version.publishedAt).toLocaleString()}
+                    </span>
+                  </div>
+                  {version.changelog && (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {version.changelog}
+                    </p>
+                  )}
                 </div>
-                {version.changelog && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {version.changelog}
-                  </p>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </section>
   );

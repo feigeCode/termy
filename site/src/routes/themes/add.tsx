@@ -247,18 +247,24 @@ export function ThemeAddPage(): JSX.Element {
   return (
     <section className="pt-28 pb-16">
       <div className="mx-auto max-w-6xl space-y-6">
-        <div className="rounded-3xl border border-border/50 bg-gradient-to-br from-card via-card to-secondary/50 p-6 md:p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Theme Upload
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">
-            Manage your theme releases
+        {/* Hero */}
+        <div className="text-center max-w-3xl mx-auto px-6">
+          <h1
+            className="text-4xl md:text-6xl font-bold tracking-tight animate-blur-in"
+            style={{ animationDelay: "0ms" }}
+          >
+            <span className="gradient-text">releases.</span>
           </h1>
-          <p className="mt-3 max-w-2xl text-muted-foreground">
-            Upload theme JSON files, publish versions, and maintain your
-            catalog.
+          <p
+            className="mt-4 text-lg text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "100ms" }}
+          >
+            Upload theme JSON files, publish versions, and maintain your catalog.
           </p>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
+          <div
+            className="mt-6 flex flex-wrap items-center justify-center gap-3 animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
             <Button asChild variant="outline">
               <Link to="/themes">Back to store</Link>
             </Button>
@@ -293,23 +299,31 @@ export function ThemeAddPage(): JSX.Element {
         )}
 
         {!isBootstrapping && !user && (
-          <Card className="border-border/60">
-            <CardHeader>
-              <CardTitle>Authentication Required</CardTitle>
-              <CardDescription>
-                Sign in with GitHub to access the theme dashboard.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <a href={loginUrl}>
-                <Button type="button">Login with GitHub</Button>
-              </a>
-            </CardContent>
-          </Card>
+          <div
+            className="animate-blur-in"
+            style={{ animationDelay: "300ms" }}
+          >
+            <Card className="border-border/60">
+              <CardHeader>
+                <CardTitle>Authentication Required</CardTitle>
+                <CardDescription>
+                  Sign in with GitHub to access the theme dashboard.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <a href={loginUrl}>
+                  <Button type="button">Login with GitHub</Button>
+                </a>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {user && (
-          <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <div
+            className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] animate-blur-in"
+            style={{ animationDelay: "300ms" }}
+          >
             <Card className="border-border/60">
               <CardHeader>
                 <CardTitle>Available Themes</CardTitle>

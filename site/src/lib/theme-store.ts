@@ -182,6 +182,50 @@ export async function publishThemeVersion(
   );
 }
 
+export interface ThemePalette {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  black?: string;
+  red?: string;
+  green?: string;
+  yellow?: string;
+  blue?: string;
+  magenta?: string;
+  cyan?: string;
+  white?: string;
+  bright_black?: string;
+  bright_red?: string;
+  bright_green?: string;
+  bright_yellow?: string;
+  bright_blue?: string;
+  bright_magenta?: string;
+  bright_cyan?: string;
+  bright_white?: string;
+}
+
+export const fallbackPalette: Required<ThemePalette> = {
+  foreground: "#d1d5db",
+  background: "#141a24",
+  cursor: "#d1d5db",
+  black: "#2e3436",
+  red: "#cc0000",
+  green: "#4e9a06",
+  yellow: "#c4a000",
+  blue: "#3465a4",
+  magenta: "#75507b",
+  cyan: "#06989a",
+  white: "#d3d7cf",
+  bright_black: "#555753",
+  bright_red: "#ef2929",
+  bright_green: "#8ae234",
+  bright_yellow: "#fce94f",
+  bright_blue: "#729fcf",
+  bright_magenta: "#ad7fa8",
+  bright_cyan: "#34e2e2",
+  bright_white: "#eeeeec",
+};
+
 export function getThemeLoginUrl(redirectToPath: string): string {
   if (typeof window === "undefined") {
     return `${API_BASE}/auth/github/login`;

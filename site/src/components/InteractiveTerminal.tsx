@@ -175,7 +175,7 @@ function FastfetchOutput(): JSX.Element {
 
   return (
     <div className="flex gap-2">
-      <div className="shrink-0 text-[#4ade80]">
+      <div className="hidden sm:block shrink-0 text-[#4ade80]">
         {ASCII_ART.map((line, index) => (
           <div key={index} className="leading-[1.25]">
             <span className="whitespace-pre">{line.padEnd(maxAsciiWidth)}</span>
@@ -185,7 +185,7 @@ function FastfetchOutput(): JSX.Element {
 
       <div className="min-w-0">
         {SYSTEM_INFO.map(([label, value], index) => (
-          <div key={index} className="leading-[1.25] whitespace-nowrap">
+          <div key={index} className="leading-[1.25] whitespace-nowrap overflow-hidden text-ellipsis">
             {label ? (
               <>
                 <span className="text-[#4ade80] font-bold">{label}</span>{" "}

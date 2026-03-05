@@ -14,6 +14,7 @@ import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ThemesIndexRouteImport } from "./routes/themes/index"
 import { Route as ReleasesIndexRouteImport } from "./routes/releases/index"
 import { Route as DocsIndexRouteImport } from "./routes/docs/index"
+import { Route as ContributorsIndexRouteImport } from "./routes/contributors/index"
 import { Route as ThemesStudioRouteImport } from "./routes/themes/studio"
 import { Route as ThemesAddRouteImport } from "./routes/themes/add"
 import { Route as ThemesSlugRouteImport } from "./routes/themes/$slug"
@@ -44,6 +45,11 @@ const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
 const DocsIndexRoute = DocsIndexRouteImport.update({
   id: "/docs/",
   path: "/docs/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContributorsIndexRoute = ContributorsIndexRouteImport.update({
+  id: "/contributors/",
+  path: "/contributors/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ThemesStudioRoute = ThemesStudioRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   "/themes/$slug": typeof ThemesSlugRouteWithChildren
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
+  "/contributors/": typeof ContributorsIndexRoute
   "/docs/": typeof DocsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
   "/themes/": typeof ThemesIndexRoute
@@ -98,6 +105,7 @@ export interface FileRoutesByTo {
   "/themes/$slug": typeof ThemesSlugRouteWithChildren
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
+  "/contributors": typeof ContributorsIndexRoute
   "/docs": typeof DocsIndexRoute
   "/releases": typeof ReleasesIndexRoute
   "/themes": typeof ThemesIndexRoute
@@ -112,6 +120,7 @@ export interface FileRoutesById {
   "/themes/$slug": typeof ThemesSlugRouteWithChildren
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
+  "/contributors/": typeof ContributorsIndexRoute
   "/docs/": typeof DocsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
   "/themes/": typeof ThemesIndexRoute
@@ -127,6 +136,7 @@ export interface FileRouteTypes {
     | "/themes/$slug"
     | "/themes/add"
     | "/themes/studio"
+    | "/contributors/"
     | "/docs/"
     | "/releases/"
     | "/themes/"
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | "/themes/$slug"
     | "/themes/add"
     | "/themes/studio"
+    | "/contributors"
     | "/docs"
     | "/releases"
     | "/themes"
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | "/themes/$slug"
     | "/themes/add"
     | "/themes/studio"
+    | "/contributors/"
     | "/docs/"
     | "/releases/"
     | "/themes/"
@@ -167,6 +179,7 @@ export interface RootRouteChildren {
   ThemesSlugRoute: typeof ThemesSlugRouteWithChildren
   ThemesAddRoute: typeof ThemesAddRoute
   ThemesStudioRoute: typeof ThemesStudioRoute
+  ContributorsIndexRoute: typeof ContributorsIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   ThemesIndexRoute: typeof ThemesIndexRoute
@@ -207,6 +220,13 @@ declare module "@tanstack/react-router" {
       path: "/docs"
       fullPath: "/docs/"
       preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/contributors/": {
+      id: "/contributors/"
+      path: "/contributors"
+      fullPath: "/contributors/"
+      preLoaderRoute: typeof ContributorsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/themes/studio": {
@@ -274,6 +294,7 @@ const rootRouteChildren: RootRouteChildren = {
   ThemesSlugRoute: ThemesSlugRouteWithChildren,
   ThemesAddRoute: ThemesAddRoute,
   ThemesStudioRoute: ThemesStudioRoute,
+  ContributorsIndexRoute: ContributorsIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
   ThemesIndexRoute: ThemesIndexRoute,

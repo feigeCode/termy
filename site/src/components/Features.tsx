@@ -274,15 +274,15 @@ function FeatureCard({
       style={{ animationDelay: `${(index + 1) * 100}ms` }}
     >
       {/* Mockup area — fixed height so text rows align */}
-      <div className="h-[200px] p-5 flex items-center">
+      <div className="h-[180px] sm:h-[200px] p-4 sm:p-5 flex items-center">
         <div className="w-full">{feature.mockup}</div>
       </div>
 
       {/* Divider */}
-      <div className="mx-5 border-t border-border/30" />
+      <div className="mx-4 sm:mx-5 border-t border-border/30" />
 
       {/* Text content — pushed to bottom with mt-auto so it aligns across the row */}
-      <div className="p-5 mt-auto flex flex-col gap-2">
+      <div className="p-4 sm:p-5 mt-auto flex flex-col gap-2">
         <h3 className="text-[15px] font-semibold text-foreground leading-tight">
           {feature.title}
         </h3>

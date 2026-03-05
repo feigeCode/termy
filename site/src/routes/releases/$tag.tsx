@@ -42,7 +42,7 @@ function ReleaseDetailPage(): JSX.Element {
   const { data: post, isLoading, error } = useNotraChangelogById(tag);
 
   return (
-    <section className="pt-32 pb-20">
+    <section className="pt-24 sm:pt-32 pb-20">
       <div className="max-w-4xl mx-auto">
         <Button asChild variant="ghost" size="sm" className="mb-8 text-muted-foreground hover:text-foreground">
           <Link to="/releases">
@@ -64,7 +64,7 @@ function ReleaseDetailPage(): JSX.Element {
         {!isLoading && !error && post && (
           <>
             <div className="mb-8">
-              <h1 className="text-4xl md:text-5xl font-bold mb-2">{post.title}</h1>
+              <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-2">{post.title}</h1>
               <time className="text-muted-foreground" dateTime={post.createdAt}>
                 {formatDate(post.createdAt)}
               </time>

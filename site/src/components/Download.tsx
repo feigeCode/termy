@@ -128,7 +128,7 @@ export function Download({ release, loading, error }: DownloadProps): JSX.Elemen
                   <span className="font-medium text-foreground text-sm">
                     {platform.label}
                   </span>
-                  <span className="ml-auto font-mono text-xs text-muted-foreground truncate max-w-[200px]">
+                  <span className="ml-auto font-mono text-xs text-muted-foreground truncate max-w-[200px] hidden sm:inline">
                     {primary.name}
                   </span>
                   <svg
@@ -175,7 +175,7 @@ export function Download({ release, loading, error }: DownloadProps): JSX.Elemen
                 All downloads
                 <ChevronDown className="w-3 h-3 transition-transform group-open:rotate-180" />
               </summary>
-              <div className="absolute left-1/2 -translate-x-1/2 mt-4 w-full max-w-2xl grid gap-6 md:grid-cols-3 px-4">
+              <div className="relative sm:absolute sm:left-1/2 sm:-translate-x-1/2 mt-4 w-full max-w-2xl grid gap-6 grid-cols-1 md:grid-cols-3 px-4">
                 <AssetList title="macOS" assets={classified?.mac ?? []} />
                 <AssetList title="Windows" assets={classified?.windows ?? []} />
                 <AssetList title="Linux" assets={classified?.linux ?? []} />

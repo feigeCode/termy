@@ -3,6 +3,8 @@ name = "hello_rust_plugin"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+
 [dependencies]
 termy_plugin_core = { path = "../../../../crates/plugin_core" }
 termy_plugin_sdk = { path = "../../../../crates/plugin_sdk" }

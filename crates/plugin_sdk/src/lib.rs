@@ -1,8 +1,9 @@
 use std::io::{self, BufRead, BufReader, Stdin, Stdout, Write};
 
 use termy_plugin_core::{
-    HostHello, HostRpcMessage, PLUGIN_PROTOCOL_VERSION, PluginCapability, PluginHello,
-    PluginLogLevel, PluginLogMessage, PluginRpcMessage, PluginToastLevel, PluginToastMessage,
+    HostCommandInvocation, HostHello, HostRpcMessage, PLUGIN_PROTOCOL_VERSION, PluginCapability,
+    PluginHello, PluginLogLevel, PluginLogMessage, PluginRpcMessage, PluginToastLevel,
+    PluginToastMessage,
 };
 use thiserror::Error;
 
@@ -136,6 +137,15 @@ where
             message: message.into(),
             duration_ms,
         }))
+    }
+
+    pub fn command_id(message: &HostRpcMessage) -> Option<&str> {
+        match message {
+            HostRpcMessage::InvokeCommand(HostCommandInvocation { command_id }) => {
+                Some(command_id.as_str())
+            }
+            _ => None,
+        }
     }
 
     pub fn run_until_shutdown(
@@ -273,6 +283,7 @@ mod tests {
                     HostRpcMessage::Ping => "ping",
                     HostRpcMessage::Shutdown => "shutdown",
                     HostRpcMessage::Hello(_) => "hello",
+                    HostRpcMessage::InvokeCommand(_) => "invoke",
                 });
                 if matches!(message, HostRpcMessage::Ping) {
                     session.send_pong()?;

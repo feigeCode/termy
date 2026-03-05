@@ -21,8 +21,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     session.run_until_shutdown(|message, session| {
-        if matches!(message, HostRpcMessage::Ping) {
-            session.send_pong()?;
+        match message {
+            HostRpcMessage::Ping => {
+                session.send_pong()?;
+            }
+            HostRpcMessage::InvokeCommand(invocation) => {
+                if invocation.command_id == "example.hello-rust.run" {
+                    session.send_log(
+                        PluginLogLevel::Info,
+                        "hello-rust command invoked from command palette",
+                    )?;
+                    session.send_toast(
+                        PluginToastLevel::Success,
+                        "Hello Rust command ran",
+                        Some(1500),
+                    )?;
+                }
+            }
+            HostRpcMessage::Hello(_) | HostRpcMessage::Shutdown => {}
         }
         Ok(())
     })?;

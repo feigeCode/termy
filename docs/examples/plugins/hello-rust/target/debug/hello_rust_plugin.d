@@ -1,0 +1,1 @@
+/Users/lassevestergaard/Documents/dev/termy/docs/examples/plugins/hello-rust/target/debug/hello_rust_plugin: /Users/lassevestergaard/Documents/dev/termy/crates/plugin_core/src/lib.rs /Users/lassevestergaard/Documents/dev/termy/crates/plugin_sdk/src/lib.rs /Users/lassevestergaard/Documents/dev/termy/docs/examples/plugins/hello-rust/src/main.rs

@@ -1,9 +1,10 @@
 use std::{
+    collections::{HashMap, VecDeque},
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -11,19 +12,24 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use termy_config_core::config_path;
 use termy_plugin_core::{
-    DiscoveredPlugin, HostHello, HostRpcMessage, PLUGIN_MANIFEST_FILE_NAME,
+    DiscoveredPlugin, HostCommandInvocation, HostHello, HostRpcMessage, PLUGIN_MANIFEST_FILE_NAME,
     PLUGIN_PROTOCOL_VERSION, PluginCapability, PluginHello, PluginManifest, PluginPermission,
     PluginRpcMessage, PluginRuntime, PluginToastLevel, PluginToastMessage,
 };
 use thiserror::Error;
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_LOG_LINES_PER_PLUGIN: usize = 40;
+
+type SharedPluginLogs = Arc<Mutex<HashMap<String, VecDeque<String>>>>;
 
 #[derive(Debug)]
 pub struct PluginHost {
     root_dir: PathBuf,
+    host_version: String,
     running_plugins: Vec<RunningPlugin>,
     failures: Vec<PluginLoadFailure>,
+    logs: SharedPluginLogs,
 }
 
 impl PluginHost {
@@ -36,26 +42,22 @@ impl PluginHost {
         fs::create_dir_all(&root_dir)
             .with_context(|| format!("create plugin directory {}", root_dir.display()))?;
 
-        let discovered = discover_plugins(&root_dir)?;
-        let mut running_plugins = Vec::new();
-        let mut failures = Vec::new();
+        let mut host = Self {
+            root_dir,
+            host_version: host_version.to_string(),
+            running_plugins: Vec::new(),
+            failures: Vec::new(),
+            logs: Arc::new(Mutex::new(HashMap::new())),
+        };
 
-        for plugin in discovered {
+        for plugin in discover_plugins(&host.root_dir)? {
             if !plugin.manifest.autostart {
                 continue;
             }
-
-            match RunningPlugin::start(plugin, host_version, DEFAULT_HANDSHAKE_TIMEOUT) {
-                Ok(plugin) => running_plugins.push(plugin),
-                Err(error) => failures.push(error),
-            }
+            let _ = host.start_plugin_from_discovered(plugin);
         }
 
-        Ok(Self {
-            root_dir,
-            running_plugins,
-            failures,
-        })
+        Ok(host)
     }
 
     pub fn root_dir(&self) -> &Path {
@@ -68,6 +70,102 @@ impl PluginHost {
 
     pub fn failures(&self) -> &[PluginLoadFailure] {
         &self.failures
+    }
+
+    pub fn recent_logs(&self, plugin_id: &str) -> Vec<String> {
+        self.logs
+            .lock()
+            .ok()
+            .and_then(|logs| logs.get(plugin_id).cloned())
+            .map(|logs| logs.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn start_plugin(&mut self, plugin_id: &str) -> Result<(), PluginLoadFailure> {
+        if self
+            .running_plugins
+            .iter()
+            .any(|plugin| plugin.id() == plugin_id)
+        {
+            return Ok(());
+        }
+
+        let discovered = discover_plugins(&self.root_dir)
+            .map_err(|error| PluginLoadFailure::new(plugin_id.to_string(), error))?
+            .into_iter()
+            .find(|plugin| plugin.manifest.id == plugin_id)
+            .ok_or_else(|| {
+                PluginLoadFailure::new(plugin_id.to_string(), anyhow!("plugin manifest not found"))
+            })?;
+
+        self.start_plugin_from_discovered(discovered)
+    }
+
+    pub fn stop_plugin(&mut self, plugin_id: &str) -> Result<(), String> {
+        let Some(index) = self
+            .running_plugins
+            .iter()
+            .position(|plugin| plugin.id() == plugin_id)
+        else {
+            return Err(format!("Plugin `{plugin_id}` is not running"));
+        };
+
+        let mut plugin = self.running_plugins.remove(index);
+        plugin.shutdown().map_err(|error| error.to_string())?;
+        self.record_log(plugin_id, "plugin stopped by host".to_string());
+        self.failures
+            .retain(|failure| failure.plugin_id() != plugin_id);
+        Ok(())
+    }
+
+    pub fn invoke_command(&mut self, plugin_id: &str, command_id: &str) -> Result<(), String> {
+        let Some(plugin) = self
+            .running_plugins
+            .iter_mut()
+            .find(|plugin| plugin.id() == plugin_id)
+        else {
+            return Err(format!("Plugin `{plugin_id}` is not running"));
+        };
+
+        plugin
+            .invoke_command(command_id)
+            .map_err(|error| error.to_string())?;
+        self.record_log(plugin_id, format!("invoked command `{command_id}`"));
+        Ok(())
+    }
+
+    fn start_plugin_from_discovered(
+        &mut self,
+        discovered: DiscoveredPlugin,
+    ) -> Result<(), PluginLoadFailure> {
+        let plugin_id = discovered.manifest.id.clone();
+        self.failures
+            .retain(|failure| failure.plugin_id() != plugin_id);
+
+        match RunningPlugin::start(
+            discovered,
+            &self.host_version,
+            DEFAULT_HANDSHAKE_TIMEOUT,
+            self.logs.clone(),
+        ) {
+            Ok(plugin) => {
+                self.record_log(&plugin_id, "plugin started".to_string());
+                self.running_plugins.push(plugin);
+                Ok(())
+            }
+            Err(error) => {
+                self.record_log(
+                    &plugin_id,
+                    format!("plugin failed to start: {}", error.message()),
+                );
+                self.failures.push(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    fn record_log(&self, plugin_id: &str, line: String) {
+        record_plugin_log(&self.logs, plugin_id, line);
     }
 }
 
@@ -94,6 +192,7 @@ impl RunningPlugin {
         discovered: DiscoveredPlugin,
         host_version: &str,
         handshake_timeout: Duration,
+        logs: SharedPluginLogs,
     ) -> Result<Self, PluginLoadFailure> {
         let entrypoint = discovered.resolved_entrypoint();
         if !entrypoint.exists() {
@@ -143,12 +242,17 @@ impl RunningPlugin {
 
         let plugin_id = discovered.manifest.id.clone();
         let permissions = discovered.manifest.permissions.clone();
-        let (plugin_hello, runtime_thread) =
-            start_runtime_thread(stdout, plugin_id.clone(), permissions, handshake_timeout)
-                .map_err(|error| {
-                    let _ = child.kill();
-                    PluginLoadFailure::new(plugin_id, error)
-                })?;
+        let (plugin_hello, runtime_thread) = start_runtime_thread(
+            stdout,
+            plugin_id.clone(),
+            permissions,
+            logs,
+            handshake_timeout,
+        )
+        .map_err(|error| {
+            let _ = child.kill();
+            PluginLoadFailure::new(plugin_id, error)
+        })?;
 
         if plugin_hello.protocol_version != PLUGIN_PROTOCOL_VERSION {
             let _ = child.kill();
@@ -220,6 +324,16 @@ impl RunningPlugin {
         }
 
         Ok(())
+    }
+
+    pub fn invoke_command(&mut self, command_id: &str) -> Result<()> {
+        write_message(
+            &mut self.stdin,
+            &HostRpcMessage::InvokeCommand(HostCommandInvocation {
+                command_id: command_id.to_string(),
+            }),
+        )
+        .context("send plugin command invocation")
     }
 }
 
@@ -298,6 +412,7 @@ fn start_runtime_thread(
     stdout: ChildStdout,
     plugin_id: String,
     permissions: Vec<PluginPermission>,
+    logs: SharedPluginLogs,
     timeout: Duration,
 ) -> Result<(PluginHello, JoinHandle<()>)> {
     let (sender, receiver) = mpsc::channel();
@@ -325,28 +440,31 @@ fn start_runtime_thread(
         loop {
             match reader.read_line(&mut line) {
                 Ok(0) => {
+                    record_plugin_log(&logs, &thread_plugin_id, "stdout closed".to_string());
                     log::debug!("Plugin {thread_plugin_id} closed stdout");
                     break;
                 }
                 Ok(_) => {
                     let trimmed = line.trim_end();
                     match serde_json::from_str::<PluginRpcMessage>(trimmed) {
-                        Ok(message) => {
-                            log_plugin_runtime_message(&thread_plugin_id, &permissions, message)
-                        }
+                        Ok(message) => log_plugin_runtime_message(
+                            &thread_plugin_id,
+                            &permissions,
+                            &logs,
+                            message,
+                        ),
                         Err(error) => {
-                            log::warn!(
-                                "Plugin {} emitted invalid JSON message: {} ({})",
-                                thread_plugin_id,
-                                trimmed,
-                                error
-                            );
+                            let entry = format!("invalid JSON message: {} ({})", trimmed, error);
+                            record_plugin_log(&logs, &thread_plugin_id, entry.clone());
+                            log::warn!("Plugin {} emitted {}", thread_plugin_id, entry);
                         }
                     }
                     line.clear();
                 }
                 Err(error) => {
-                    log::warn!("Plugin {} stdout read failed: {}", thread_plugin_id, error);
+                    let entry = format!("stdout read failed: {error}");
+                    record_plugin_log(&logs, &thread_plugin_id, entry.clone());
+                    log::warn!("Plugin {} {}", thread_plugin_id, entry);
                     break;
                 }
             }
@@ -366,43 +484,47 @@ fn start_runtime_thread(
 fn log_plugin_runtime_message(
     plugin_id: &str,
     permissions: &[PluginPermission],
+    logs: &SharedPluginLogs,
     message: PluginRpcMessage,
 ) {
     match message {
         PluginRpcMessage::Hello(_) => {
-            log::warn!(
-                "Plugin {} sent duplicate hello message after handshake",
-                plugin_id
-            );
+            let entry = "duplicate hello after handshake".to_string();
+            record_plugin_log(logs, plugin_id, entry.clone());
+            log::warn!("Plugin {} {}", plugin_id, entry);
         }
-        PluginRpcMessage::Log(log_message) => match log_message.level {
-            termy_plugin_core::PluginLogLevel::Trace => {
-                log::trace!("Plugin {}: {}", plugin_id, log_message.message)
+        PluginRpcMessage::Log(log_message) => {
+            record_plugin_log(logs, plugin_id, log_message.message.clone());
+            match log_message.level {
+                termy_plugin_core::PluginLogLevel::Trace => {
+                    log::trace!("Plugin {}: {}", plugin_id, log_message.message)
+                }
+                termy_plugin_core::PluginLogLevel::Debug => {
+                    log::debug!("Plugin {}: {}", plugin_id, log_message.message)
+                }
+                termy_plugin_core::PluginLogLevel::Info => {
+                    log::info!("Plugin {}: {}", plugin_id, log_message.message)
+                }
+                termy_plugin_core::PluginLogLevel::Warn => {
+                    log::warn!("Plugin {}: {}", plugin_id, log_message.message)
+                }
+                termy_plugin_core::PluginLogLevel::Error => {
+                    log::error!("Plugin {}: {}", plugin_id, log_message.message)
+                }
             }
-            termy_plugin_core::PluginLogLevel::Debug => {
-                log::debug!("Plugin {}: {}", plugin_id, log_message.message)
-            }
-            termy_plugin_core::PluginLogLevel::Info => {
-                log::info!("Plugin {}: {}", plugin_id, log_message.message)
-            }
-            termy_plugin_core::PluginLogLevel::Warn => {
-                log::warn!("Plugin {}: {}", plugin_id, log_message.message)
-            }
-            termy_plugin_core::PluginLogLevel::Error => {
-                log::error!("Plugin {}: {}", plugin_id, log_message.message)
-            }
-        },
+        }
         PluginRpcMessage::Pong => {
+            record_plugin_log(logs, plugin_id, "pong".to_string());
             log::debug!("Plugin {} responded with pong", plugin_id);
         }
         PluginRpcMessage::Toast(toast_message) => {
             if !permissions.contains(&PluginPermission::Notifications) {
-                log::warn!(
-                    "Plugin {} attempted to send a toast without notifications permission",
-                    plugin_id
-                );
+                let entry = "toast rejected: notifications permission missing".to_string();
+                record_plugin_log(logs, plugin_id, entry.clone());
+                log::warn!("Plugin {} {}", plugin_id, entry);
                 return;
             }
+            record_plugin_log(logs, plugin_id, format!("toast: {}", toast_message.message));
             enqueue_plugin_toast(plugin_id, toast_message);
         }
     }
@@ -418,6 +540,17 @@ fn enqueue_plugin_toast(plugin_id: &str, toast_message: PluginToastMessage) {
     let message = format!("{}: {}", plugin_id, toast_message.message);
     let duration = toast_message.duration_ms.map(Duration::from_millis);
     termy_toast::enqueue_toast(kind, message, duration);
+}
+
+fn record_plugin_log(logs: &SharedPluginLogs, plugin_id: &str, line: String) {
+    let Ok(mut logs) = logs.lock() else {
+        return;
+    };
+    let queue = logs.entry(plugin_id.to_string()).or_default();
+    queue.push_back(line);
+    while queue.len() > MAX_LOG_LINES_PER_PLUGIN {
+        queue.pop_front();
+    }
 }
 
 #[cfg(test)]
@@ -586,6 +719,140 @@ done
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, termy_toast::ToastKind::Success);
         assert_eq!(pending[0].message, "example.toast: toast from plugin");
+        assert!(
+            host.recent_logs("example.toast")
+                .iter()
+                .any(|line| line.contains("toast"))
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn can_stop_and_restart_plugin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("restart");
+        let plugin_dir = root.join("toggle-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.toggle","name":"Toggle Plugin","version":"0.1.0","capabilities":[]}}'
+while read line; do
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.toggle",
+                "name": "Toggle Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "autostart": false
+            }"#,
+        )
+        .expect("write manifest");
+
+        let mut host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+        assert!(host.running_plugins().is_empty());
+
+        host.start_plugin("example.toggle").expect("start plugin");
+        assert_eq!(host.running_plugins().len(), 1);
+
+        host.stop_plugin("example.toggle").expect("stop plugin");
+        assert!(host.running_plugins().is_empty());
+
+        host.start_plugin("example.toggle").expect("restart plugin");
+        assert_eq!(host.running_plugins().len(), 1);
+        assert!(
+            host.recent_logs("example.toggle")
+                .iter()
+                .any(|line| line.contains("started"))
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoking_plugin_command_reaches_plugin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = termy_toast::drain_pending();
+
+        let root = unique_temp_dir("invoke");
+        let plugin_dir = root.join("invoke-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.invoke","name":"Invoke Plugin","version":"0.1.0","capabilities":["command_provider"]}}'
+while read line; do
+  if [ "$line" = '{"type":"invoke_command","payload":{"command_id":"example.invoke.run"}}' ]; then
+    printf '%s\n' '{"type":"log","payload":{"level":"info","message":"invoke command received"}}'
+    printf '%s\n' '{"type":"toast","payload":{"level":"success","message":"invoke worked","duration_ms":500}}'
+  fi
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.invoke",
+                "name": "Invoke Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "permissions": ["notifications"]
+            }"#,
+        )
+        .expect("write manifest");
+
+        let mut host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+        host.start_plugin("example.invoke").ok();
+        host.invoke_command("example.invoke", "example.invoke.run")
+            .expect("invoke command");
+        thread::sleep(Duration::from_millis(50));
+        let pending = termy_toast::drain_pending();
+
+        assert!(
+            pending
+                .iter()
+                .any(|toast| toast.message.contains("invoke worked"))
+        );
+        assert!(
+            host.recent_logs("example.invoke")
+                .iter()
+                .any(|line| line.contains("invoke"))
+        );
 
         drop(host);
         let _ = fs::remove_dir_all(root);

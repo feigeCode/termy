@@ -607,6 +607,50 @@ impl SettingsWindow {
                                 })),
                         ),
                 )
+                .child(
+                    div()
+                        .id("plugins-install-directory-btn")
+                        .w(px(150.0))
+                        .px_4()
+                        .py_2()
+                        .rounded(px(0.0))
+                        .bg(bg_input)
+                        .border_1()
+                        .border_color(border_color)
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(text_secondary)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                        .child("Install From Folder")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            let plugin_root = view.plugin_directory.clone();
+                            cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                let mut dialog = rfd::AsyncFileDialog::new().set_title("Install Plugin From Folder");
+                                if let Some(path) = plugin_root {
+                                    dialog = dialog.set_directory(path);
+                                }
+                                let folder = dialog.pick_folder().await;
+                                let Some(folder) = folder else {
+                                    return;
+                                };
+                                let result = crate::plugins::install_plugin_from_folder(folder.path());
+                                let _ = cx.update(|cx| {
+                                    this.update(cx, |view, cx| {
+                                        match result {
+                                            Ok(message) => {
+                                                view.refresh_plugin_inventory();
+                                                termy_toast::success(message);
+                                            }
+                                            Err(error) => termy_toast::error(error),
+                                        }
+                                        cx.notify();
+                                    })
+                                });
+                            })
+                            .detach();
+                        })),
+                )
                 .into_any_element(),
         ];
 
@@ -1322,9 +1366,17 @@ impl SettingsWindow {
         } else {
             "Enable Autostart"
         };
+        let run_label = if plugin.is_running { "Stop" } else { "Start" };
         let plugin_id = plugin.id.clone();
+        let plugin_id_for_run = plugin.id.clone();
+        let plugin_id_for_remove = plugin.id.clone();
         let plugin_root = plugin.root_dir.clone();
         let next_autostart = !plugin.autostart;
+        let logs = if plugin.recent_logs.is_empty() {
+            "No runtime logs yet.".to_string()
+        } else {
+            plugin.recent_logs.join("\n")
+        };
 
         div()
             .py_4()
@@ -1352,7 +1404,12 @@ impl SettingsWindow {
                                     .text_color(text_primary)
                                     .child(format!("{} v{}", plugin.name, plugin.version)),
                             )
-                            .child(div().text_xs().text_color(text_muted).child(plugin.id.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(text_muted)
+                                    .child(plugin.id.clone()),
+                            )
                             .child(
                                 div()
                                     .text_xs()
@@ -1375,12 +1432,10 @@ impl SettingsWindow {
             )
             .child(div().text_xs().text_color(text_secondary).child(status))
             .when(plugin.author.is_some(), |s| {
-                s.child(
-                    div()
-                        .text_xs()
-                        .text_color(text_muted)
-                        .child(format!("Author: {}", plugin.author.clone().unwrap_or_default())),
-                )
+                s.child(div().text_xs().text_color(text_muted).child(format!(
+                    "Author: {}",
+                    plugin.author.clone().unwrap_or_default()
+                )))
             })
             .child(
                 div()
@@ -1412,8 +1467,62 @@ impl SettingsWindow {
             )
             .child(
                 div()
+                    .py_3()
+                    .px_3()
+                    .bg(bg_input)
+                    .border_1()
+                    .border_color(self.border_color())
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(text_primary)
+                            .child("Recent Logs"),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_xs()
+                            .text_color(text_muted)
+                            .line_height(px(17.0))
+                            .child(logs),
+                    ),
+            )
+            .child(
+                div()
                     .flex()
                     .gap_2()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("plugin-run-{}", plugin.id)))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(bg_input)
+                            .border_1()
+                            .border_color(self.border_color())
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(text_secondary)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .child(run_label)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                let result = if plugin.is_running {
+                                    crate::plugins::stop_plugin(&plugin_id_for_run)
+                                } else {
+                                    crate::plugins::start_plugin(&plugin_id_for_run)
+                                };
+                                match result {
+                                    Ok(()) => {
+                                        view.refresh_plugin_inventory();
+                                        termy_toast::success("Updated plugin runtime");
+                                    }
+                                    Err(error) => termy_toast::error(error),
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         div()
                             .id(SharedString::from(format!("plugin-toggle-{}", plugin.id)))
@@ -1436,9 +1545,7 @@ impl SettingsWindow {
                                 ) {
                                     Ok(()) => {
                                         view.refresh_plugin_inventory();
-                                        termy_toast::success(
-                                            "Saved plugin manifest. Restart Termy to apply startup changes.",
-                                        );
+                                        termy_toast::success("Saved plugin manifest");
                                     }
                                     Err(error) => termy_toast::error(error),
                                 }
@@ -1465,6 +1572,51 @@ impl SettingsWindow {
                                     termy_toast::error(error);
                                 }
                                 cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("plugin-remove-{}", plugin.id)))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(bg_input)
+                            .border_1()
+                            .border_color(self.border_color())
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(text_secondary)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .child("Remove")
+                            .on_click(cx.listener(move |_view, _, _, cx| {
+                                let plugin_id = plugin_id_for_remove.clone();
+                                cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                    let confirmed = termy_native_sdk::confirm(
+                                        "Remove Plugin",
+                                        &format!(
+                                            "Remove plugin `{}` from the plugin directory? This deletes the installed files.",
+                                            plugin_id
+                                        ),
+                                    );
+                                    if !confirmed {
+                                        return;
+                                    }
+                                    let result = crate::plugins::remove_plugin(&plugin_id);
+                                    let _ = cx.update(|cx| {
+                                        this.update(cx, |view, cx| {
+                                            match result {
+                                                Ok(message) => {
+                                                    view.refresh_plugin_inventory();
+                                                    termy_toast::success(message);
+                                                }
+                                                Err(error) => termy_toast::error(error),
+                                            }
+                                            cx.notify();
+                                        })
+                                    });
+                                })
+                                .detach();
                             })),
                     ),
             )

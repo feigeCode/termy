@@ -12,7 +12,8 @@
     "commands": [
       {
         "id": "example.hello-rust.run",
-        "title": "Run Hello Rust"
+        "title": "Run Hello Rust",
+        "description": "Show a toast from the Rust example plugin"
       }
     ]
   }

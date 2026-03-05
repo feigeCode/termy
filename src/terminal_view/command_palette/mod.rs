@@ -162,10 +162,11 @@ impl TerminalView {
     }
 
     fn command_palette_command_items_for_state(
+        &self,
         install_cli_available: bool,
         tmux_enabled: bool,
     ) -> Vec<CommandPaletteItem> {
-        CommandAction::palette_entries()
+        let mut items = CommandAction::palette_entries()
             .into_iter()
             .map(|entry| {
                 Self::command_palette_command_item_for_state(
@@ -176,12 +177,27 @@ impl TerminalView {
                     tmux_enabled,
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        if let Ok(plugin_entries) = crate::plugins::command_palette_entries() {
+            items.extend(plugin_entries.into_iter().map(|entry| {
+                CommandPaletteItem::plugin_command(
+                    entry.title,
+                    entry.keywords,
+                    entry.plugin_id,
+                    entry.command_id,
+                    entry.enabled,
+                    (!entry.enabled).then_some("plugin not running"),
+                )
+            }));
+        }
+
+        items
     }
 
     fn command_palette_items_for_mode(&self, mode: CommandPaletteMode) -> Vec<CommandPaletteItem> {
         match mode {
-            CommandPaletteMode::Commands => Self::command_palette_command_items_for_state(
+            CommandPaletteMode::Commands => self.command_palette_command_items_for_state(
                 self.install_cli_available(),
                 self.runtime_uses_tmux(),
             ),
@@ -545,6 +561,21 @@ impl TerminalView {
                 }
                 self.execute_command_palette_action(action, window, cx)
             }
+            CommandPaletteItemKind::PluginCommand {
+                plugin_id,
+                command_id,
+            } => {
+                if !item.enabled {
+                    termy_toast::info("Start the plugin to use this command");
+                    self.notify_overlay(cx);
+                    return;
+                }
+                self.execute_plugin_command_palette_action(
+                    plugin_id.as_str(),
+                    command_id.as_str(),
+                    cx,
+                );
+            }
             CommandPaletteItemKind::Theme(theme_id) => {
                 self.select_theme_from_palette(theme_id.as_str(), cx)
             }
@@ -723,6 +754,25 @@ impl TerminalView {
             | CommandAction::MinimizeWindow
             | CommandAction::InstallCli
             | CommandAction::ToggleAiInput => {}
+        }
+    }
+
+    fn execute_plugin_command_palette_action(
+        &mut self,
+        plugin_id: &str,
+        command_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_command_palette(cx);
+        match crate::plugins::invoke_plugin_command(plugin_id, command_id) {
+            Ok(()) => {
+                termy_toast::success(format!("Ran {}", command_id));
+                self.notify_overlay(cx);
+            }
+            Err(error) => {
+                termy_toast::error(error);
+                self.notify_overlay(cx);
+            }
         }
     }
 

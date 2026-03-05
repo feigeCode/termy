@@ -103,6 +103,7 @@ pub struct PluginCommandContribution {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum HostRpcMessage {
     Hello(HostHello),
+    InvokeCommand(HostCommandInvocation),
     Shutdown,
     Ping,
 }
@@ -113,6 +114,11 @@ pub struct HostHello {
     pub host_name: String,
     pub host_version: String,
     pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostCommandInvocation {
+    pub command_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

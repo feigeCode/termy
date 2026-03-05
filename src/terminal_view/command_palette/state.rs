@@ -15,6 +15,10 @@ pub(in super::super) enum CommandPaletteMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CommandPaletteItemKind {
     Command(CommandAction),
+    PluginCommand {
+        plugin_id: String,
+        command_id: String,
+    },
     Theme(String),
     TmuxSessionAttachOrSwitch {
         session_name: String,
@@ -85,6 +89,27 @@ impl CommandPaletteItem {
             status_hint: None,
             tmux_status_hint: None,
             kind: CommandPaletteItemKind::Theme(theme_id),
+        }
+    }
+
+    pub(super) fn plugin_command(
+        title: String,
+        keywords: String,
+        plugin_id: String,
+        command_id: String,
+        enabled: bool,
+        status_hint: Option<&'static str>,
+    ) -> Self {
+        Self {
+            title,
+            keywords,
+            enabled,
+            status_hint,
+            tmux_status_hint: None,
+            kind: CommandPaletteItemKind::PluginCommand {
+                plugin_id,
+                command_id,
+            },
         }
     }
 }

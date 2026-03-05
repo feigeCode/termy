@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "example.test-drive",
+  "name": "Test Drive Plugin",
+  "version": "0.1.0",
+  "description": "Shell plugin for testing install, start/stop, logs, and toasts from the Plugins tab.",
+  "author": "Termy",
+  "runtime": "executable",
+  "entrypoint": "./plugin.sh",
+  "autostart": false,
+  "permissions": ["notifications"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "example.test-drive.ping",
+        "title": "Test Drive Ping"
+      }
+    ]
+  }
+}

@@ -101,6 +101,8 @@ session.send_toast(PluginToastLevel::Info, "hello from plugin", Some(2500))?;
 - runtime plugin log consumption
 - startup failure isolation
 - plugin shutdown on host drop
+- live start/stop from the app-host runtime
+- recent per-plugin log buffering for inspection
 
 ## CLI inspection
 
@@ -109,6 +111,22 @@ Use the CLI to inspect discovered manifests without starting the UI:
 ```bash
 cargo run -p termy_cli -- -list-plugins
 ```
+
+## Settings integration
+
+The Settings `Plugins` tab currently supports:
+
+- inspecting discovered plugins
+- opening the plugin directory
+- installing a plugin from a local folder
+- removing an installed plugin
+- toggling `autostart` in the manifest
+- live `Start` / `Stop` for currently discovered plugins
+- viewing recent runtime log lines captured by the host
+
+Example install target:
+
+- [docs/examples/plugins/test-drive/termy-plugin.json](/Users/lassevestergaard/Documents/dev/termy/docs/examples/plugins/test-drive/termy-plugin.json)
 
 ## Not implemented yet
 

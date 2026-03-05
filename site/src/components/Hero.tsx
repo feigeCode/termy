@@ -1,8 +1,13 @@
-import { Check, Copy } from "lucide-react";
-import { type JSX, useEffect, useRef, useState } from "react";
+import { Check, Copy, Plus, X } from "lucide-react";
+import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 import { InteractiveTerminal } from "@/components/InteractiveTerminal";
 import { Button } from "@/components/ui/button";
 import { getPreferredDownload, type Release } from "@/hooks/useGitHubRelease";
+
+interface TerminalTab {
+  id: number;
+  title: string;
+}
 
 const installCommands = {
   homebrew:
@@ -35,6 +40,92 @@ function getPackageManagerButtonClass(
   return `${baseClassName} text-muted-foreground hover:text-foreground`;
 }
 
+const MAX_TABS = 3;
+
+function TerminalWithTabs(): JSX.Element {
+  const [tabs, setTabs] = useState<TerminalTab[]>([
+    { id: 0, title: "termy" },
+  ]);
+  const [activeTabId, setActiveTabId] = useState(0);
+  const nextTabIdRef = useRef(1);
+
+  const addTab = useCallback(() => {
+    if (tabs.length >= MAX_TABS) return;
+    const id = nextTabIdRef.current++;
+    setTabs((prev) => [...prev, { id, title: "~" }]);
+    setActiveTabId(id);
+  }, [tabs.length]);
+
+  const closeTab = useCallback(
+    (tabId: number) => {
+      if (tabs.length <= 1) return;
+      setTabs((prev) => {
+        const updated = prev.filter((t) => t.id !== tabId);
+        if (activeTabId === tabId) {
+          const closedIndex = prev.findIndex((t) => t.id === tabId);
+          const newActive =
+            updated[Math.min(closedIndex, updated.length - 1)];
+          setActiveTabId(newActive.id);
+        }
+        return updated;
+      });
+    },
+    [tabs, activeTabId],
+  );
+
+  return (
+    <div className="terminal-window">
+      <div className="terminal-header">
+        <div className="terminal-dots">
+          <div className="terminal-dot bg-[#ff5f57]" />
+          <div className="terminal-dot bg-[#febc2e]" />
+          <div className="terminal-dot bg-[#28c840]" />
+        </div>
+
+        <div className="terminal-tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`terminal-tab ${activeTabId === tab.id ? "active" : ""}`}
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              <span className="terminal-tab-title">{tab.title}</span>
+              {tabs.length > 1 && (
+                <span
+                  className="terminal-tab-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                >
+                  <X size={10} />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {tabs.length < MAX_TABS && (
+          <button
+            className="terminal-tab-add"
+            onClick={addTab}
+            aria-label="New tab"
+          >
+            <Plus size={14} />
+          </button>
+        )}
+      </div>
+
+      {tabs.map(
+        (tab) =>
+          activeTabId === tab.id && (
+            <InteractiveTerminal key={tab.id} />
+          ),
+      )}
+    </div>
+  );
+}
+
 export function Hero({ release }: HeroProps): JSX.Element {
   const [pm, setPm] = useState<PackageManager>("homebrew");
   const [copied, setCopied] = useState(false);
@@ -63,8 +154,18 @@ export function Hero({ release }: HeroProps): JSX.Element {
     copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
   }
 
+  const pmButtons = packageManagers.map((key) => (
+    <button
+      key={key}
+      onClick={() => handlePackageManagerChange(key)}
+      className={getPackageManagerButtonClass(pm, key)}
+    >
+      {pmLabels[key]}
+    </button>
+  ));
+
   return (
-    <section className="relative pt-28 pb-20">
+    <section className="relative pt-20 sm:pt-28 pb-20">
       <div className="relative">
         {/* Headline */}
         <div className="text-center max-w-4xl mx-auto px-6">
@@ -163,52 +264,39 @@ export function Hero({ release }: HeroProps): JSX.Element {
             className="mt-6 mx-auto w-full max-w-xl animate-blur-in"
             style={{ animationDelay: "350ms" }}
           >
-            <div className="flex items-center rounded-lg border border-border/50 bg-secondary/50 h-10 overflow-hidden">
-              <div className="flex items-center gap-1 px-3 shrink-0 border-r border-border/50">
-                {packageManagers.map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => handlePackageManagerChange(key)}
-                    className={getPackageManagerButtonClass(pm, key)}
-                  >
-                    {pmLabels[key]}
-                  </button>
-                ))}
+            <div className="rounded-lg border border-border/50 bg-secondary/50 overflow-hidden">
+              <div className="flex items-center gap-1 px-3 py-1.5 shrink-0 border-b border-border/50 sm:hidden">
+                {pmButtons}
               </div>
-              <code className="flex-1 px-3 font-mono text-xs text-primary truncate text-left">
-                {installCommands[pm]}
-              </code>
-              <button
-                onClick={handleCopy}
-                className="px-3 h-full text-muted-foreground hover:text-foreground transition-colors shrink-0 border-l border-border/50"
-                aria-label="Copy to clipboard"
-              >
-                {copied ? (
-                  <Check className="w-3.5 h-3.5 text-green-500" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
+              <div className="flex items-center h-10">
+                <div className="hidden sm:flex items-center gap-1 px-3 shrink-0 border-r border-border/50">
+                  {pmButtons}
+                </div>
+                <code className="flex-1 px-3 font-mono text-xs text-primary truncate text-left">
+                  {installCommands[pm]}
+                </code>
+                <button
+                  onClick={handleCopy}
+                  className="px-3 h-full text-muted-foreground hover:text-foreground transition-colors shrink-0 border-l border-border/50"
+                  aria-label="Copy to clipboard"
+                >
+                  {copied ? (
+                    <Check className="w-3.5 h-3.5 text-green-500" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Terminal Preview */}
         <div
-          className="mt-14 mx-auto max-w-5xl px-6 animate-blur-in"
+          className="mt-10 sm:mt-14 mx-auto max-w-5xl px-6 animate-blur-in"
           style={{ animationDelay: "450ms" }}
         >
-          <div className="terminal-window">
-            <div className="terminal-header">
-              <div className="terminal-dots">
-                <div className="terminal-dot bg-[#ff5f57]" />
-                <div className="terminal-dot bg-[#febc2e]" />
-                <div className="terminal-dot bg-[#28c840]" />
-              </div>
-              <span className="terminal-header-title">Termy</span>
-            </div>
-            <InteractiveTerminal />
-          </div>
+          <TerminalWithTabs />
           <p
             className="mt-3 text-center text-xs text-muted-foreground/50 animate-blur-in"
             style={{ animationDelay: "600ms" }}

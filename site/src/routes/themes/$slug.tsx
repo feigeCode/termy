@@ -3,65 +3,16 @@ import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   type Theme,
+  type ThemePalette,
   type ThemeVersion,
+  fallbackPalette,
   fetchThemeWithVersions,
 } from "@/lib/theme-store";
 
 export const Route = createFileRoute("/themes/$slug")({
   component: ThemeDetailPage,
 });
-
-interface ThemePalette {
-  foreground?: string;
-  background?: string;
-  cursor?: string;
-  black?: string;
-  red?: string;
-  green?: string;
-  yellow?: string;
-  blue?: string;
-  magenta?: string;
-  cyan?: string;
-  white?: string;
-  bright_black?: string;
-  bright_red?: string;
-  bright_green?: string;
-  bright_yellow?: string;
-  bright_blue?: string;
-  bright_magenta?: string;
-  bright_cyan?: string;
-  bright_white?: string;
-}
-
-const fallbackPalette: Required<ThemePalette> = {
-  foreground: "#d1d5db",
-  background: "#141a24",
-  cursor: "#d1d5db",
-  black: "#2e3436",
-  red: "#cc0000",
-  green: "#4e9a06",
-  yellow: "#c4a000",
-  blue: "#3465a4",
-  magenta: "#75507b",
-  cyan: "#06989a",
-  white: "#d3d7cf",
-  bright_black: "#555753",
-  bright_red: "#ef2929",
-  bright_green: "#8ae234",
-  bright_yellow: "#fce94f",
-  bright_blue: "#729fcf",
-  bright_magenta: "#ad7fa8",
-  bright_cyan: "#34e2e2",
-  bright_white: "#eeeeec",
-};
 
 function ThemeDetailPage(): JSX.Element {
   const { slug } = Route.useParams();
@@ -154,17 +105,24 @@ function ThemeDetailPage(): JSX.Element {
           </Button>
         </div>
 
-        <div className="rounded-3xl border border-border/50 bg-gradient-to-br from-card via-card to-secondary/50 p-6 md:p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Theme
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">
-            {theme.name}
+        {/* Hero */}
+        <div className="text-center max-w-3xl mx-auto px-6">
+          <h1
+            className="text-4xl md:text-6xl font-bold tracking-tight animate-blur-in"
+            style={{ animationDelay: "0ms" }}
+          >
+            <span className="gradient-text">{theme.name}</span>
           </h1>
-          <p className="mt-3 max-w-3xl text-muted-foreground">
+          <p
+            className="mt-4 text-lg text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "100ms" }}
+          >
             {theme.description || "No description provided."}
           </p>
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+          <div
+            className="mt-4 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
             <span>@{theme.githubUsernameClaim}</span>
             {theme.latestVersion && (
               <span className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
@@ -174,93 +132,103 @@ function ThemeDetailPage(): JSX.Element {
           </div>
         </div>
 
+        {/* Terminal preview */}
         <div
-          className="terminal-window"
-          style={{
-            background: palette.background ?? fallbackPalette.background,
-            borderColor: palette.bright_black ?? fallbackPalette.bright_black,
-            boxShadow:
-              "0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03)",
-          }}
+          className="animate-blur-in"
+          style={{ animationDelay: "300ms" }}
         >
           <div
-            className="terminal-header"
+            className="terminal-window"
             style={{
-              background: palette.black ?? fallbackPalette.black,
-              borderBottomColor:
-                palette.bright_black ?? fallbackPalette.bright_black,
+              background: palette.background ?? fallbackPalette.background,
+              borderColor: palette.bright_black ?? fallbackPalette.bright_black,
+              boxShadow:
+                "0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03)",
             }}
           >
-            <div className="terminal-dots">
-              <div
-                className="terminal-dot"
-                style={{ backgroundColor: palette.red ?? fallbackPalette.red }}
-              />
-              <div
-                className="terminal-dot"
-                style={{
-                  backgroundColor: palette.yellow ?? fallbackPalette.yellow,
-                }}
-              />
-              <div
-                className="terminal-dot"
-                style={{
-                  backgroundColor: palette.green ?? fallbackPalette.green,
-                }}
-              />
-            </div>
-            <span
-              className="terminal-header-title"
+            <div
+              className="terminal-header"
               style={{
-                color: palette.foreground ?? fallbackPalette.foreground,
+                background: palette.black ?? fallbackPalette.black,
+                borderBottomColor:
+                  palette.bright_black ?? fallbackPalette.bright_black,
               }}
             >
-              {theme.slug}
-            </span>
+              <div className="terminal-dots">
+                <div
+                  className="terminal-dot"
+                  style={{ backgroundColor: palette.red ?? fallbackPalette.red }}
+                />
+                <div
+                  className="terminal-dot"
+                  style={{
+                    backgroundColor: palette.yellow ?? fallbackPalette.yellow,
+                  }}
+                />
+                <div
+                  className="terminal-dot"
+                  style={{
+                    backgroundColor: palette.green ?? fallbackPalette.green,
+                  }}
+                />
+              </div>
+              <span
+                className="terminal-header-title"
+                style={{
+                  color: palette.foreground ?? fallbackPalette.foreground,
+                }}
+              >
+                {theme.slug}
+              </span>
+            </div>
+            <ThemePreviewTerminal palette={palette} theme={theme} />
           </div>
-          <ThemePreviewTerminal palette={palette} theme={theme} />
         </div>
 
-        <Card className="border-border/60">
-          <CardHeader>
-            <CardTitle>Version History</CardTitle>
-            <CardDescription>
+        {/* Version History */}
+        <div
+          className="animate-blur-in"
+          style={{ animationDelay: "400ms" }}
+        >
+          <div className="rounded-xl border border-border/40 bg-card/30 p-5 sm:p-6">
+            <h2 className="text-lg font-semibold">Version History</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
               {versions.length} published versions
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {versions.map((version) => (
-              <div
-                key={version.id}
-                className="rounded-lg border border-border/60 px-3 py-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{version.version}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(version.publishedAt).toLocaleString()}
-                    </span>
+            </p>
+            <div className="mt-4 space-y-2">
+              {versions.map((version) => (
+                <div
+                  key={version.id}
+                  className="rounded-lg border border-border/60 border-l-2 border-l-green-500/60 px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{version.version}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(version.publishedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    {version.fileUrl && (
+                      <a
+                        href={version.fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Download JSON
+                      </a>
+                    )}
                   </div>
-                  {version.fileUrl && (
-                    <a
-                      href={version.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-primary hover:underline"
-                    >
-                      Download JSON
-                    </a>
+                  {version.changelog && (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {version.changelog}
+                    </p>
                   )}
                 </div>
-                {version.changelog && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {version.changelog}
-                  </p>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -350,7 +318,7 @@ function ThemePreviewTerminal({
             {row.map((color, colorIndex) => (
               <span
                 key={colorIndex}
-                className="inline-block h-5 w-8"
+                className="inline-block h-5 flex-1"
                 style={{
                   backgroundColor:
                     color ??

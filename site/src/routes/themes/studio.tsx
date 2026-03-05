@@ -3,54 +3,11 @@ import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { type ThemePalette, fallbackPalette } from "@/lib/theme-store";
 
 export const Route = createFileRoute("/themes/studio")({
   component: ThemeStudioPage,
 });
-
-type ThemePalette = {
-  foreground: string;
-  background: string;
-  cursor: string;
-  black: string;
-  red: string;
-  green: string;
-  yellow: string;
-  blue: string;
-  magenta: string;
-  cyan: string;
-  white: string;
-  bright_black: string;
-  bright_red: string;
-  bright_green: string;
-  bright_yellow: string;
-  bright_blue: string;
-  bright_magenta: string;
-  bright_cyan: string;
-  bright_white: string;
-};
-
-const fallbackPalette: ThemePalette = {
-  foreground: "#d1d5db",
-  background: "#141a24",
-  cursor: "#d1d5db",
-  black: "#2e3436",
-  red: "#cc0000",
-  green: "#4e9a06",
-  yellow: "#c4a000",
-  blue: "#3465a4",
-  magenta: "#75507b",
-  cyan: "#06989a",
-  white: "#d3d7cf",
-  bright_black: "#555753",
-  bright_red: "#ef2929",
-  bright_green: "#8ae234",
-  bright_yellow: "#fce94f",
-  bright_blue: "#729fcf",
-  bright_magenta: "#ad7fa8",
-  bright_cyan: "#34e2e2",
-  bright_white: "#eeeeec",
-};
 
 const paletteFields = [
   "foreground",
@@ -72,10 +29,11 @@ const paletteFields = [
   "bright_magenta",
   "bright_cyan",
   "bright_white",
-] as const satisfies readonly (keyof ThemePalette)[];
+] as const satisfies readonly (keyof Required<ThemePalette>)[];
 
 function ThemeStudioPage(): JSX.Element {
-  const [palette, setPalette] = useState<ThemePalette>(fallbackPalette);
+  const [palette, setPalette] =
+    useState<Required<ThemePalette>>(fallbackPalette);
 
   const schemaJson = useMemo(() => {
     return JSON.stringify(
@@ -88,7 +46,10 @@ function ThemeStudioPage(): JSX.Element {
     );
   }, [palette]);
 
-  function handleColorChange(key: keyof ThemePalette, value: string): void {
+  function handleColorChange(
+    key: keyof Required<ThemePalette>,
+    value: string,
+  ): void {
     setPalette((previous) => ({
       ...previous,
       [key]: normalizeHex(value, previous[key]),
@@ -98,29 +59,41 @@ function ThemeStudioPage(): JSX.Element {
   return (
     <section className="pt-28 pb-16">
       <div className="mx-auto max-w-6xl space-y-6">
-        <div className="rounded-3xl border border-border/50 bg-gradient-to-br from-card via-card to-secondary/50 p-6 md:p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Theme Studio
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">
-            Build a theme live
+        {/* Hero */}
+        <div className="text-center max-w-3xl mx-auto px-6">
+          <h1
+            className="text-4xl md:text-6xl font-bold tracking-tight animate-blur-in"
+            style={{ animationDelay: "0ms" }}
+          >
+            Build a theme{" "}
+            <span className="gradient-text">live.</span>
           </h1>
-          <p className="mt-3 max-w-2xl text-muted-foreground">
+          <p
+            className="mt-4 text-lg text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "100ms" }}
+          >
             Tune every color and see the terminal preview update instantly.
           </p>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
+          <div
+            className="mt-6 flex flex-wrap items-center justify-center gap-3 animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
             <Button asChild variant="outline">
               <Link to="/themes">Back to store</Link>
             </Button>
           </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[380px_minmax(0,1fr)]">
+        {/* Content grid */}
+        <div
+          className="grid gap-6 lg:grid-cols-[380px_minmax(0,1fr)] animate-blur-in"
+          style={{ animationDelay: "300ms" }}
+        >
           <Card className="border-border/60">
             <CardHeader>
               <CardTitle>Palette</CardTitle>
             </CardHeader>
-            <CardContent className="max-h-[700px] space-y-3 overflow-auto pr-1">
+            <CardContent className="max-h-[400px] sm:max-h-[700px] space-y-3 overflow-auto pr-1">
               {paletteFields.map((field) => (
                 <label key={field} className="grid grid-cols-[1fr_auto] gap-3">
                   <div>
@@ -136,8 +109,10 @@ function ThemeStudioPage(): JSX.Element {
                   <input
                     type="color"
                     value={safeColorValue(palette[field])}
-                    onChange={(event) => handleColorChange(field, event.target.value)}
-                    className="mt-6 h-10 w-10 cursor-pointer rounded border border-border bg-background p-1"
+                    onChange={(event) =>
+                      handleColorChange(field, event.target.value)
+                    }
+                    className="mt-6 h-8 w-8 sm:h-10 sm:w-10 cursor-pointer rounded border border-border bg-background p-1"
                     aria-label={`Select ${field} color`}
                   />
                 </label>
@@ -163,7 +138,10 @@ function ThemeStudioPage(): JSX.Element {
                 }}
               >
                 <div className="terminal-dots">
-                  <div className="terminal-dot" style={{ background: palette.red }} />
+                  <div
+                    className="terminal-dot"
+                    style={{ background: palette.red }}
+                  />
                   <div
                     className="terminal-dot"
                     style={{ background: palette.yellow }}
@@ -205,7 +183,7 @@ function ThemeStudioPage(): JSX.Element {
 function StudioTerminalPreview({
   palette,
 }: {
-  palette: ThemePalette;
+  palette: Required<ThemePalette>;
 }): JSX.Element {
   const colorRows = [
     [

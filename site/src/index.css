@@ -162,14 +162,98 @@
 }
 
 .terminal-header {
-  @apply relative flex items-center px-4 py-2.5;
+  @apply flex items-center px-3 py-2;
   background: rgba(255, 255, 255, 0.02);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 10px;
 }
 
 .light .terminal-header {
   background: rgba(0, 0, 0, 0.02);
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.terminal-tabs {
+  @apply flex items-center gap-1 flex-1 min-w-0;
+}
+
+.terminal-tab {
+  @apply flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-mono cursor-pointer transition-colors;
+  color: #5c6370;
+  background: transparent;
+  border: none;
+  max-width: 140px;
+}
+
+.terminal-tab:hover {
+  color: #8b929e;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.terminal-tab.active {
+  color: #abb2bf;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.light .terminal-tab {
+  color: #8b95a5;
+}
+
+.light .terminal-tab:hover {
+  color: #5a6270;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.light .terminal-tab.active {
+  color: #383e49;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.terminal-tab-title {
+  @apply truncate;
+}
+
+.terminal-tab-close {
+  @apply flex items-center justify-center rounded opacity-0 transition-opacity;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.terminal-tab-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.light .terminal-tab-close:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.terminal-tab:hover .terminal-tab-close,
+.terminal-tab.active .terminal-tab-close {
+  opacity: 1;
+}
+
+.terminal-tab-add {
+  @apply flex items-center justify-center rounded transition-colors cursor-pointer flex-shrink-0;
+  width: 24px;
+  height: 24px;
+  color: #5c6370;
+  background: transparent;
+  border: none;
+}
+
+.terminal-tab-add:hover {
+  color: #abb2bf;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.light .terminal-tab-add {
+  color: #8b95a5;
+}
+
+.light .terminal-tab-add:hover {
+  color: #383e49;
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .terminal-header-title {
@@ -194,6 +278,13 @@
   max-height: 480px;
   line-height: 1.25;
   color: #d1d5db;
+}
+
+@media (max-width: 639px) {
+  .terminal-body {
+    max-height: 300px;
+    font-size: 11px;
+  }
 }
 
 .light .terminal-body {

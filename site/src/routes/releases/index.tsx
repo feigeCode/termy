@@ -16,7 +16,7 @@ function ReleasesPage(): JSX.Element {
   const hasPosts = !isLoading && !error && Boolean(posts);
 
   return (
-    <section className="pt-32 pb-20">
+    <section className="pt-24 sm:pt-32 pb-20">
       <div className="max-w-4xl mx-auto">
         <div className="mb-12">
           <Button asChild variant="ghost" size="sm" className="mb-4 text-muted-foreground hover:text-foreground">
@@ -25,7 +25,7 @@ function ReleasesPage(): JSX.Element {
               Back to home
             </Link>
           </Button>
-          <h1 className="text-4xl md:text-5xl font-bold">Changelog</h1>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold">Changelog</h1>
           <p className="mt-4 text-lg text-muted-foreground">
             All updates to Termy, from the latest to the oldest.
           </p>

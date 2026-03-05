@@ -3,23 +3,84 @@ import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   type AuthUser,
   type Theme,
-  fetchCurrentUser,
+  type ThemePalette,
+  fallbackPalette,
   fetchThemes,
+  fetchCurrentUser,
   getThemeLoginUrl,
 } from "@/lib/theme-store";
 
 export const Route = createFileRoute("/themes/")({
   component: ThemeStorePage,
 });
+
+function ThemeColorSwatch({ fileUrl }: { fileUrl: string | null }): JSX.Element {
+  const [palette, setPalette] = useState<ThemePalette | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!fileUrl) {
+      setLoading(false);
+      return;
+    }
+
+    void fetch(fileUrl)
+      .then((res) => res.json() as Promise<ThemePalette>)
+      .then((json) => setPalette({ ...fallbackPalette, ...json }))
+      .catch(() => setPalette(null))
+      .finally(() => setLoading(false));
+  }, [fileUrl]);
+
+  const colors = palette ?? fallbackPalette;
+
+  const swatchColors = [
+    colors.black,
+    colors.red,
+    colors.green,
+    colors.yellow,
+    colors.blue,
+    colors.magenta,
+    colors.cyan,
+    colors.white,
+  ];
+
+  if (loading) {
+    return (
+      <div
+        className="flex items-end gap-1 p-4 sm:p-5 h-[100px]"
+        style={{ background: fallbackPalette.background }}
+      >
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-sm animate-pulse bg-white/10"
+            style={{ height: `${30 + ((i * 17) % 50)}%` }}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-end gap-1 p-4 sm:p-5 h-[100px]"
+      style={{ background: colors.background ?? fallbackPalette.background }}
+    >
+      {swatchColors.map((color, i) => (
+        <div
+          key={i}
+          className="flex-1 rounded-sm"
+          style={{
+            backgroundColor: color ?? fallbackPalette.black,
+            height: `${30 + ((i * 17) % 50)}%`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 function ThemeStorePage(): JSX.Element {
   const [themes, setThemes] = useState<Theme[]>([]);
@@ -52,18 +113,25 @@ function ThemeStorePage(): JSX.Element {
 
   return (
     <section className="pt-28 pb-16">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <div className="rounded-3xl border border-border/50 bg-gradient-to-br from-card via-card to-secondary/50 p-6 md:p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Theme Store
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">
-            Discover community themes
+      <div className="mx-auto max-w-6xl space-y-10">
+        {/* Hero */}
+        <div className="text-center max-w-3xl mx-auto px-6">
+          <h1
+            className="text-4xl md:text-6xl font-bold tracking-tight animate-blur-in"
+            style={{ animationDelay: "0ms" }}
+          >
+            <span className="gradient-text">themes.</span>
           </h1>
-          <p className="mt-3 max-w-2xl text-muted-foreground">
-            Browse published themes and preview each style in a terminal mockup.
+          <p
+            className="mt-4 text-lg text-muted-foreground animate-blur-in"
+            style={{ animationDelay: "100ms" }}
+          >
+            Browse community themes and preview each style in a terminal mockup.
           </p>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
+          <div
+            className="mt-6 flex flex-wrap items-center justify-center gap-3 animate-blur-in"
+            style={{ animationDelay: "200ms" }}
+          >
             <Button asChild>
               <Link to="/add">Add your theme</Link>
             </Button>
@@ -90,31 +158,42 @@ function ThemeStorePage(): JSX.Element {
           </div>
         )}
 
+        {/* Theme cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {themes.map((theme) => (
-            <Card key={theme.id} className="border-border/60">
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between gap-2 text-base">
-                  <span className="truncate">{theme.name}</span>
+          {themes.map((theme, i) => (
+            <Link
+              key={theme.id}
+              to="/themes/$slug"
+              params={{ slug: theme.slug }}
+              className="animate-blur-in group flex flex-col rounded-xl border border-border/40 bg-card/30 transition-all duration-300 hover:border-primary/20 hover:bg-card/60 overflow-hidden"
+              style={{ animationDelay: `${(i + 1) * 100}ms` }}
+            >
+              {/* Swatch mockup area */}
+              <ThemeColorSwatch fileUrl={theme.fileUrl} />
+
+              {/* Divider */}
+              <div className="mx-4 sm:mx-5 border-t border-border/30" />
+
+              {/* Text content */}
+              <div className="p-4 sm:p-5 mt-auto flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-[15px] font-semibold text-foreground leading-tight truncate">
+                    {theme.name}
+                  </h3>
                   {theme.latestVersion && (
-                    <span className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                    <span className="shrink-0 rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
                       {theme.latestVersion}
                     </span>
                   )}
-                </CardTitle>
-                <CardDescription>@{theme.githubUsernameClaim}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="line-clamp-3 text-sm text-muted-foreground">
+                </div>
+                <p className="line-clamp-2 text-sm text-muted-foreground/80 leading-relaxed">
                   {theme.description || "No description provided."}
                 </p>
-                <Button asChild variant="outline" className="w-full">
-                  <Link to="/themes/$slug" params={{ slug: theme.slug }}>
-                    View theme
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
+                <span className="text-[11px] text-primary/50 font-mono tracking-wide mt-1">
+                  @{theme.githubUsernameClaim}
+                </span>
+              </div>
+            </Link>
           ))}
         </div>
 

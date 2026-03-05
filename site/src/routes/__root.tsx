@@ -10,13 +10,13 @@ function RootLayout(): JSX.Element {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="mx-auto w-full max-w-6xl px-6">
+      <main className="mx-auto w-full max-w-6xl px-5">
         <Outlet />
       </main>
 
       {/* Footer */}
       <footer className="border-t border-border/30 mt-24">
-        <div className="mx-auto max-w-6xl px-6 py-6">
+        <div className="mx-auto max-w-6xl px-5 py-6">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground/50">
               <img

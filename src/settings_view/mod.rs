@@ -10,7 +10,9 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termy_command_core::CommandId;
@@ -57,15 +59,26 @@ const SETTINGS_SLIDER_VALUE_WIDTH: f32 = 60.0;
 const SETTINGS_OPACITY_STEP_RATIO: f32 = 0.05;
 const SETTINGS_CONTROL_INNER_PADDING: f32 = 8.0;
 const SETTINGS_OPACITY_CONTROL_GAP: f32 = 6.0;
+const DEFAULT_THEME_STORE_API_URL: &str = "https://api.termy.run";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsSection {
     Appearance,
     Terminal,
     Tabs,
+    ThemeStore,
     Advanced,
     Colors,
     Keybindings,
+}
+
+#[derive(Clone, Debug)]
+struct ThemeStoreTheme {
+    name: String,
+    slug: String,
+    description: String,
+    latest_version: Option<String>,
+    file_url: Option<String>,
 }
 
 pub struct SettingsWindow {
@@ -84,6 +97,9 @@ pub struct SettingsWindow {
     sidebar_search_state: TextInputState,
     sidebar_search_active: bool,
     sidebar_search_selecting: bool,
+    theme_store_search_state: TextInputState,
+    theme_store_search_active: bool,
+    theme_store_search_selecting: bool,
     search_navigation_last_target: Option<&'static str>,
     search_navigation_last_jump_at: Option<Instant>,
     capturing_action: Option<CommandId>,
@@ -94,6 +110,11 @@ pub struct SettingsWindow {
     openai_model_options: Vec<String>,
     openai_models_loading: bool,
     openai_models_loaded_for_api_key: Option<(ConfigAiProvider, String)>,
+    theme_store_themes: Vec<ThemeStoreTheme>,
+    theme_store_loaded: bool,
+    theme_store_loading: bool,
+    theme_store_error: Option<String>,
+    theme_store_installed_versions: HashMap<String, String>,
 }
 
 impl SettingsWindow {
@@ -132,6 +153,9 @@ impl SettingsWindow {
             sidebar_search_state: TextInputState::new(String::new()),
             sidebar_search_active: true,
             sidebar_search_selecting: false,
+            theme_store_search_state: TextInputState::new(String::new()),
+            theme_store_search_active: false,
+            theme_store_search_selecting: false,
             search_navigation_last_target: None,
             search_navigation_last_jump_at: None,
             capturing_action: None,
@@ -142,6 +166,11 @@ impl SettingsWindow {
             openai_model_options: Vec::new(),
             openai_models_loading: false,
             openai_models_loaded_for_api_key: None,
+            theme_store_themes: Vec::new(),
+            theme_store_loaded: false,
+            theme_store_loading: false,
+            theme_store_error: None,
+            theme_store_installed_versions: Self::load_installed_theme_versions(),
         };
         view.focus_handle.focus(window, cx);
 
@@ -181,6 +210,333 @@ impl SettingsWindow {
         .detach();
 
         view
+    }
+
+    fn theme_store_api_base_url() -> String {
+        std::env::var("THEME_STORE_API_URL").unwrap_or_else(|_| DEFAULT_THEME_STORE_API_URL.into())
+    }
+
+    fn ensure_theme_store_themes_loaded(&mut self, cx: &mut Context<Self>) {
+        if self.theme_store_loaded || self.theme_store_loading {
+            return;
+        }
+        self.refresh_theme_store_themes(cx);
+    }
+
+    fn refresh_theme_store_themes(&mut self, cx: &mut Context<Self>) {
+        if self.theme_store_loading {
+            return;
+        }
+
+        self.theme_store_loading = true;
+        self.theme_store_error = None;
+        let api_base = Self::theme_store_api_base_url();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result =
+                smol::unblock(move || Self::fetch_theme_store_themes_blocking(&api_base)).await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.theme_store_loading = false;
+                    match result {
+                        Ok(themes) => {
+                            view.theme_store_themes = themes;
+                            view.theme_store_loaded = true;
+                            view.theme_store_error = None;
+                        }
+                        Err(error) => {
+                            view.theme_store_themes.clear();
+                            view.theme_store_loaded = true;
+                            view.theme_store_error = Some(error);
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn fetch_theme_store_themes_blocking(api_base: &str) -> Result<Vec<ThemeStoreTheme>, String> {
+        let base = api_base.trim_end_matches('/');
+        let url = format!("{base}/themes");
+        let response = ureq::get(&url)
+            .set("Accept", "application/json")
+            .call()
+            .map_err(|error| format!("Failed to fetch store themes: {error}"))?;
+
+        let payload: serde_json::Value = response
+            .into_json()
+            .map_err(|error| format!("Invalid theme store response: {error}"))?;
+
+        let themes = payload
+            .as_array()
+            .ok_or_else(|| "Theme store response must be a JSON array".to_string())?;
+
+        let mut parsed = Vec::with_capacity(themes.len());
+        for theme in themes {
+            let Some(object) = theme.as_object() else {
+                continue;
+            };
+
+            let Some(name) = object
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some(slug) = object
+                .get("slug")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+
+            let description = object
+                .get("description")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let latest_version = object
+                .get("latestVersion")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string);
+            let file_url = object
+                .get("fileUrl")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string);
+
+            parsed.push(ThemeStoreTheme {
+                name: name.to_string(),
+                slug: slug.to_string(),
+                description,
+                latest_version,
+                file_url,
+            });
+        }
+
+        parsed.sort_unstable_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        });
+        Ok(parsed)
+    }
+
+    fn installed_theme_state_path() -> Option<PathBuf> {
+        let config_path = config::ensure_config_file().ok()?;
+        let parent = config_path.parent()?;
+        Some(parent.join("theme_store_installed.json"))
+    }
+
+    fn load_installed_theme_versions() -> HashMap<String, String> {
+        let Some(path) = Self::installed_theme_state_path() else {
+            return HashMap::new();
+        };
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            return HashMap::new();
+        };
+
+        if let Ok(parsed_map) = serde_json::from_str::<HashMap<String, String>>(&contents) {
+            return parsed_map
+                .into_iter()
+                .map(|(slug, version)| {
+                    (slug.trim().to_ascii_lowercase(), version.trim().to_string())
+                })
+                .filter(|(slug, _)| !slug.is_empty())
+                .collect();
+        }
+
+        // Backward compatibility with older JSON array format.
+        if let Ok(parsed_list) = serde_json::from_str::<Vec<String>>(&contents) {
+            return parsed_list
+                .into_iter()
+                .map(|slug| (slug.trim().to_ascii_lowercase(), String::new()))
+                .filter(|(slug, _)| !slug.is_empty())
+                .collect();
+        }
+
+        HashMap::new()
+    }
+
+    fn persist_installed_theme_versions(versions: &HashMap<String, String>) -> Result<(), String> {
+        let Some(path) = Self::installed_theme_state_path() else {
+            return Err("Config path unavailable".to_string());
+        };
+        let Some(parent) = path.parent() else {
+            return Err("Invalid installed-theme metadata path".to_string());
+        };
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create metadata directory: {error}"))?;
+
+        let mut sorted_entries: Vec<(String, String)> = versions
+            .iter()
+            .map(|(slug, version)| (slug.clone(), version.clone()))
+            .collect();
+        sorted_entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let normalized: HashMap<String, String> = sorted_entries.into_iter().collect();
+        let contents = serde_json::to_string_pretty(&normalized)
+            .map_err(|error| format!("Failed to serialize installed themes: {error}"))?;
+        std::fs::write(&path, contents)
+            .map_err(|error| format!("Failed to write installed themes metadata: {error}"))?;
+        Ok(())
+    }
+
+    fn install_theme_store_theme(&mut self, theme: ThemeStoreTheme, cx: &mut Context<Self>) {
+        let installed_slug = theme.slug.trim().to_ascii_lowercase();
+        let installed_version = theme.latest_version.clone().unwrap_or_default();
+        let loading_id = termy_toast::loading(format!("Installing {}...", theme.name));
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result =
+                smol::unblock(move || Self::install_theme_from_store_blocking(theme)).await;
+
+            termy_toast::dismiss_toast(loading_id);
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    match result {
+                        Ok(message) => {
+                            termy_toast::success(message);
+                            // Keep a single installed store theme marker at a time.
+                            view.theme_store_installed_versions.clear();
+                            view.theme_store_installed_versions
+                                .insert(installed_slug.clone(), installed_version.clone());
+                            if let Err(error) = Self::persist_installed_theme_versions(
+                                &view.theme_store_installed_versions,
+                            ) {
+                                log::error!("Failed to persist installed theme state: {}", error);
+                            }
+                            let _ = view.reload_config_if_changed(cx);
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn confirm_install_theme_store_theme(
+        &mut self,
+        theme: ThemeStoreTheme,
+        cx: &mut Context<Self>,
+    ) {
+        let title = "Install Theme";
+        let message = format!(
+            "Install theme \"{}\" and import its colors into your config?",
+            theme.name
+        );
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let confirmed = termy_native_sdk::confirm(title, &message);
+            if !confirmed {
+                return;
+            }
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.install_theme_store_theme(theme.clone(), cx);
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn uninstall_theme_store_theme(&mut self, slug: &str, cx: &mut Context<Self>) {
+        let key = slug.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            return;
+        }
+
+        if self.theme_store_installed_versions.remove(&key).is_some() {
+            if let Err(error) = config::clear_all_color_overrides() {
+                log::error!("Failed to clear colors during uninstall: {}", error);
+                termy_toast::error("Failed to remove installed theme colors");
+                return;
+            }
+            if let Err(error) =
+                Self::persist_installed_theme_versions(&self.theme_store_installed_versions)
+            {
+                log::error!("Failed to persist installed theme state: {}", error);
+                termy_toast::error("Failed to persist uninstall state");
+                return;
+            }
+            let _ = self.reload_config_if_changed(cx);
+            termy_toast::success("Theme uninstalled and colors reverted");
+        } else {
+            termy_toast::info("Theme is not installed");
+        }
+    }
+
+    fn install_theme_from_store_blocking(theme: ThemeStoreTheme) -> Result<String, String> {
+        let file_url = theme
+            .file_url
+            .ok_or_else(|| format!("Theme '{}' has no downloadable file URL", theme.slug))?;
+
+        let response = ureq::get(&file_url)
+            .set("Accept", "application/json")
+            .call()
+            .map_err(|error| format!("Failed to download theme '{}': {error}", theme.slug))?;
+        let contents = response
+            .into_string()
+            .map_err(|error| format!("Failed to read theme '{}': {error}", theme.slug))?;
+
+        let mut file =
+            tempfile::NamedTempFile::new().map_err(|error| format!("Temp file error: {error}"))?;
+        file.write_all(contents.as_bytes())
+            .map_err(|error| format!("Failed to write temp theme file: {error}"))?;
+
+        config::import_colors_from_json(file.path())
+            .map(|_| format!("Installed theme '{}'", theme.name))
+            .map_err(|error| format!("Failed to install theme '{}': {error}", theme.name))
+    }
+
+    pub(super) fn open_url(url: &str) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .arg(url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Failed to open URL: {error}"))?;
+            return Ok(());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Command::new("xdg-open")
+                .arg(url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Failed to open URL: {error}"))?;
+            return Ok(());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("cmd")
+                .args(["/C", "start", "", url])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Failed to open URL: {error}"))?;
+            return Ok(());
+        }
+        #[allow(unreachable_code)]
+        Err("Opening URLs is unsupported on this platform".to_string())
     }
 
     fn apply_runtime_config(&mut self, config: AppConfig) -> bool {
@@ -451,6 +807,59 @@ impl SettingsWindow {
         true
     }
 
+    fn handle_theme_store_search_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.theme_store_search_active || self.active_input.is_some() {
+            return false;
+        }
+
+        if Self::cmd_only(event.keystroke.modifiers)
+            && event.keystroke.key.eq_ignore_ascii_case("a")
+        {
+            self.theme_store_search_state.select_all();
+            cx.notify();
+            return true;
+        }
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.theme_store_search_active = false;
+                self.theme_store_search_selecting = false;
+                cx.notify();
+            }
+            "backspace" => {
+                self.theme_store_search_state.delete_backward();
+                cx.notify();
+            }
+            "delete" => {
+                self.theme_store_search_state.delete_forward();
+                cx.notify();
+            }
+            "left" => {
+                self.theme_store_search_state.move_left();
+                cx.notify();
+            }
+            "right" => {
+                self.theme_store_search_state.move_right();
+                cx.notify();
+            }
+            "home" => {
+                self.theme_store_search_state.move_to_start();
+                cx.notify();
+            }
+            "end" => {
+                self.theme_store_search_state.move_to_end();
+                cx.notify();
+            }
+            _ => {}
+        }
+
+        true
+    }
+
     fn handle_active_input_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let active_field = self.active_input.as_ref().map(|input| input.field);
         let active_input_query = self
@@ -574,6 +983,9 @@ impl SettingsWindow {
             KeyInputMode::SidebarSearch => {
                 let _ = self.handle_sidebar_search_key_down(event, window, cx);
             }
+            KeyInputMode::ThemeStoreSearch => {
+                let _ = self.handle_theme_store_search_key_down(event, cx);
+            }
             KeyInputMode::ActiveInput => self.handle_active_input_key_down(event, cx),
             KeyInputMode::Idle => {}
         }
@@ -588,8 +1000,13 @@ impl TextInputProvider for SettingsWindow {
             .and_then(|input| Self::uses_text_input_for_field(input.field).then_some(&input.state));
 
         settings_input.or_else(|| {
-            self.sidebar_search_active
-                .then_some(&self.sidebar_search_state)
+            if self.sidebar_search_active {
+                Some(&self.sidebar_search_state)
+            } else if self.theme_store_search_active {
+                Some(&self.theme_store_search_state)
+            } else {
+                None
+            }
         })
     }
 
@@ -602,6 +1019,8 @@ impl TextInputProvider for SettingsWindow {
             settings_input
         } else if self.sidebar_search_active {
             Some(&mut self.sidebar_search_state)
+        } else if self.theme_store_search_active {
+            Some(&mut self.theme_store_search_state)
         } else {
             None
         }
@@ -745,11 +1164,14 @@ impl Render for SettingsWindow {
             .on_any_mouse_down(cx.listener(|view, _event: &MouseDownEvent, _window, cx| {
                 if view.active_input.is_some()
                     || view.sidebar_search_active
+                    || view.theme_store_search_active
                     || view.capturing_action.is_some()
                 {
                     view.active_input = None;
                     view.capturing_action = None;
                     view.blur_sidebar_search();
+                    view.theme_store_search_active = false;
+                    view.theme_store_search_selecting = false;
                     cx.notify();
                 }
             }))

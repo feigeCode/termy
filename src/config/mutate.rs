@@ -9,7 +9,7 @@ use std::{
 use fs4::fs_std::FileExt;
 use termy_config_core::{
     ColorSettingId, ColorSettingUpdate, Rgb8, RootSettingId, apply_color_updates,
-    color_setting_from_key, color_setting_spec, parse_theme_id,
+    color_setting_from_key, color_setting_spec, color_setting_specs, parse_theme_id,
     remove_root_setting as remove_root_setting_entry, replace_keybind_lines, upsert_root_setting,
 };
 
@@ -182,6 +182,17 @@ pub fn import_colors_from_json(json_path: &Path) -> Result<String, String> {
         .collect::<Vec<_>>();
     update_config_contents(|existing| Ok((apply_color_updates(existing, &updates), ())))?;
     Ok(format!("Imported {} colors", color_count))
+}
+
+pub fn clear_all_color_overrides() -> Result<(), String> {
+    let updates = color_setting_specs()
+        .iter()
+        .map(|spec| ColorSettingUpdate {
+            id: spec.id,
+            value: None,
+        })
+        .collect::<Vec<_>>();
+    update_config_contents(|existing| Ok((apply_color_updates(existing, &updates), ())))
 }
 
 #[cfg(test)]

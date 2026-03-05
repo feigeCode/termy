@@ -135,6 +135,14 @@ static SETTINGS_METADATA: LazyLock<Vec<SettingMetadata>> = LazyLock::new(|| {
         keywords: spec.keywords,
     }));
 
+    entries.push(SettingMetadata {
+        key: "theme_store",
+        section: SettingsSection::ThemeStore,
+        title: "Theme Store",
+        description: "Browse and install community themes from the online store.",
+        keywords: &["theme", "store", "install", "colors"],
+    });
+
     entries
 });
 
@@ -154,17 +162,19 @@ impl SettingsWindow {
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Terminal => "Terminal",
             SettingsSection::Tabs => "Tabs",
+            SettingsSection::ThemeStore => "Theme Store",
             SettingsSection::Advanced => "Advanced",
             SettingsSection::Colors => "Colors",
             SettingsSection::Keybindings => "Keybindings",
         }
     }
 
-    pub(super) fn settings_sections_in_order() -> [SettingsSection; 6] {
+    pub(super) fn settings_sections_in_order() -> [SettingsSection; 7] {
         [
             SettingsSection::Appearance,
             SettingsSection::Terminal,
             SettingsSection::Tabs,
+            SettingsSection::ThemeStore,
             SettingsSection::Advanced,
             SettingsSection::Colors,
             SettingsSection::Keybindings,
@@ -181,6 +191,8 @@ impl SettingsWindow {
         self.active_input = None;
         self.capturing_action = None;
         self.blur_sidebar_search();
+        self.theme_store_search_active = section == SettingsSection::ThemeStore;
+        self.theme_store_search_selecting = false;
         self.scroll_animation_token = self.scroll_animation_token.wrapping_add(1);
         self.content_scroll_handle
             .set_offset(point(px(0.0), px(0.0)));
@@ -557,6 +569,7 @@ impl SettingsWindow {
                     .child(self.render_sidebar_item("Appearance", SettingsSection::Appearance, cx))
                     .child(self.render_sidebar_item("Terminal", SettingsSection::Terminal, cx))
                     .child(self.render_sidebar_item("Tabs", SettingsSection::Tabs, cx))
+                    .child(self.render_sidebar_item("Theme Store", SettingsSection::ThemeStore, cx))
                     .child(self.render_sidebar_item("Advanced", SettingsSection::Advanced, cx))
                     .child(self.render_sidebar_item("Colors", SettingsSection::Colors, cx))
                     .child(self.render_sidebar_item(

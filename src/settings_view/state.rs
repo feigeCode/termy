@@ -261,7 +261,9 @@ impl SettingsWindow {
             SettingsSection::Terminal => TERMINAL_SETTINGS,
             SettingsSection::Tabs => TABS_SETTINGS,
             SettingsSection::Advanced => ADVANCED_SETTINGS,
-            SettingsSection::Colors | SettingsSection::Keybindings => &[],
+            SettingsSection::ThemeStore
+            | SettingsSection::Colors
+            | SettingsSection::Keybindings => &[],
         }
     }
 
@@ -286,6 +288,7 @@ impl SettingsWindow {
             SettingsSection::Colors => color_setting_specs()
                 .iter()
                 .any(|spec| self.custom_color_for_id(spec.id).is_some()),
+            SettingsSection::ThemeStore => false,
             SettingsSection::Keybindings => !self.config.keybind_lines.is_empty(),
             _ => Self::section_root_settings(section)
                 .iter()
@@ -349,6 +352,7 @@ impl SettingsWindow {
             SettingsSection::Colors => color_setting_specs()
                 .iter()
                 .try_for_each(|spec| config::set_color_setting(spec.id, None)),
+            SettingsSection::ThemeStore => Ok(()),
             SettingsSection::Keybindings => Ok(()),
         };
 

@@ -39,6 +39,9 @@ impl SettingsWindow {
                 }
                 SettingsSection::Terminal => self.render_terminal_section(cx).into_any_element(),
                 SettingsSection::Tabs => self.render_tabs_section(cx).into_any_element(),
+                SettingsSection::ThemeStore => {
+                    self.render_theme_store_section(cx).into_any_element()
+                }
                 SettingsSection::Advanced => self.render_advanced_section(cx).into_any_element(),
                 SettingsSection::Colors => self.render_colors_section(cx).into_any_element(),
                 SettingsSection::Keybindings => {
@@ -484,6 +487,25 @@ impl SettingsWindow {
             .child(self.render_tabs_titlebar_group(cx))
     }
 
+    pub(super) fn render_theme_store_section(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.ensure_theme_store_themes_loaded(cx);
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.render_section_header(
+                "Theme Store",
+                "Browse and install community themes",
+                SettingsSection::ThemeStore,
+                cx,
+            ))
+            .child(self.render_tabs_theme_store_group(cx))
+    }
+
     pub(super) fn render_tabs_title_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let shell_integration = self.config.tab_title.shell_integration;
         let fallback = self.config.tab_title.fallback.clone();
@@ -630,6 +652,429 @@ impl SettingsWindow {
         )];
 
         self.render_settings_group("TITLE BAR", rows)
+    }
+
+    pub(super) fn render_tabs_theme_store_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let bg_card = self.bg_card();
+        let border_color = self.border_color();
+        let bg_input = self.bg_input();
+        let hover_bg = self.bg_hover();
+        let text_primary = self.text_primary();
+        let text_secondary = self.text_secondary();
+        let text_muted = self.text_muted();
+        let accent = self.accent();
+        let accent_hover = self.accent_with_alpha(0.8);
+        let button_text = self.contrasting_text_for_fill(accent, bg_card);
+        let button_hover_text = self.contrasting_text_for_fill(accent_hover, bg_card);
+        let button_border = self.accent_with_alpha(0.45);
+        let install_hover_bg = self.accent_with_alpha(0.18);
+        let store_url = "https://termy.run/themes";
+        let query_text = self.theme_store_search_state.text().to_string();
+        let has_query = !query_text.trim().is_empty();
+        let is_search_active = self.theme_store_search_active;
+        let normalized_query = query_text.trim().to_ascii_lowercase();
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let search_content = if is_search_active {
+            let font = Font {
+                family: self.config.font_family.clone().into(),
+                ..Font::default()
+            };
+            TextInputElement::new(
+                cx.entity(),
+                self.focus_handle.clone(),
+                font,
+                px(SETTINGS_INPUT_TEXT_SIZE),
+                text_secondary.into(),
+                self.accent_with_alpha(0.3).into(),
+                TextInputAlignment::Left,
+            )
+            .into_any_element()
+        } else if has_query {
+            div()
+                .text_size(px(SETTINGS_INPUT_TEXT_SIZE))
+                .text_color(text_secondary)
+                .child(query_text.clone())
+                .into_any_element()
+        } else {
+            div()
+                .text_size(px(SETTINGS_INPUT_TEXT_SIZE))
+                .text_color(text_muted)
+                .child("Search themes...")
+                .into_any_element()
+        };
+
+        let search_input = div()
+            .id("theme-store-search-input")
+            .h(px(36.0))
+            .px_3()
+            .rounded(px(0.0))
+            .bg(bg_input)
+            .border_1()
+            .border_color(if is_search_active {
+                accent
+            } else {
+                border_color
+            })
+            .overflow_hidden()
+            .cursor_text()
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .w_full()
+                    .h(px(20.0))
+                    .overflow_hidden()
+                    .child(search_content),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.active_input = None;
+                    view.sidebar_search_active = false;
+                    view.theme_store_search_active = true;
+                    let index = view
+                        .theme_store_search_state
+                        .character_index_for_point(event.position);
+                    if event.modifiers.shift {
+                        view.theme_store_search_state.select_to_utf16(index);
+                    } else {
+                        view.theme_store_search_state.set_cursor_utf16(index);
+                    }
+                    view.theme_store_search_selecting = true;
+                    view.focus_handle.focus(window, cx);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
+                if !view.theme_store_search_selecting || !event.dragging() {
+                    return;
+                }
+                let index = view
+                    .theme_store_search_state
+                    .character_index_for_point(event.position);
+                view.theme_store_search_state.select_to_utf16(index);
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                    if view.theme_store_search_selecting {
+                        view.theme_store_search_selecting = false;
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                    if view.theme_store_search_selecting {
+                        view.theme_store_search_selecting = false;
+                        cx.notify();
+                    }
+                }),
+            );
+
+        rows.push(
+            div()
+                .py_3()
+                .px_4()
+                .bg(bg_card)
+                .border_1()
+                .border_color(border_color)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(search_input)
+                .child(
+                    div()
+                        .id("theme-store-open-link")
+                        .mt_1()
+                        .w(px(108.0))
+                        .h(px(32.0))
+                        .px_2()
+                        .border_1()
+                        .border_color(button_border)
+                        .bg(bg_input)
+                        .text_sm()
+                        .text_color(text_secondary)
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                        .child("Open Store")
+                        .on_click(cx.listener(move |_view, _, _, cx| {
+                            if let Err(error) = SettingsWindow::open_url(store_url) {
+                                termy_toast::error(error);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        );
+
+        if self.theme_store_loading {
+            rows.push(
+                div()
+                    .py_4()
+                    .px_4()
+                    .bg(bg_card)
+                    .border_1()
+                    .border_color(border_color)
+                    .text_sm()
+                    .text_color(text_muted)
+                    .child("Loading themes from store...")
+                    .into_any_element(),
+            );
+        } else if let Some(error) = self.theme_store_error.clone() {
+            rows.push(
+                div()
+                    .py_4()
+                    .px_4()
+                    .bg(bg_card)
+                    .border_1()
+                    .border_color(border_color)
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_sm().text_color(text_secondary).child(error))
+                    .child(
+                        div()
+                            .id("theme-store-retry-btn")
+                            .mt_1()
+                            .w(px(90.0))
+                            .px_3()
+                            .py_1()
+                            .border_1()
+                            .border_color(button_border)
+                            .bg(accent)
+                            .text_sm()
+                            .text_color(button_text)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(accent_hover).text_color(button_hover_text))
+                            .child("Retry")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.theme_store_loaded = false;
+                                view.refresh_theme_store_themes(cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        } else if self.theme_store_themes.is_empty() {
+            rows.push(
+                div()
+                    .py_4()
+                    .px_4()
+                    .bg(bg_card)
+                    .border_1()
+                    .border_color(border_color)
+                    .text_sm()
+                    .text_color(text_muted)
+                    .child("No themes available in store.")
+                    .into_any_element(),
+            );
+        } else {
+            let filtered_themes: Vec<ThemeStoreTheme> = self
+                .theme_store_themes
+                .iter()
+                .filter(|theme| {
+                    if normalized_query.is_empty() {
+                        return true;
+                    }
+                    let haystack = format!(
+                        "{} {} {}",
+                        theme.name.to_ascii_lowercase(),
+                        theme.slug.to_ascii_lowercase(),
+                        theme.description.to_ascii_lowercase()
+                    );
+                    haystack.contains(&normalized_query)
+                })
+                .take(30)
+                .cloned()
+                .collect();
+
+            if filtered_themes.is_empty() {
+                rows.push(
+                    div()
+                        .py_4()
+                        .px_4()
+                        .bg(bg_card)
+                        .border_1()
+                        .border_color(border_color)
+                        .text_sm()
+                        .text_color(text_muted)
+                        .child("No themes match your search.")
+                        .into_any_element(),
+                );
+            }
+
+            let mut theme_cards: Vec<AnyElement> = Vec::new();
+
+            for theme in filtered_themes {
+                let install_theme = theme.clone();
+                let version_label = theme
+                    .latest_version
+                    .clone()
+                    .unwrap_or_else(|| "n/a".to_string());
+                let slug_key = theme.slug.to_ascii_lowercase();
+                let installed_version = self.theme_store_installed_versions.get(&slug_key);
+                let is_installed = self
+                    .theme_store_installed_versions
+                    .get(&slug_key)
+                    .is_some_and(|version| {
+                        theme
+                            .latest_version
+                            .as_deref()
+                            .is_none_or(|latest| version.eq_ignore_ascii_case(latest))
+                    });
+                let description = if theme.description.trim().is_empty() {
+                    "No description provided.".to_string()
+                } else {
+                    theme.description.clone()
+                };
+                let installed_label = installed_version
+                    .and_then(|version| (!version.trim().is_empty()).then_some(version))
+                    .map(|_| "Installed".to_string())
+                    .unwrap_or_else(|| "Installed".to_string());
+                let install_button = if is_installed {
+                    let uninstall_slug = theme.slug.clone();
+                    div()
+                        .id(SharedString::from(format!(
+                            "theme-store-actions-{}",
+                            theme.slug
+                        )))
+                        .mt_auto()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(108.0))
+                                .h(px(32.0))
+                                .px_2()
+                                .border_1()
+                                .border_color(border_color)
+                                .bg(bg_card)
+                                .text_sm()
+                                .text_color(text_muted)
+                                .whitespace_nowrap()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(installed_label),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "theme-store-uninstall-{}",
+                                    theme.slug
+                                )))
+                                .w(px(108.0))
+                                .h(px(32.0))
+                                .px_2()
+                                .border_1()
+                                .border_color(button_border)
+                                .bg(bg_input)
+                                .text_sm()
+                                .text_color(text_secondary)
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(move |s| s.bg(install_hover_bg).text_color(text_primary))
+                                .child("Uninstall")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.uninstall_theme_store_theme(&uninstall_slug, cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id(SharedString::from(format!(
+                            "theme-store-install-{}",
+                            theme.slug
+                        )))
+                        .mt_auto()
+                        .w(px(108.0))
+                        .h(px(32.0))
+                        .px_2()
+                        .border_1()
+                        .border_color(button_border)
+                        .bg(bg_input)
+                        .text_sm()
+                        .text_color(text_secondary)
+                        .whitespace_nowrap()
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |s| s.bg(install_hover_bg).text_color(text_primary))
+                        .child("Install")
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.confirm_install_theme_store_theme(install_theme.clone(), cx);
+                        }))
+                        .into_any_element()
+                };
+
+                theme_cards.push(
+                    div()
+                        .py_3()
+                        .px_4()
+                        .w(px(250.0))
+                        .min_w(px(250.0))
+                        .max_w(px(250.0))
+                        .min_h(px(186.0))
+                        .bg(bg_card)
+                        .border_1()
+                        .border_color(border_color)
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(div().text_sm().text_color(text_primary).child(theme.name))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(text_muted)
+                                        .child(format!("v{version_label}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(text_muted)
+                                .min_h(px(42.0))
+                                .child(description),
+                        )
+                        .child(install_button)
+                        .into_any_element(),
+                );
+            }
+
+            if !theme_cards.is_empty() {
+                rows.push(
+                    div()
+                        .mt_3()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(border_color)
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(theme_cards)
+                        .into_any_element(),
+                );
+            }
+        }
+
+        self.render_settings_group("THEME STORE", rows)
     }
 
     pub(super) fn render_advanced_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

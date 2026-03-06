@@ -3,6 +3,7 @@ import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 import { InteractiveTerminal } from "@/components/InteractiveTerminal";
 import { Button } from "@/components/ui/button";
 import { getPreferredDownload, type Release } from "@/hooks/useGitHubRelease";
+import { CopyButton } from "./animate-ui/components/buttons/copy";
 
 interface TerminalTab {
   id: number;
@@ -43,9 +44,7 @@ function getPackageManagerButtonClass(
 const MAX_TABS = 3;
 
 function TerminalWithTabs(): JSX.Element {
-  const [tabs, setTabs] = useState<TerminalTab[]>([
-    { id: 0, title: "termy" },
-  ]);
+  const [tabs, setTabs] = useState<TerminalTab[]>([{ id: 0, title: "termy" }]);
   const [activeTabId, setActiveTabId] = useState(0);
   const nextTabIdRef = useRef(1);
 
@@ -63,8 +62,7 @@ function TerminalWithTabs(): JSX.Element {
         const updated = prev.filter((t) => t.id !== tabId);
         if (activeTabId === tabId) {
           const closedIndex = prev.findIndex((t) => t.id === tabId);
-          const newActive =
-            updated[Math.min(closedIndex, updated.length - 1)];
+          const newActive = updated[Math.min(closedIndex, updated.length - 1)];
           setActiveTabId(newActive.id);
         }
         return updated;
@@ -117,10 +115,7 @@ function TerminalWithTabs(): JSX.Element {
       </div>
 
       {tabs.map(
-        (tab) =>
-          activeTabId === tab.id && (
-            <InteractiveTerminal key={tab.id} />
-          ),
+        (tab) => activeTabId === tab.id && <InteractiveTerminal key={tab.id} />,
       )}
     </div>
   );
@@ -275,17 +270,11 @@ export function Hero({ release }: HeroProps): JSX.Element {
                 <code className="flex-1 px-3 font-mono text-xs text-primary truncate text-left">
                   {installCommands[pm]}
                 </code>
-                <button
-                  onClick={handleCopy}
+                <CopyButton
                   className="px-3 h-full text-muted-foreground hover:text-foreground transition-colors shrink-0 border-l border-border/50"
-                  aria-label="Copy to clipboard"
-                >
-                  {copied ? (
-                    <Check className="w-3.5 h-3.5 text-green-500" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                </button>
+                  variant="ghost"
+                  content={installCommands[pm]}
+                />
               </div>
             </div>
           </div>

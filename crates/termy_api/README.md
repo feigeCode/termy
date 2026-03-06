@@ -12,7 +12,7 @@ export GITHUB_CLIENT_SECRET=...
 export GITHUB_REDIRECT_URI=http://127.0.0.1:8080/auth/github/callback
 export S3_BUCKET=termy-themes
 export S3_REGION=eu-central-1
-# optional for MinIO/localstack:
+# optional for MinIO/localstack; enables path-style URLs (<endpoint>/<bucket>):
 # export S3_ENDPOINT=http://127.0.0.1:9000
 cargo run -p termy_api
 ```

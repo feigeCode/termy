@@ -102,11 +102,16 @@ async fn main() -> anyhow::Result<()> {
 
     let mut aws_loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(s3_region));
-    if let Some(endpoint) = s3_endpoint {
+    if let Some(endpoint) = s3_endpoint.as_ref() {
         aws_loader = aws_loader.endpoint_url(endpoint);
     }
     let aws_config = aws_loader.load().await;
-    let s3_client = S3Client::new(&aws_config);
+
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&aws_config);
+    if s3_endpoint.is_some() {
+        s3_config_builder = s3_config_builder.force_path_style(true);
+    }
+    let s3_client = S3Client::from_conf(s3_config_builder.build());
 
     let theme_schema_json: Value = serde_json::from_str(include_str!("../../../theme.schema.json"))
         .map_err(|err| anyhow::anyhow!("failed to parse theme.schema.json at startup: {err}"))?;

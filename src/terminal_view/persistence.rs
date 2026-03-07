@@ -589,6 +589,8 @@ impl TerminalView {
         let Some(request) = self.persisted_native_workspace_write_request() else {
             return;
         };
+        self.native_persist_revision
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if let Err(error) = Self::apply_persisted_native_workspace_write_request(request) {
             log::error!("Failed to persist native tab workspace: {}", error);
         }

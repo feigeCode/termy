@@ -248,6 +248,22 @@ impl TerminalView {
         self.execute_command_action(CommandAction::NewTab, true, window, cx);
     }
 
+    pub(crate) fn open_new_tab_from_deeplink(
+        &mut self,
+        command: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::NewTab, true, window, cx);
+        if let Some(command) = command.filter(|value| !value.is_empty())
+            && let Some(tab) = self.tabs.get(self.active_tab)
+            && let Some(terminal) = tab.active_terminal()
+        {
+            terminal.write_input(command.as_bytes());
+            cx.notify();
+        }
+    }
+
     pub(in super::super) fn handle_close_tab_action(
         &mut self,
         _: &commands::CloseTab,

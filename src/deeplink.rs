@@ -3,6 +3,7 @@ use url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeepLinkRoute {
     Activate,
+    NewTab,
     Settings,
     OpenConfig,
     ThemeInstall,
@@ -38,6 +39,15 @@ impl DeepLinkRoute {
 
         match segments.as_slice() {
             [] => Ok((Self::Activate, None)),
+            ["new"] => {
+                let command = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("cmd").then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.is_empty());
+                Ok((Self::NewTab, command))
+            }
             ["settings"] => Ok((Self::Settings, None)),
             ["open", "config"] => Ok((Self::OpenConfig, None)),
             ["store", "theme-install"] => {
@@ -83,6 +93,15 @@ mod tests {
         assert_eq!(
             DeepLinkRoute::parse("termy://settings?tab=general#section"),
             Ok((Settings, None))
+        );
+    }
+
+    #[test]
+    fn parses_new_tab_route() {
+        assert_eq!(DeepLinkRoute::parse("termy://new"), Ok((NewTab, None)));
+        assert_eq!(
+            DeepLinkRoute::parse("termy://new?cmd=git%20status"),
+            Ok((NewTab, Some("git status".to_string())))
         );
     }
 

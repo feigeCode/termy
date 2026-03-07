@@ -241,6 +241,7 @@ fn dispatch_deeplink(
 ) -> Result<(), String> {
     match route {
         DeepLinkRoute::Activate => Ok(()),
+        DeepLinkRoute::NewTab => app_actions::open_new_tab_in_main_window(cx, route_argument),
         DeepLinkRoute::Settings => app_actions::open_settings_window(cx),
         DeepLinkRoute::OpenConfig => app_actions::open_config_file(),
         DeepLinkRoute::ThemeInstall => {
@@ -464,6 +465,49 @@ mod tests {
 
         assert_eq!(cx.windows().len(), 1);
         assert_eq!(*handled.borrow(), vec![(DeepLinkRoute::Activate, None)]);
+    }
+
+    #[gpui::test]
+    fn new_tab_deeplink_passes_route_without_argument(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from("termy://new")],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(*handled.borrow(), vec![(DeepLinkRoute::NewTab, None)]);
+    }
+
+    #[gpui::test]
+    fn new_tab_deeplink_passes_optional_command(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from("termy://new?cmd=git%20status")],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(
+            *handled.borrow(),
+            vec![(DeepLinkRoute::NewTab, Some("git status".to_string()))]
+        );
     }
 
     #[gpui::test]

@@ -1,5 +1,6 @@
 use crate::config;
 use crate::settings_view::SettingsWindow;
+use crate::terminal_view::TerminalView;
 use crate::terminal_view::initial_window_background_appearance;
 use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 
@@ -40,6 +41,27 @@ pub(crate) fn update_open_settings_windows(
     {
         let _ = settings_window.update(cx, |view, _window, cx| update(view, cx));
     }
+}
+
+pub(crate) fn open_new_tab_in_main_window(
+    cx: &mut App,
+    command: Option<String>,
+) -> Result<(), String> {
+    let Some(main_window) = cx
+        .windows()
+        .into_iter()
+        .find_map(|handle| handle.downcast::<TerminalView>())
+    else {
+        return Err("No main window available for new tab deeplink".to_string());
+    };
+
+    main_window
+        .update(cx, |view, window, cx| {
+            view.open_new_tab_from_deeplink(command.as_deref(), window, cx);
+        })
+        .map_err(|error| format!("Failed to open new tab from deeplink: {error}"))?;
+
+    Ok(())
 }
 
 pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {

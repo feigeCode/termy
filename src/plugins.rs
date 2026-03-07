@@ -341,6 +341,7 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), Str
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn running_plugin_count() -> usize {
     PLUGIN_HOST
         .get()

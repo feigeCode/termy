@@ -47,5 +47,11 @@ Source: "..\target\{#MyTarget}\release\{#MyExeName}"; DestDir: "{app}"; Flags: i
 Name: "{group}\Termy"; Filename: "{app}\{#MyExeName}"
 Name: "{autodesktop}\Termy"; Filename: "{app}\{#MyExeName}"
 
+[Registry]
+Root: HKCR; Subkey: "termy"; ValueType: string; ValueName: ""; ValueData: "URL:Termy Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "termy"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "termy\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyExeName},0"
+Root: HKCR; Subkey: "termy\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyExeName}"" ""%1"""
+
 [Run]
 Filename: "{app}\{#MyExeName}"; Description: "Launch Termy"; Flags: nowait postinstall skipifsilent

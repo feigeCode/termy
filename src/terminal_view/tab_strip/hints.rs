@@ -38,7 +38,8 @@ impl TabSwitchHintState {
     }
 
     pub(crate) fn reset_hold_state(&mut self) -> bool {
-        let changed = self.modifier_held || self.hold_started_at.is_some() || self.suppressed_for_hold;
+        let changed =
+            self.modifier_held || self.hold_started_at.is_some() || self.suppressed_for_hold;
         self.modifier_held = false;
         self.hold_started_at = None;
         self.suppressed_for_hold = false;
@@ -58,11 +59,7 @@ impl TabSwitchHintState {
         index < TAB_SWITCH_HINTED_TAB_COUNT
     }
 
-    pub(crate) fn handle_modifiers_changed(
-        &mut self,
-        modifiers: Modifiers,
-        now: Instant,
-    ) -> bool {
+    pub(crate) fn handle_modifiers_changed(&mut self, modifiers: Modifiers, now: Instant) -> bool {
         if !self.enabled {
             return self.reset_hold_state();
         }
@@ -207,10 +204,8 @@ impl TabSwitchHintState {
             return 1.0;
         }
 
-        ease_out_cubic(
-            fade_elapsed.as_secs_f32() / TAB_SWITCH_HINT_FADE_DURATION.as_secs_f32(),
-        )
-        .clamp(0.0, 1.0)
+        ease_out_cubic(fade_elapsed.as_secs_f32() / TAB_SWITCH_HINT_FADE_DURATION.as_secs_f32())
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -225,7 +220,9 @@ mod tests {
     #[test]
     fn secondary_modifier_requires_secondary_only() {
         let secondary_only = Modifiers::secondary_key();
-        assert!(TabSwitchHintState::secondary_modifier_held_alone(secondary_only));
+        assert!(TabSwitchHintState::secondary_modifier_held_alone(
+            secondary_only
+        ));
 
         let secondary_with_shift = Modifiers {
             shift: true,
@@ -268,11 +265,19 @@ mod tests {
     fn labels_cover_first_nine_tabs_only() {
         assert_eq!(
             TabSwitchHintState::label_for_index(0).as_deref(),
-            Some(if cfg!(target_os = "macos") { "⌘1" } else { "⌃1" })
+            Some(if cfg!(target_os = "macos") {
+                "⌘1"
+            } else {
+                "⌃1"
+            })
         );
         assert_eq!(
             TabSwitchHintState::label_for_index(8).as_deref(),
-            Some(if cfg!(target_os = "macos") { "⌘9" } else { "⌃9" })
+            Some(if cfg!(target_os = "macos") {
+                "⌘9"
+            } else {
+                "⌃9"
+            })
         );
         assert_eq!(TabSwitchHintState::label_for_index(9), None);
     }
@@ -298,12 +303,7 @@ mod tests {
         let visible_at = now + TAB_SWITCH_HINT_HOLD_DELAY + TAB_SWITCH_HINT_FADE_DURATION;
 
         assert!(state.progress(visible_at, false) > 0.0);
-        assert!(state.suppress_for_key_down(
-            "k",
-            Modifiers::secondary_key(),
-            false,
-            visible_at
-        ));
+        assert!(state.suppress_for_key_down("k", Modifiers::secondary_key(), false, visible_at));
         assert_eq!(state.progress(visible_at, false), 0.0);
     }
 
@@ -314,11 +314,7 @@ mod tests {
         state.handle_modifiers_changed(Modifiers::secondary_key(), now);
         let visible_at = now + TAB_SWITCH_HINT_HOLD_DELAY + TAB_SWITCH_HINT_FADE_DURATION;
 
-        assert!(!state.suppress_for_action(
-            CommandAction::SwitchToTab4,
-            false,
-            visible_at
-        ));
+        assert!(!state.suppress_for_action(CommandAction::SwitchToTab4, false, visible_at));
         assert!(state.progress(visible_at, false) > 0.0);
     }
 

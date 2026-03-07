@@ -4,6 +4,7 @@ mod app_actions;
 mod colors;
 mod commands;
 mod config;
+mod deeplink;
 mod keybindings;
 mod menus;
 mod plugins;
@@ -11,10 +12,13 @@ mod settings_view;
 mod startup;
 mod terminal_view;
 mod text_input;
+mod theme_store;
 mod ui;
 
 use commands::{OpenConfig, OpenSettings};
-use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use deeplink::DeepLinkRoute;
+use flume::Receiver;
+use gpui::{App, Application, AsyncApp, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 use startup::StartupBlocker;
 use terminal_view::{TerminalView, initial_window_background_appearance};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -158,15 +162,156 @@ fn reopen_main_window(cx: &mut App) {
     }
 }
 
+fn focus_or_open_main_window<V: 'static>(
+    cx: &mut App,
+    mut open_window: impl FnMut(&mut App),
+) -> bool {
+    if app_actions::focus_existing_window::<V>(cx) {
+        return false;
+    }
+
+    if app_actions::has_window::<V>(cx) {
+        return false;
+    }
+
+    open_window(cx);
+    true
+}
+
+fn start_theme_install_from_deeplink(cx: &mut App, slug: String) {
+    let loading_id = termy_toast::loading(format!("Fetching theme \"{slug}\"..."));
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let fetch_result = cx
+            .background_executor()
+            .spawn(async move { theme_store::fetch_theme_for_deeplink_blocking(&slug) })
+            .await;
+
+        termy_toast::dismiss_toast(loading_id);
+
+        match fetch_result {
+            Ok(theme) => {
+                let title = "Install Theme";
+                let message = format!(
+                    "Install theme \"{}\" and import its colors into your config?",
+                    theme.name
+                );
+                if !termy_native_sdk::confirm(title, &message) {
+                    return;
+                }
+
+                let install_loading_id =
+                    termy_toast::loading(format!("Installing {}...", theme.name));
+                let install_result = cx
+                    .background_executor()
+                    .spawn(async move { theme_store::install_theme_from_store_blocking(theme) })
+                    .await;
+                termy_toast::dismiss_toast(install_loading_id);
+
+                cx.update(|cx| match install_result {
+                    Ok(installed_theme) => {
+                        termy_toast::success(installed_theme.message.clone());
+                        app_actions::update_open_settings_windows(cx, |view, settings_cx| {
+                            view.apply_theme_store_install(
+                                &installed_theme.slug,
+                                &installed_theme.version,
+                                settings_cx,
+                            );
+                        });
+                    }
+                    Err(error) => {
+                        log::error!("Failed to install theme from deeplink: {error}");
+                        termy_toast::error(error);
+                    }
+                });
+            }
+            Err(error) => {
+                log::error!("Failed to fetch theme from deeplink: {error}");
+                termy_toast::error(error);
+            }
+        }
+    })
+    .detach();
+}
+
+fn dispatch_deeplink(
+    cx: &mut App,
+    route: DeepLinkRoute,
+    route_argument: Option<String>,
+) -> Result<(), String> {
+    match route {
+        DeepLinkRoute::Activate => Ok(()),
+        DeepLinkRoute::Settings => app_actions::open_settings_window(cx),
+        DeepLinkRoute::OpenConfig => app_actions::open_config_file(),
+        DeepLinkRoute::ThemeInstall => {
+            let slug = route_argument
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "Theme install deeplink requires a slug".to_string())?;
+            start_theme_install_from_deeplink(cx, slug);
+            Ok(())
+        }
+    }
+}
+
+fn handle_open_urls_with_main_window<V: 'static>(
+    cx: &mut App,
+    urls: &[String],
+    mut open_window: impl FnMut(&mut App),
+    mut dispatch: impl FnMut(&mut App, DeepLinkRoute, Option<String>) -> Result<(), String>,
+) {
+    for raw_url in urls {
+        match DeepLinkRoute::parse(raw_url) {
+            Ok((route, route_argument)) => {
+                log::info!("Handling deeplink: {raw_url}");
+                let _ = focus_or_open_main_window::<V>(cx, &mut open_window);
+                if let Err(error) = dispatch(cx, route, route_argument) {
+                    log::error!("Failed to handle deeplink {raw_url}: {error}");
+                    termy_toast::error(error);
+                }
+            }
+            Err(error) => {
+                log::warn!("Rejected deeplink {raw_url}: {error}");
+                termy_toast::error(error);
+            }
+        }
+    }
+}
+
+fn handle_open_urls(cx: &mut App, urls: &[String]) {
+    handle_open_urls_with_main_window::<TerminalView>(
+        cx,
+        urls,
+        reopen_main_window,
+        dispatch_deeplink,
+    );
+}
+
+fn spawn_deeplink_listener(cx: &mut App, deeplink_rx: Receiver<Vec<String>>) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Ok(urls) = deeplink_rx.recv_async().await {
+            cx.update(|cx| handle_open_urls(cx, &urls));
+        }
+    })
+    .detach();
+}
+
 fn main() {
     env_logger::init();
 
+    let (deeplink_tx, deeplink_rx) = flume::unbounded::<Vec<String>>();
     let application = Application::new();
     application.on_reopen(|cx| {
         let _ = reopen_if_no_windows(cx, reopen_main_window);
     });
+    application.on_open_urls(move |urls| {
+        if let Err(error) = deeplink_tx.send(urls) {
+            log::error!("Failed to enqueue deeplink event: {error}");
+        }
+    });
 
-    application.run(|cx: &mut App| {
+    application.run(move |cx: &mut App| {
+        spawn_deeplink_listener(cx, deeplink_rx);
+
         cx.on_action(|_: &OpenConfig, _cx| {
             if let Err(error) = app_actions::open_config_file() {
                 log::error!("Failed to open config file: {}", error);
@@ -203,10 +348,15 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::reopen_if_no_windows;
+    use super::{
+        DeepLinkRoute, focus_or_open_main_window, handle_open_urls_with_main_window,
+        reopen_if_no_windows,
+    };
+    use crate::app_actions;
     use gpui::{
         App, AppContext, Context, IntoElement, Render, TestAppContext, Window, WindowOptions, div,
     };
+    use std::cell::RefCell;
 
     struct ReopenTestView;
 
@@ -248,5 +398,124 @@ mod tests {
             "expected reopen hook to be skipped when a window already exists"
         );
         assert_eq!(cx.windows().len(), 1);
+    }
+
+    #[gpui::test]
+    fn focus_or_open_main_window_opens_when_missing(cx: &mut TestAppContext) {
+        assert_eq!(cx.windows().len(), 0);
+
+        let opened =
+            cx.update(|app| focus_or_open_main_window::<ReopenTestView>(app, open_test_window));
+
+        assert!(opened, "expected missing window to be opened");
+        assert_eq!(cx.windows().len(), 1);
+    }
+
+    #[gpui::test]
+    fn focus_or_open_main_window_reuses_existing_window(cx: &mut TestAppContext) {
+        cx.update(open_test_window);
+        assert_eq!(cx.windows().len(), 1);
+
+        let opened =
+            cx.update(|app| focus_or_open_main_window::<ReopenTestView>(app, open_test_window));
+
+        assert!(
+            !opened,
+            "expected existing main window to be reused without opening another"
+        );
+        assert_eq!(cx.windows().len(), 1);
+    }
+
+    #[gpui::test]
+    fn handle_open_urls_opens_window_before_dispatch(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from("termy://settings")],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(*handled.borrow(), vec![(DeepLinkRoute::Settings, None)]);
+    }
+
+    #[gpui::test]
+    fn bare_deeplink_opens_window_without_error_route(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from("termy://")],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(*handled.borrow(), vec![(DeepLinkRoute::Activate, None)]);
+    }
+
+    #[gpui::test]
+    fn theme_install_deeplink_passes_slug_argument(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from(
+                    "termy://store/theme-install?slug=catppuccin-mocha",
+                )],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(
+            *handled.borrow(),
+            vec![(
+                DeepLinkRoute::ThemeInstall,
+                Some("catppuccin-mocha".to_string())
+            )]
+        );
+    }
+
+    #[gpui::test]
+    fn settings_deeplink_reuses_existing_settings_window(cx: &mut TestAppContext) {
+        cx.update(|app| {
+            app_actions::open_settings_window(app).expect("settings window should open");
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from("termy://settings")],
+                open_test_window,
+                super::dispatch_deeplink,
+            );
+        });
+
+        let settings_count = cx
+            .windows()
+            .into_iter()
+            .filter(|handle| {
+                handle
+                    .downcast::<crate::settings_view::SettingsWindow>()
+                    .is_some()
+            })
+            .count();
+
+        assert_eq!(settings_count, 1);
     }
 }

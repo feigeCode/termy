@@ -7,13 +7,13 @@ pub(crate) fn open_config_file() -> Result<(), String> {
     config::open_config_file().map_err(|error| error.to_string())
 }
 
-fn focus_existing_settings_window(cx: &mut App) -> bool {
-    if let Some(settings_window) = cx
+pub(crate) fn focus_existing_window<V: 'static>(cx: &mut App) -> bool {
+    if let Some(window_handle) = cx
         .windows()
         .into_iter()
-        .find_map(|handle| handle.downcast::<SettingsWindow>())
+        .find_map(|handle| handle.downcast::<V>())
     {
-        settings_window
+        window_handle
             .update(cx, |_view, window, _cx| {
                 window.activate_window();
             })
@@ -23,21 +23,34 @@ fn focus_existing_settings_window(cx: &mut App) -> bool {
     }
 }
 
-fn has_settings_window(cx: &App) -> bool {
+pub(crate) fn has_window<V: 'static>(cx: &App) -> bool {
     cx.windows()
         .into_iter()
-        .any(|handle| handle.downcast::<SettingsWindow>().is_some())
+        .any(|handle| handle.downcast::<V>().is_some())
+}
+
+pub(crate) fn update_open_settings_windows(
+    cx: &mut App,
+    mut update: impl FnMut(&mut SettingsWindow, &mut gpui::Context<SettingsWindow>),
+) {
+    for settings_window in cx
+        .windows()
+        .into_iter()
+        .filter_map(|handle| handle.downcast::<SettingsWindow>())
+    {
+        let _ = settings_window.update(cx, |view, _window, cx| update(view, cx));
+    }
 }
 
 pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
     // Key-repeat and repeated action dispatch should raise the existing settings window,
     // not spawn duplicate windows.
-    if focus_existing_settings_window(cx) {
+    if focus_existing_window::<SettingsWindow>(cx) {
         return Ok(());
     }
     // If a settings window still exists after a failed focus attempt (for example,
     // during a re-entrant update), do not open a duplicate.
-    if has_settings_window(cx) {
+    if has_window::<SettingsWindow>(cx) {
         return Ok(());
     }
 

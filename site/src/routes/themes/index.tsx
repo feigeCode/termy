@@ -16,6 +16,10 @@ export const Route = createFileRoute("/themes/")({
   component: ThemeStorePage,
 });
 
+function buildThemeInstallHref(slug: string): string {
+  return `termy://store/theme-install?slug=${encodeURIComponent(slug)}`;
+}
+
 function ThemeColorSwatch({ fileUrl }: { fileUrl: string | null }): JSX.Element {
   const [palette, setPalette] = useState<ThemePalette | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,39 +165,46 @@ function ThemeStorePage(): JSX.Element {
         {/* Theme cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {themes.map((theme, i) => (
-            <Link
+            <div
               key={theme.id}
-              to="/themes/$slug"
-              params={{ slug: theme.slug }}
               className="animate-blur-in group flex flex-col rounded-xl border border-border/40 bg-card/30 transition-all duration-300 hover:border-primary/20 hover:bg-card/60 overflow-hidden"
               style={{ animationDelay: `${(i + 1) * 100}ms` }}
             >
-              {/* Swatch mockup area */}
-              <ThemeColorSwatch fileUrl={theme.fileUrl} />
+              <Link
+                to="/themes/$slug"
+                params={{ slug: theme.slug }}
+                className="flex flex-col"
+              >
+                <ThemeColorSwatch fileUrl={theme.fileUrl} />
 
-              {/* Divider */}
-              <div className="mx-4 sm:mx-5 border-t border-border/30" />
+                <div className="mx-4 sm:mx-5 border-t border-border/30" />
 
-              {/* Text content */}
-              <div className="p-4 sm:p-5 mt-auto flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-[15px] font-semibold text-foreground leading-tight truncate">
-                    {theme.name}
-                  </h3>
-                  {theme.latestVersion && (
-                    <span className="shrink-0 rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                      {theme.latestVersion}
-                    </span>
-                  )}
+                <div className="p-4 sm:p-5 mt-auto flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-[15px] font-semibold text-foreground leading-tight truncate">
+                      {theme.name}
+                    </h3>
+                    {theme.latestVersion && (
+                      <span className="shrink-0 rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                        {theme.latestVersion}
+                      </span>
+                    )}
+                  </div>
+                  <p className="line-clamp-2 text-sm text-muted-foreground/80 leading-relaxed">
+                    {theme.description || "No description provided."}
+                  </p>
+                  <span className="text-[11px] text-primary/50 font-mono tracking-wide mt-1">
+                    @{theme.githubUsernameClaim}
+                  </span>
                 </div>
-                <p className="line-clamp-2 text-sm text-muted-foreground/80 leading-relaxed">
-                  {theme.description || "No description provided."}
-                </p>
-                <span className="text-[11px] text-primary/50 font-mono tracking-wide mt-1">
-                  @{theme.githubUsernameClaim}
-                </span>
+              </Link>
+
+              <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+                <Button asChild size="sm" className="w-full">
+                  <a href={buildThemeInstallHref(theme.slug)}>Install</a>
+                </Button>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
 

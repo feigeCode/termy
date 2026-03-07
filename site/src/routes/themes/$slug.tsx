@@ -14,6 +14,10 @@ export const Route = createFileRoute("/themes/$slug")({
   component: ThemeDetailPage,
 });
 
+function buildThemeInstallHref(slug: string): string {
+  return `termy://store/theme-install?slug=${encodeURIComponent(slug)}`;
+}
+
 function ThemeDetailPage(): JSX.Element {
   const { slug } = Route.useParams();
 
@@ -128,6 +132,21 @@ function ThemeDetailPage(): JSX.Element {
               <span className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
                 Latest {theme.latestVersion}
               </span>
+            )}
+          </div>
+          <div
+            className="mt-6 flex flex-wrap items-center justify-center gap-3 animate-blur-in"
+            style={{ animationDelay: "250ms" }}
+          >
+            <Button asChild>
+              <a href={buildThemeInstallHref(theme.slug)}>Install in Termy</a>
+            </Button>
+            {latestFileUrl && (
+              <Button asChild variant="outline">
+                <a href={latestFileUrl} target="_blank" rel="noreferrer">
+                  Download JSON
+                </a>
+              </Button>
             )}
           </div>
         </div>

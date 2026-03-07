@@ -2,9 +2,10 @@
 Name=Termy
 GenericName=Terminal Emulator
 Comment=Minimal GPUI-powered terminal
-Exec=termy
+Exec=termy %u
 Icon=termy
 Terminal=false
 Type=Application
 Categories=System;TerminalEmulator;
 Keywords=shell;prompt;command;commandline;cmd;
+MimeType=x-scheme-handler/termy;

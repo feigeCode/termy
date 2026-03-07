@@ -33,6 +33,23 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' is required"
 }
 
+ensure_termy_url_scheme() {
+  local app_path="$1"
+  local plist_path="$app_path/Contents/Info.plist"
+  local plist_buddy="/usr/libexec/PlistBuddy"
+
+  [[ -f "$plist_path" ]] || die "App bundle Info.plist not found at $plist_path"
+  [[ -x "$plist_buddy" ]] || die "PlistBuddy is required to patch $plist_path"
+
+  "$plist_buddy" -c "Delete :CFBundleURLTypes" "$plist_path" >/dev/null 2>&1 || true
+  "$plist_buddy" -c "Add :CFBundleURLTypes array" "$plist_path"
+  "$plist_buddy" -c "Add :CFBundleURLTypes:0 dict" "$plist_path"
+  "$plist_buddy" -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.example.termy.deeplink" "$plist_path"
+  "$plist_buddy" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$plist_path"
+  "$plist_buddy" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string termy" "$plist_path"
+  /usr/bin/plutil -lint "$plist_path" >/dev/null
+}
+
 read_version_from_cargo_toml() {
   awk '
     /^\[package\]$/ { in_package = 1; next }
@@ -161,6 +178,9 @@ else
 fi
 [[ -n "$APP_PATH" && -d "$APP_PATH" ]] || die "Could not find built app bundle"
 
+log "Registering termy:// URL scheme in app bundle"
+ensure_termy_url_scheme "$APP_PATH"
+
 # Copy CLI binary into app bundle
 log "Copying CLI binary into app bundle"
 CLI_BIN="$TARGET_RELEASE_DIR/termy-cli"
@@ -186,6 +206,7 @@ hdiutil create \
   -volname "$VOLUME_NAME" \
   -srcfolder "$DMG_ROOT" \
   -ov \
+  -fs HFS+ \
   -format UDRW \
   "$RW_DMG" >/dev/null
 
@@ -200,8 +221,10 @@ cleanup() {
 trap cleanup EXIT
 
 ATTACH_INFO="$(hdiutil attach -readwrite -noverify -noautoopen "$RW_DMG")"
-IFS=$'\t' read -r DEVICE MOUNT_POINT <<< "$(printf '%s\n' "$ATTACH_INFO" | awk '/\/Volumes\// {print $1 "\t" $NF; exit}')"
-[[ -n "$DEVICE" && -n "$MOUNT_POINT" && -d "$MOUNT_POINT" ]] || die "Failed to mount temporary DMG"
+ATTACH_LINE="$(printf '%s\n' "$ATTACH_INFO" | awk '/\/Volumes\// {print; exit}')"
+DEVICE="${ATTACH_LINE%%[[:space:]]*}"
+MOUNT_POINT="$(printf '%s\n' "$ATTACH_LINE" | sed -E 's@.*(/Volumes/.*)$@\1@')"
+[[ -n "$DEVICE" && -n "$MOUNT_POINT" && -d "$MOUNT_POINT" ]] || die "Failed to mount temporary DMG. hdiutil output: $ATTACH_INFO"
 
 if [[ "$SKIP_LAYOUT" -eq 0 && -x "/usr/bin/osascript" ]]; then
   log "Applying Finder layout"

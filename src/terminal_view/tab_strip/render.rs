@@ -168,7 +168,6 @@ mod tests {
         assert!(!collisions.left);
         assert!(!collisions.right);
     }
-
 }
 
 struct TabStripRenderState {

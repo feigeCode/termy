@@ -1,7 +1,7 @@
 use crate::config;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
+use termy_themes::{Rgb8, ThemeColors, normalize_theme_id};
 
 const DEFAULT_THEME_STORE_API_URL: &str = "https://api.termy.run";
 const DEFAULT_THEME_DEEPLINK_API_URL: &str = "https://termy.run/theme-api";
@@ -104,6 +104,45 @@ pub(crate) fn load_installed_theme_versions() -> HashMap<String, String> {
     HashMap::new()
 }
 
+pub(crate) fn load_installed_theme_ids() -> Vec<String> {
+    let mut ids = Vec::new();
+    let Some(dir) = installed_themes_dir_path() else {
+        return ids;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return ids;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let normalized = normalize_theme_id(stem);
+        if !normalized.is_empty() {
+            ids.push(normalized);
+        }
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn load_installed_theme_colors(theme_id: &str) -> Option<ThemeColors> {
+    let normalized = normalize_theme_id(theme_id);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let path = installed_theme_file_path(&normalized)?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    parse_theme_colors_json(&contents).ok()
+}
+
 pub(crate) fn persist_installed_theme_versions(
     versions: &HashMap<String, String>,
 ) -> Result<(), String> {
@@ -145,17 +184,23 @@ pub(crate) fn install_theme_from_store_blocking(
         .into_string()
         .map_err(|error| format!("Failed to read theme '{}': {error}", theme.slug))?;
 
-    let mut file =
-        tempfile::NamedTempFile::new().map_err(|error| format!("Temp file error: {error}"))?;
-    file.write_all(contents.as_bytes())
-        .map_err(|error| format!("Failed to write temp theme file: {error}"))?;
+    parse_theme_colors_json(&contents)
+        .map_err(|error| format!("Failed to validate theme '{}': {error}", theme.name))?;
 
-    config::import_colors_from_json(file.path())
-        .map_err(|error| format!("Failed to install theme '{}': {error}", theme.name))?;
-
-    let mut installed_versions = HashMap::new();
     let normalized_slug = theme.slug.trim().to_ascii_lowercase();
     let installed_version = theme.latest_version.clone().unwrap_or_default();
+
+    let path = installed_theme_file_path(&normalized_slug)
+        .ok_or_else(|| "Config path unavailable".to_string())?;
+    let Some(parent) = path.parent() else {
+        return Err("Invalid installed theme path".to_string());
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create installed theme directory: {error}"))?;
+    std::fs::write(&path, contents)
+        .map_err(|error| format!("Failed to write installed theme file: {error}"))?;
+
+    let mut installed_versions = load_installed_theme_versions();
     installed_versions.insert(normalized_slug.clone(), installed_version.clone());
     persist_installed_theme_versions(&installed_versions)?;
 
@@ -170,6 +215,33 @@ fn installed_theme_state_path() -> Option<PathBuf> {
     let config_path = config::ensure_config_file().ok()?;
     let parent = config_path.parent()?;
     Some(parent.join("theme_store_installed.json"))
+}
+
+fn installed_themes_dir_path() -> Option<PathBuf> {
+    let config_path = config::ensure_config_file().ok()?;
+    let parent = config_path.parent()?;
+    Some(parent.join("themes"))
+}
+
+fn installed_theme_file_path(slug: &str) -> Option<PathBuf> {
+    let normalized = normalize_slug(slug).ok()?;
+    Some(installed_themes_dir_path()?.join(format!("{normalized}.json")))
+}
+
+pub(crate) fn uninstall_installed_theme(slug: &str) -> Result<bool, String> {
+    let key = normalize_slug(slug)?;
+    let mut installed_versions = load_installed_theme_versions();
+    let removed = installed_versions.remove(&key).is_some();
+
+    if let Some(path) = installed_theme_file_path(&key)
+        && path.exists()
+    {
+        std::fs::remove_file(&path)
+            .map_err(|error| format!("Failed to remove installed theme file: {error}"))?;
+    }
+
+    persist_installed_theme_versions(&installed_versions)?;
+    Ok(removed)
 }
 
 fn normalize_slug(slug: &str) -> Result<String, String> {
@@ -218,5 +290,64 @@ fn parse_theme_value(theme: &serde_json::Value) -> Option<ThemeStoreTheme> {
         description,
         latest_version,
         file_url,
+    })
+}
+
+fn parse_theme_colors_json(contents: &str) -> Result<ThemeColors, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(contents).map_err(|error| format!("Invalid JSON: {error}"))?;
+    let object = json
+        .as_object()
+        .ok_or_else(|| "Theme JSON must be an object".to_string())?;
+
+    let ansi = [
+        parse_required_color(object, "black")?,
+        parse_required_color(object, "red")?,
+        parse_required_color(object, "green")?,
+        parse_required_color(object, "yellow")?,
+        parse_required_color(object, "blue")?,
+        parse_required_color(object, "magenta")?,
+        parse_required_color(object, "cyan")?,
+        parse_required_color(object, "white")?,
+        parse_required_color(object, "bright_black")?,
+        parse_required_color(object, "bright_red")?,
+        parse_required_color(object, "bright_green")?,
+        parse_required_color(object, "bright_yellow")?,
+        parse_required_color(object, "bright_blue")?,
+        parse_required_color(object, "bright_magenta")?,
+        parse_required_color(object, "bright_cyan")?,
+        parse_required_color(object, "bright_white")?,
+    ];
+
+    Ok(ThemeColors {
+        ansi,
+        foreground: parse_required_color(object, "foreground")?,
+        background: parse_required_color(object, "background")?,
+        cursor: parse_required_color(object, "cursor")?,
+    })
+}
+
+fn parse_required_color(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Rgb8, String> {
+    let value = object
+        .get(key)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| format!("Theme JSON is missing '{key}'"))?;
+
+    parse_hex_color(value).ok_or_else(|| format!("Theme color '{key}' must be a #RRGGBB hex"))
+}
+
+fn parse_hex_color(value: &str) -> Option<Rgb8> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+
+    Some(Rgb8 {
+        r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+        g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+        b: u8::from_str_radix(&hex[4..6], 16).ok()?,
     })
 }

@@ -1,6 +1,6 @@
 # Main settings
 # Current color scheme name
-theme = termy
+theme = shell-decide
 # Enable automatic update checks and notifications
 auto_update = true
 # Enable tmux runtime integration

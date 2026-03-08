@@ -189,7 +189,7 @@ fn start_theme_install_from_deeplink(cx: &mut App, slug: String) {
             Ok(theme) => {
                 let title = "Install Theme";
                 let message = format!(
-                    "Install theme \"{}\" and import its colors into your config?",
+                    "Install theme \"{}\" into your local theme library?",
                     theme.name
                 );
                 if !termy_native_sdk::confirm(title, &message) {

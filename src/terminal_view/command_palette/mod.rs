@@ -1,4 +1,5 @@
 use super::*;
+use crate::theme_store;
 use gpui::point;
 use state::{
     CommandPaletteItem, CommandPaletteItemKind, command_palette_next_scroll_y,
@@ -225,10 +226,7 @@ impl TerminalView {
     }
 
     fn command_palette_theme_items(&self) -> Vec<CommandPaletteItem> {
-        let theme_ids: Vec<String> = termy_themes::available_theme_ids()
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect();
+        let theme_ids = theme_store::load_installed_theme_ids();
 
         ordered_theme_ids_for_palette(theme_ids, &self.theme_id)
             .into_iter()

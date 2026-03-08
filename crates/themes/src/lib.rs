@@ -12,11 +12,8 @@ mod termy;
 mod tokyo_night;
 mod tomorrow_night;
 
-use std::collections::HashSet;
 use std::sync::{OnceLock, RwLock};
-pub use termy_theme_core::{
-    BUILTIN_THEME_IDS, Rgb8, ThemeColors, canonical_builtin_theme_id, normalize_theme_id,
-};
+pub use termy_theme_core::{Rgb8, ThemeColors, normalize_theme_id};
 
 pub trait ThemeProvider: Send + Sync {
     fn theme(&self, theme_id: &str) -> Option<ThemeColors>;
@@ -36,12 +33,6 @@ impl ThemeRegistry {
         Self::default()
     }
 
-    pub fn with_builtins() -> Self {
-        let mut registry = Self::new();
-        registry.register_provider(BuiltinThemeProvider);
-        registry
-    }
-
     pub fn register_provider<P>(&mut self, provider: P)
     where
         P: ThemeProvider + 'static,
@@ -59,11 +50,10 @@ impl ThemeRegistry {
     }
 
     pub fn theme_ids(&self) -> Vec<&'static str> {
-        let mut seen = HashSet::new();
         let mut ids = Vec::new();
         for provider in &self.providers {
             for id in provider.theme_ids() {
-                if seen.insert(*id) {
+                if !ids.contains(id) {
                     ids.push(*id);
                 }
             }
@@ -72,22 +62,10 @@ impl ThemeRegistry {
     }
 }
 
-pub struct BuiltinThemeProvider;
-
-impl ThemeProvider for BuiltinThemeProvider {
-    fn theme(&self, theme_id: &str) -> Option<ThemeColors> {
-        builtin_theme(theme_id)
-    }
-
-    fn theme_ids(&self) -> &'static [&'static str] {
-        BUILTIN_THEME_IDS
-    }
-}
-
 static GLOBAL_THEME_REGISTRY: OnceLock<RwLock<ThemeRegistry>> = OnceLock::new();
 
 fn global_theme_registry() -> &'static RwLock<ThemeRegistry> {
-    GLOBAL_THEME_REGISTRY.get_or_init(|| RwLock::new(ThemeRegistry::with_builtins()))
+    GLOBAL_THEME_REGISTRY.get_or_init(|| RwLock::new(ThemeRegistry::new()))
 }
 
 pub fn register_theme_provider<P>(provider: P)
@@ -115,22 +93,8 @@ pub fn available_theme_ids() -> Vec<&'static str> {
 }
 
 pub fn builtin_theme(theme_id: &str) -> Option<ThemeColors> {
-    match canonical_builtin_theme_id(theme_id)? {
-        "termy" => Some(termy()),
-        "tokyo-night" => Some(tokyo_night()),
-        "catppuccin-mocha" => Some(catppuccin_mocha()),
-        "dracula" => Some(dracula()),
-        "gruvbox-dark" => Some(gruvbox_dark()),
-        "nord" => Some(nord()),
-        "solarized-dark" => Some(solarized_dark()),
-        "one-dark" => Some(one_dark()),
-        "monokai" => Some(monokai()),
-        "material-dark" => Some(material_dark()),
-        "palenight" => Some(palenight()),
-        "tomorrow-night" => Some(tomorrow_night()),
-        "oceanic-next" => Some(oceanic_next()),
-        _ => None,
-    }
+    let _ = theme_id;
+    None
 }
 
 pub fn tokyo_night() -> ThemeColors {

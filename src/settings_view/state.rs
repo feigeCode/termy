@@ -1151,9 +1151,10 @@ impl SettingsWindow {
     }
 
     pub(super) fn ordered_theme_ids_for_settings(&self) -> Vec<String> {
-        let mut theme_ids: Vec<String> = termy_themes::available_theme_ids()
-            .into_iter()
-            .map(ToOwned::to_owned)
+        let mut theme_ids: Vec<String> = self
+            .theme_store_installed_versions
+            .keys()
+            .cloned()
             .collect();
         theme_ids.push("shell-decide".to_string());
 

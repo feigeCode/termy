@@ -297,8 +297,6 @@ impl SettingsWindow {
                     match result {
                         Ok(installed_theme) => {
                             termy_toast::success(installed_theme.message);
-                            // Keep a single installed store theme marker at a time.
-                            view.theme_store_installed_versions.clear();
                             view.theme_store_installed_versions
                                 .insert(installed_slug.clone(), installed_version.clone());
                             if let Err(error) = theme_store::persist_installed_theme_versions(
@@ -324,7 +322,7 @@ impl SettingsWindow {
     ) {
         let title = "Install Theme";
         let message = format!(
-            "Install theme \"{}\" and import its colors into your config?",
+            "Install theme \"{}\" into your local theme library?",
             theme.name
         );
 
@@ -349,23 +347,29 @@ impl SettingsWindow {
             return;
         }
 
-        if self.theme_store_installed_versions.remove(&key).is_some() {
-            if let Err(error) = config::clear_all_color_overrides() {
-                log::error!("Failed to clear colors during uninstall: {}", error);
-                termy_toast::error("Failed to remove installed theme colors");
+        match theme_store::uninstall_installed_theme(&key) {
+            Ok(true) => {
+                self.theme_store_installed_versions.remove(&key);
+                if self.config.theme.eq_ignore_ascii_case(&key) {
+                    if let Err(error) = config::set_theme_in_config(config::SHELL_DECIDE_THEME_ID) {
+                        log::error!("Failed to reset theme during uninstall: {}", error);
+                        termy_toast::error("Failed to reset selected theme");
+                        return;
+                    }
+                    self.config.theme = config::SHELL_DECIDE_THEME_ID.to_string();
+                }
+                let _ = self.reload_config_if_changed(cx);
+                termy_toast::success("Theme uninstalled");
+            }
+            Ok(false) => {
+                termy_toast::info("Theme is not installed");
                 return;
             }
-            if let Err(error) =
-                theme_store::persist_installed_theme_versions(&self.theme_store_installed_versions)
-            {
-                log::error!("Failed to persist installed theme state: {}", error);
-                termy_toast::error("Failed to persist uninstall state");
+            Err(error) => {
+                log::error!("Failed to uninstall theme: {}", error);
+                termy_toast::error(error);
                 return;
             }
-            let _ = self.reload_config_if_changed(cx);
-            termy_toast::success("Theme uninstalled and colors reverted");
-        } else {
-            termy_toast::info("Theme is not installed");
         }
     }
 
@@ -375,7 +379,6 @@ impl SettingsWindow {
         version: &str,
         cx: &mut Context<Self>,
     ) {
-        self.theme_store_installed_versions.clear();
         self.theme_store_installed_versions
             .insert(slug.trim().to_ascii_lowercase(), version.to_string());
         cx.notify();

@@ -19,21 +19,7 @@ pub struct ThemeColors {
     pub cursor: Rgb8,
 }
 
-pub const BUILTIN_THEME_IDS: &[&str] = &[
-    "termy",
-    "tokyo-night",
-    "catppuccin-mocha",
-    "dracula",
-    "gruvbox-dark",
-    "nord",
-    "solarized-dark",
-    "one-dark",
-    "monokai",
-    "material-dark",
-    "palenight",
-    "tomorrow-night",
-    "oceanic-next",
-];
+pub const BUILTIN_THEME_IDS: &[&str] = &[];
 
 pub const ANSI_COLOR_NAMES: [&str; 16] = [
     "black",
@@ -83,29 +69,8 @@ pub fn normalize_theme_id(theme_id: &str) -> String {
 }
 
 pub fn canonical_builtin_theme_id(theme_id: &str) -> Option<&'static str> {
-    let normalized = normalize_theme_lookup(theme_id);
-    match normalized.as_str() {
-        "termy" | "default" => Some("termy"),
-        "tokyonight" => Some("tokyo-night"),
-        "catppuccin" | "catppuccinmocha" => Some("catppuccin-mocha"),
-        "dracula" => Some("dracula"),
-        "gruvbox" | "gruvboxdark" => Some("gruvbox-dark"),
-        "nord" => Some("nord"),
-        "solarized" | "solarizeddark" => Some("solarized-dark"),
-        "one" | "onedark" => Some("one-dark"),
-        "monokai" => Some("monokai"),
-        "material" | "materialdark" => Some("material-dark"),
-        "palenight" => Some("palenight"),
-        "tomorrow" | "tomorrownight" => Some("tomorrow-night"),
-        "oceanic" | "oceanicnext" => Some("oceanic-next"),
-        _ => None,
-    }
-}
-
-fn normalize_theme_lookup(theme_id: &str) -> String {
-    let mut normalized = normalize_theme_id(theme_id);
-    normalized.retain(|character| character != '-');
-    normalized
+    let _ = theme_id;
+    None
 }
 
 pub fn format_hex(color: Rgb8) -> String {
@@ -128,12 +93,9 @@ mod tests {
     }
 
     #[test]
-    fn builtin_aliases_canonicalize() {
-        assert_eq!(canonical_builtin_theme_id("gruvbox"), Some("gruvbox-dark"));
-        assert_eq!(
-            canonical_builtin_theme_id("tokyonight"),
-            Some("tokyo-night")
-        );
-        assert_eq!(canonical_builtin_theme_id("default"), Some("termy"));
+    fn builtin_aliases_are_disabled() {
+        assert_eq!(canonical_builtin_theme_id("gruvbox"), None);
+        assert_eq!(canonical_builtin_theme_id("tokyonight"), None);
+        assert_eq!(canonical_builtin_theme_id("default"), None);
     }
 }

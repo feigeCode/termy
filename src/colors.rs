@@ -1,4 +1,5 @@
 use crate::config::{CustomColors, SHELL_DECIDE_THEME_ID};
+use crate::theme_store;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb as AnsiRgb};
 use gpui::Rgba;
 use termy_themes as themes;
@@ -45,8 +46,12 @@ impl TerminalColors {
         let mut colors = if theme.eq_ignore_ascii_case(SHELL_DECIDE_THEME_ID) {
             Self::default()
         } else {
-            let theme_colors = themes::resolve_theme(theme).unwrap_or_else(themes::termy);
-            Self::from_theme_colors(theme_colors)
+            match theme_store::load_installed_theme_colors(theme)
+                .or_else(|| themes::resolve_theme(theme))
+            {
+                Some(theme_colors) => Self::from_theme_colors(theme_colors),
+                None => Self::default(),
+            }
         };
         colors.apply_custom(custom);
         colors

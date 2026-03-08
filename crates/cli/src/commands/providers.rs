@@ -31,14 +31,13 @@ pub fn list_color_lines() -> Vec<String> {
     let theme_id = active_theme_id();
     let mut lines = vec![format!("Theme: {}", theme_id), String::new()];
 
-    let theme_colors = termy_themes::resolve_theme(&theme_id);
-    let colors = match theme_colors {
+    let colors = match termy_themes::resolve_theme(&theme_id) {
         Some(colors) => colors,
         None => {
             lines.push(format!("Unknown theme: {}", theme_id));
-            lines.push("Using built-in fallback: termy".to_string());
+            lines.push("Using terminal default fallback colors".to_string());
             lines.push(String::new());
-            termy_themes::termy()
+            terminal_default_theme_colors()
         }
     };
 
@@ -123,6 +122,34 @@ fn action_lines_for_capabilities(tmux_enabled: bool, install_cli_available: bool
             )
         })
         .collect()
+}
+
+fn terminal_default_theme_colors() -> termy_themes::ThemeColors {
+    use termy_themes::Rgb8;
+
+    termy_themes::ThemeColors {
+        ansi: [
+            Rgb8::new(0x00, 0x00, 0x00),
+            Rgb8::new(0xCD, 0x00, 0x00),
+            Rgb8::new(0x00, 0xCD, 0x00),
+            Rgb8::new(0xCD, 0xCD, 0x00),
+            Rgb8::new(0x00, 0x00, 0xEE),
+            Rgb8::new(0xCD, 0x00, 0xCD),
+            Rgb8::new(0x00, 0xCD, 0xCD),
+            Rgb8::new(0xE5, 0xE5, 0xE5),
+            Rgb8::new(0x7F, 0x7F, 0x7F),
+            Rgb8::new(0xFF, 0x00, 0x00),
+            Rgb8::new(0x00, 0xFF, 0x00),
+            Rgb8::new(0xFF, 0xFF, 0x00),
+            Rgb8::new(0x5C, 0x5C, 0xFF),
+            Rgb8::new(0xFF, 0x00, 0xFF),
+            Rgb8::new(0x00, 0xFF, 0xFF),
+            Rgb8::new(0xFF, 0xFF, 0xFF),
+        ],
+        foreground: Rgb8::new(0xE5, 0xE5, 0xE5),
+        background: Rgb8::new(0x1E, 0x1E, 0x1E),
+        cursor: Rgb8::new(0xFF, 0xFF, 0xFF),
+    }
 }
 
 fn keybind_lines_for_tmux_enabled(
@@ -419,6 +446,6 @@ mod tests {
     #[test]
     fn themes_are_sourced_from_theme_registry() {
         let themes = list_theme_lines();
-        assert!(themes.iter().any(|theme| theme == "termy"));
+        assert!(themes.is_empty());
     }
 }

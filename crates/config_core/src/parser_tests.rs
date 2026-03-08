@@ -595,10 +595,10 @@ fn shell_decide_theme_aliases_canonicalize() {
 }
 
 #[test]
-fn builtin_theme_aliases_canonicalize() {
+fn theme_ids_are_normalized_without_builtin_aliases() {
     let config = parse("theme = gruvbox\n");
-    assert_eq!(config.theme, "gruvbox-dark");
+    assert_eq!(config.theme, "gruvbox");
 
     let config = parse("theme = tokyonight\n");
-    assert_eq!(config.theme, "tokyo-night");
+    assert_eq!(config.theme, "tokyonight");
 }

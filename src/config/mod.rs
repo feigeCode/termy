@@ -2,8 +2,10 @@ mod error;
 mod io;
 mod mutate;
 
+use crate::theme_store;
 use std::time::Duration;
 use std::{
+    collections::HashSet,
     fs,
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
@@ -12,8 +14,8 @@ use std::{
 pub use error::ConfigIoError;
 pub use io::{ensure_config_file, open_config_file, subscribe_config_changes};
 pub use mutate::{
-    clear_all_color_overrides, import_colors_from_json, remove_root_setting, set_color_setting,
-    set_keybind_lines, set_root_setting, set_theme_in_config,
+    import_colors_from_json, remove_root_setting, set_color_setting, set_keybind_lines,
+    set_root_setting, set_theme_in_config,
 };
 pub use termy_config_core::{
     AiProvider, AppConfig, ConfigDiagnostic, ConfigDiagnosticKind, CursorStyle, CustomColors,
@@ -38,10 +40,16 @@ pub struct RuntimeConfigLoad {
 pub(crate) const DEFAULT_CONFIG: &str = termy_config_core::DEFAULT_CONFIG_TEMPLATE;
 
 fn load_from_path(path: PathBuf) -> Result<LoadedConfig, ConfigIoError> {
-    let contents = fs::read_to_string(&path).map_err(|source| ConfigIoError::ReadConfig {
-        path: path.clone(),
-        source,
-    })?;
+    let original_contents =
+        fs::read_to_string(&path).map_err(|source| ConfigIoError::ReadConfig {
+            path: path.clone(),
+            source,
+        })?;
+    let contents = migrate_legacy_builtin_theme_in_contents(&original_contents);
+    if contents != original_contents {
+        io::write_atomic(&path, &contents)?;
+        io::notify_config_changed();
+    }
     let fingerprint = config_fingerprint_from_bytes(contents.as_bytes());
     let report = AppConfig::from_contents_with_report(&contents);
 
@@ -171,6 +179,61 @@ fn diagnostic_kind_label(kind: ConfigDiagnosticKind) -> &'static str {
     }
 }
 
+fn migrate_legacy_builtin_theme_in_contents(contents: &str) -> String {
+    let installed_theme_ids: HashSet<String> = theme_store::load_installed_theme_ids()
+        .into_iter()
+        .collect();
+    migrate_legacy_builtin_theme_in_contents_with_installed_ids(contents, &installed_theme_ids)
+}
+
+fn migrate_legacy_builtin_theme_in_contents_with_installed_ids(
+    contents: &str,
+    installed_theme_ids: &HashSet<String>,
+) -> String {
+    let report = AppConfig::from_contents(contents);
+    let Some(canonical_legacy_theme) = canonical_legacy_builtin_theme_id(&report.theme) else {
+        return contents.to_string();
+    };
+
+    let next_theme = if installed_theme_ids.contains(canonical_legacy_theme) {
+        canonical_legacy_theme.to_string()
+    } else {
+        SHELL_DECIDE_THEME_ID.to_string()
+    };
+
+    if report.theme == next_theme {
+        return contents.to_string();
+    }
+
+    termy_config_core::upsert_root_setting(
+        contents,
+        termy_config_core::RootSettingId::Theme,
+        &next_theme,
+    )
+}
+
+fn canonical_legacy_builtin_theme_id(theme_id: &str) -> Option<&'static str> {
+    let normalized = termy_themes::normalize_theme_id(theme_id);
+    let lookup = normalized.replace('-', "");
+
+    match lookup.as_str() {
+        "termy" | "default" => Some("termy"),
+        "tokyonight" => Some("tokyo-night"),
+        "catppuccin" | "catppuccinmocha" => Some("catppuccin-mocha"),
+        "dracula" => Some("dracula"),
+        "gruvbox" | "gruvboxdark" => Some("gruvbox-dark"),
+        "nord" => Some("nord"),
+        "solarized" | "solarizeddark" => Some("solarized-dark"),
+        "one" | "onedark" => Some("one-dark"),
+        "monokai" => Some("monokai"),
+        "material" | "materialdark" => Some("material-dark"),
+        "palenight" => Some("palenight"),
+        "tomorrow" | "tomorrownight" => Some("tomorrow-night"),
+        "oceanic" | "oceanicnext" => Some("oceanic-next"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +301,23 @@ mod tests {
                 section_name
             );
         }
+    }
+
+    #[test]
+    fn migrates_removed_builtin_theme_to_shell_decide_when_not_installed() {
+        let output = migrate_legacy_builtin_theme_in_contents_with_installed_ids(
+            "theme = termy\nfont_size = 14\n",
+            &HashSet::new(),
+        );
+        assert_eq!(output, "theme = shell-decide\nfont_size = 14\n");
+    }
+
+    #[test]
+    fn migrates_legacy_builtin_alias_to_installed_slug() {
+        let output = migrate_legacy_builtin_theme_in_contents_with_installed_ids(
+            "theme = tokyonight\nfont_size = 14\n",
+            &HashSet::from([String::from("tokyo-night")]),
+        );
+        assert_eq!(output, "theme = tokyo-night\nfont_size = 14\n");
     }
 }

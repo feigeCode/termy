@@ -30,7 +30,12 @@ function EmptyState({ message, tone }: EmptyStateProps): JSX.Element {
   return (
     <div className={containerClassName}>
       <p className={messageClassName}>{message}</p>
-      <Button asChild variant="ghost" size="sm" className="mt-4 text-muted-foreground hover:text-foreground">
+      <Button
+        asChild
+        variant="ghost"
+        size="sm"
+        className="mt-4 text-muted-foreground hover:text-foreground"
+      >
         <Link to="/releases">View all changelogs</Link>
       </Button>
     </div>
@@ -44,7 +49,12 @@ function ReleaseDetailPage(): JSX.Element {
   return (
     <section className="pt-24 sm:pt-32 pb-20">
       <div className="max-w-4xl mx-auto">
-        <Button asChild variant="ghost" size="sm" className="mb-8 text-muted-foreground hover:text-foreground">
+        <Button
+          asChild
+          variant="ghost"
+          size="sm"
+          className="mb-8 text-muted-foreground hover:text-foreground"
+        >
           <Link to="/releases">
             <ChevronLeft className="w-4 h-4" />
             All changelogs
@@ -64,7 +74,9 @@ function ReleaseDetailPage(): JSX.Element {
         {!isLoading && !error && post && (
           <>
             <div className="mb-8">
-              <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-2">{post.title}</h1>
+              <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-2">
+                {post.title}
+              </h1>
               <time className="text-muted-foreground" dateTime={post.createdAt}>
                 {formatDate(post.createdAt)}
               </time>
@@ -82,6 +94,11 @@ function ReleaseDetailPage(): JSX.Element {
             </Button>
           </>
         )}
+
+        <div className="mt-16 pt-6 border-t border-border/50 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <span>Powered by</span>
+          <img src="/notra.svg" alt="Notra" className="h-5 w-5" />
+        </div>
       </div>
     </section>
   );

@@ -19,13 +19,20 @@ function ReleasesPage(): JSX.Element {
     <section className="pt-24 sm:pt-32 pb-20">
       <div className="max-w-4xl mx-auto">
         <div className="mb-12">
-          <Button asChild variant="ghost" size="sm" className="mb-4 text-muted-foreground hover:text-foreground">
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="mb-4 text-muted-foreground hover:text-foreground"
+          >
             <Link to="/">
               <ChevronLeft className="w-4 h-4" />
               Back to home
             </Link>
           </Button>
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold">Changelog</h1>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold">
+            Changelog
+          </h1>
           <p className="mt-4 text-lg text-muted-foreground">
             All updates to Termy, from the latest to the oldest.
           </p>
@@ -53,7 +60,10 @@ function ReleasesPage(): JSX.Element {
                   >
                     {post.title}
                   </Link>
-                  <time className="text-sm text-muted-foreground" dateTime={post.createdAt}>
+                  <time
+                    className="text-sm text-muted-foreground"
+                    dateTime={post.createdAt}
+                  >
                     {formatDate(post.createdAt)}
                   </time>
                 </div>
@@ -69,6 +79,11 @@ function ReleasesPage(): JSX.Element {
             ))}
           </div>
         )}
+
+        <div className="mt-16 pt-6 border-t border-border/50 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <span>Powered by</span>
+          <img src="/notra.svg" alt="Notra" className="h-5 w-5" />
+        </div>
       </div>
     </section>
   );

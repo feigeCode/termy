@@ -231,37 +231,6 @@ fn start_theme_install_from_deeplink(cx: &mut App, slug: String) {
 }
 
 fn start_auth_callback_from_deeplink(cx: &mut App, payload: AuthCallbackDeepLink) {
-    let maybe_session = match (
-        payload.user_id.clone(),
-        payload.github_user_id,
-        payload.github_login.clone(),
-    ) {
-        (Some(id), Some(github_user_id), Some(github_login)) => {
-            Some(theme_store::ThemeStoreAuthSession {
-                session_token: payload.session_token.clone(),
-                user: theme_store::ThemeStoreAuthUser {
-                    id,
-                    github_user_id,
-                    github_login,
-                    avatar_url: payload.avatar_url.clone(),
-                    name: payload.name.clone(),
-                },
-            })
-        }
-        _ => None,
-    };
-
-    if let Some(session) = maybe_session.clone() {
-        if let Err(error) = theme_store::persist_auth_session(&session) {
-            log::error!("Failed to persist theme store auth session: {}", error);
-            termy_toast::error(error);
-        } else {
-            app_actions::update_open_settings_windows(cx, |view, settings_cx| {
-                view.apply_theme_store_auth_session(session.clone(), settings_cx);
-            });
-        }
-    }
-
     let loading_id = termy_toast::loading("Signing in with GitHub...");
     let api_base = theme_store::theme_store_api_base_url();
     let session_token = payload.session_token.clone();

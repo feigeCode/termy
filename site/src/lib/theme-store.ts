@@ -272,16 +272,5 @@ export function buildNativeAuthCallbackUrl(
 ): string {
   const url = new URL("termy://auth/callback");
   url.searchParams.set("session_token", session.sessionToken);
-  url.searchParams.set("id", session.user.id);
-  url.searchParams.set("github_user_id", String(session.user.githubUserId));
-  url.searchParams.set("github_login", session.user.githubLogin);
-
-  if (session.user.avatarUrl) {
-    url.searchParams.set("avatar_url", session.user.avatarUrl);
-  }
-  if (session.user.name) {
-    url.searchParams.set("name", session.user.name);
-  }
-
   return url.toString();
 }

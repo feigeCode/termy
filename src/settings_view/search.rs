@@ -703,6 +703,7 @@ impl SettingsWindow {
                     "Login with GitHub"
                 })
                 .on_click(cx.listener(|view, _, _, cx| {
+                    println!("clicked");
                     view.begin_theme_store_login(cx);
                 }))
                 .into_any_element(),

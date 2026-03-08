@@ -462,10 +462,9 @@ impl SettingsWindow {
     }
 
     fn begin_theme_store_login(&mut self, cx: &mut Context<Self>) {
-        let login_url =
-            theme_store::theme_store_native_login_url(&Self::theme_store_api_base_url());
+        let login_url = "https://termy.run/device";
         self.theme_store_auth_error = None;
-        match Self::open_url(&login_url) {
+        match SettingsWindow::open_url(&login_url) {
             Ok(()) => {
                 self.theme_store_auth_loading = true;
                 cx.notify();
@@ -537,48 +536,51 @@ impl SettingsWindow {
     }
 
     pub(super) fn open_url(url: &str) -> Result<(), String> {
-        if webbrowser::open(url).is_ok() {
-            return Ok(());
-        }
-
         #[cfg(target_os = "macos")]
         {
-            Command::new("open")
+            if Command::new("open")
                 .arg(url)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("Failed to open URL: {error}"))?;
-            return Ok(());
+                .is_ok()
+            {
+                return Ok(());
+            }
         }
         #[cfg(target_os = "linux")]
         {
-            Command::new("xdg-open")
+            if Command::new("xdg-open")
                 .arg(url)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("Failed to open URL: {error}"))?;
-            return Ok(());
+                .is_ok()
+            {
+                return Ok(());
+            }
         }
         #[cfg(target_os = "windows")]
         {
-            Command::new("cmd")
+            if Command::new("cmd")
                 .args(["/C", "start", "", url])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("Failed to open URL: {error}"))?;
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+
+        if webbrowser::open(url).is_ok() {
             return Ok(());
         }
-        #[allow(unreachable_code)]
-        Err("Opening URLs is unsupported on this platform".to_string())
+
+        Err(format!("Failed to open URL: {url}"))
     }
 
     pub(super) fn open_path(path: &std::path::Path) -> Result<(), String> {

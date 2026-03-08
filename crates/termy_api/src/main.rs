@@ -472,10 +472,9 @@ async fn auth_github_callback(
         .or_else(|| state.auth.post_auth_redirect.clone())
         .unwrap_or_else(|| "/themes".to_string());
     let response = if is_termy_deeplink(&target) {
-        let native_target = build_native_auth_redirect_target(&target, &token, &auth_user)
-            .map_err(|_| {
-                ApiError::ExternalAuth("failed to build native auth redirect".to_string())
-            })?;
+        let native_target = build_native_auth_redirect_target(&target, &token).map_err(|_| {
+            ApiError::ExternalAuth("failed to build native auth redirect".to_string())
+        })?;
         Redirect::to(&native_target).into_response()
     } else {
         let cookie = build_session_cookie(
@@ -1463,21 +1462,11 @@ fn is_termy_deeplink(target: &str) -> bool {
 fn build_native_auth_redirect_target(
     target: &str,
     session_token: &str,
-    user: &AuthUser,
 ) -> Result<String, url::ParseError> {
     let mut url = Url::parse(target)?;
     {
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("session_token", session_token);
-        pairs.append_pair("id", &user.id.to_string());
-        pairs.append_pair("github_user_id", &user.github_user_id.to_string());
-        pairs.append_pair("github_login", &user.github_login);
-        if let Some(avatar_url) = &user.avatar_url {
-            pairs.append_pair("avatar_url", avatar_url);
-        }
-        if let Some(name) = &user.name {
-            pairs.append_pair("name", name);
-        }
     }
     Ok(url.to_string())
 }

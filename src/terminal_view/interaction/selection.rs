@@ -732,6 +732,183 @@ mod tests {
     }
 
     #[test]
+    fn row_text_from_terminal_marks_wide_char_spacers_correctly() {
+        let size = TerminalSize {
+            cols: 10,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        // "ls 文件" — col layout: l s   文 _ 件 _  (where _ = spacer)
+        terminal.feed_output("ls 文件".as_bytes());
+        let row = row_text_from_terminal(&terminal, 0, usize::from(size.cols));
+
+        assert_eq!(row[0], Some('l'));
+        assert_eq!(row[1], Some('s'));
+        assert_eq!(row[2], Some(' '));
+        assert_eq!(row[3], Some('文'));
+        assert_eq!(row[4], None, "trailing spacer should be None");
+        assert_eq!(row[5], Some('件'));
+        assert_eq!(row[6], None, "trailing spacer should be None");
+    }
+
+    #[test]
+    fn row_text_from_terminal_leading_spacer_is_not_none() {
+        // Narrow terminal forces wide char to wrap, producing a leading spacer.
+        let size = TerminalSize {
+            cols: 5,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        // "src/文" — 4 ASCII chars fill cols 0-3, '文' needs 2 cols but
+        // only 1 remains; it wraps to the next line.
+        // Line 0 col 4: LEADING_WIDE_CHAR_SPACER
+        // Line 1 col 0: '文', col 1: trailing spacer
+        terminal.feed_output("src/文".as_bytes());
+        let row0 = row_text_from_terminal(&terminal, 0, usize::from(size.cols));
+        assert_eq!(
+            row0[4],
+            Some(' '),
+            "leading spacer should be Some(' '), not None"
+        );
+
+        let row1 = row_text_from_terminal(&terminal, 1, usize::from(size.cols));
+        assert_eq!(row1[0], Some('文'));
+        assert_eq!(row1[1], None, "trailing spacer should be None");
+    }
+
+    #[test]
+    fn grid_line_text_marks_trailing_wide_char_spacer_as_none() {
+        let size = TerminalSize {
+            cols: 10,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        // "你好" — each char occupies 2 cells: char + trailing spacer.
+        terminal.feed_output("你好".as_bytes());
+
+        let line = terminal
+            .with_grid(|grid| grid_line_text(grid, 0, 10))
+            .flatten()
+            .expect("line 0 should exist");
+
+        assert_eq!(line[0], Some('你'));
+        assert_eq!(line[1], None, "trailing spacer should be None");
+        assert_eq!(line[2], Some('好'));
+        assert_eq!(line[3], None, "trailing spacer should be None");
+    }
+
+    #[test]
+    fn leading_wide_char_spacer_preserved_as_space() {
+        // Use a narrow terminal so a wide char at the end wraps to the next line.
+        let size = TerminalSize {
+            cols: 5,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        // "src/文" — 4 ASCII chars fill cols 0-3, '文' needs 2 cols but
+        // only 1 remains; it wraps to the next line.
+        // Line 0 col 4: LEADING_WIDE_CHAR_SPACER (should stay Some(' '))
+        // Line 1 col 0: '文', col 1: trailing spacer (None)
+        terminal.feed_output("src/文".as_bytes());
+
+        let line0 = terminal
+            .with_grid(|grid| grid_line_text(grid, 0, 5))
+            .flatten()
+            .expect("line 0");
+        assert_eq!(
+            line0[4],
+            Some(' '),
+            "leading spacer should be Some(' '), not None"
+        );
+
+        let line1 = terminal
+            .with_grid(|grid| grid_line_text(grid, 1, 5))
+            .flatten()
+            .expect("line 1");
+        assert_eq!(line1[0], Some('文'));
+        assert_eq!(line1[1], None, "trailing spacer should be None");
+    }
+
+    #[test]
+    fn selected_text_includes_wide_char_when_start_on_spacer() {
+        let size = TerminalSize {
+            cols: 10,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        // "cd 桌面" layout:
+        //   col 0:'c' 1:'d' 2:' ' 3:'桌' 4:spacer 5:'面' 6:spacer
+        terminal.feed_output("cd 桌面".as_bytes());
+
+        // Selection starting on the spacer of '桌' (col 4) should fall back to col 3.
+        let start = SelectionPos { col: 4, line: 0 };
+        let end = SelectionPos { col: 6, line: 0 };
+        let text =
+            selected_text_from_terminal(&terminal, start, end).expect("selection should resolve");
+        assert_eq!(text, "桌面");
+    }
+
+    #[test]
+    fn selected_text_with_wide_chars_has_no_extra_spaces() {
+        let size = TerminalSize {
+            cols: 16,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(
+            size,
+            TerminalOptions {
+                scrollback_history: 128,
+                ..TerminalOptions::default()
+            },
+        );
+        terminal.feed_output("git 提交记录".as_bytes());
+
+        // Select the entire line — copied text should have no extra spaces
+        // from wide char spacers.
+        let start = SelectionPos { col: 0, line: 0 };
+        let end = SelectionPos { col: 15, line: 0 };
+        let text =
+            selected_text_from_terminal(&terminal, start, end).expect("selection should resolve");
+        assert_eq!(text, "git 提交记录");
+    }
+
+    #[test]
     fn pane_row_mapping_uses_chrome_adjusted_pointer_y() {
         let chrome_height = 34.0;
         let padding_y = 6.0;

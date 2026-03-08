@@ -996,6 +996,9 @@ async fn parse_create_theme_upload(
             "githubUsernameClaim" => {
                 github_username_claim = Some(field.text().await.map_err(multipart_error)?);
             }
+            "themeJson" => {
+                theme_json = Some(field.text().await.map_err(multipart_error)?.into_bytes());
+            }
             "themeFile" | "file" => {
                 theme_json = Some(field.bytes().await.map_err(multipart_error)?.to_vec());
             }
@@ -1047,6 +1050,9 @@ async fn parse_publish_theme_version_upload(
             }
             "createdBy" => {
                 created_by = Some(field.text().await.map_err(multipart_error)?);
+            }
+            "themeJson" => {
+                theme_json = Some(field.text().await.map_err(multipart_error)?.into_bytes());
             }
             "themeFile" | "file" => {
                 theme_json = Some(field.bytes().await.map_err(multipart_error)?.to_vec());

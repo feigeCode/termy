@@ -53,6 +53,9 @@ curl -X POST http://127.0.0.1:8080/themes \
   -F 'themeFile=@./tokyo-night.json;type=application/json'
 ```
 
+You can also paste JSON instead of uploading a file by sending a `themeJson`
+multipart field.
+
 Publish version:
 
 ```bash

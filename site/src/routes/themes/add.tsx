@@ -38,6 +38,7 @@ export function ThemeAddPage(): JSX.Element {
   const [createIsPublic, setCreateIsPublic] = useState(true);
   const [createVersion, setCreateVersion] = useState("1.0.0");
   const [createThemeFile, setCreateThemeFile] = useState<File | null>(null);
+  const [createThemeJson, setCreateThemeJson] = useState("");
 
   const [updateName, setUpdateName] = useState("");
   const [updateDescription, setUpdateDescription] = useState("");
@@ -47,6 +48,7 @@ export function ThemeAddPage(): JSX.Element {
   const [publishChangelog, setPublishChangelog] = useState("");
   const [publishChecksum, setPublishChecksum] = useState("");
   const [publishThemeFile, setPublishThemeFile] = useState<File | null>(null);
+  const [publishThemeJson, setPublishThemeJson] = useState("");
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -132,8 +134,8 @@ export function ThemeAddPage(): JSX.Element {
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
-    if (!createThemeFile) {
-      setError("Theme JSON file is required.");
+    if (!hasThemePayload(createThemeFile, createThemeJson)) {
+      setError("Theme JSON file or pasted JSON is required.");
       return;
     }
 
@@ -148,6 +150,7 @@ export function ThemeAddPage(): JSX.Element {
         isPublic: createIsPublic,
         version: createVersion,
         themeFile: createThemeFile,
+        themeJson: createThemeJson,
       });
 
       setThemes((prev) => [
@@ -160,6 +163,7 @@ export function ThemeAddPage(): JSX.Element {
       setCreateDescription("");
       setCreateVersion("1.0.0");
       setCreateThemeFile(null);
+      setCreateThemeJson("");
       setNotice(`Theme '${created.slug}' created.`);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -205,8 +209,8 @@ export function ThemeAddPage(): JSX.Element {
     if (!selectedTheme) {
       return;
     }
-    if (!publishThemeFile) {
-      setError("Theme JSON file is required.");
+    if (!hasThemePayload(publishThemeFile, publishThemeJson)) {
+      setError("Theme JSON file or pasted JSON is required.");
       return;
     }
 
@@ -220,6 +224,7 @@ export function ThemeAddPage(): JSX.Element {
         changelog: publishChangelog,
         checksumSha256: publishChecksum,
         themeFile: publishThemeFile,
+        themeJson: publishThemeJson,
       });
 
       const loadedThemes = await fetchMyThemes();
@@ -229,6 +234,7 @@ export function ThemeAddPage(): JSX.Element {
       setPublishChangelog("");
       setPublishChecksum("");
       setPublishThemeFile(null);
+      setPublishThemeJson("");
       setNotice("Version published.");
     } catch (err) {
       setError(getErrorMessage(err));
@@ -259,7 +265,8 @@ export function ThemeAddPage(): JSX.Element {
             className="mt-4 text-lg text-muted-foreground animate-blur-in"
             style={{ animationDelay: "100ms" }}
           >
-            Upload theme JSON files, publish versions, and maintain your catalog.
+            Upload theme JSON files, publish versions, and maintain your
+            catalog.
           </p>
           <div
             className="mt-6 flex flex-wrap items-center justify-center gap-3 animate-blur-in"
@@ -299,10 +306,7 @@ export function ThemeAddPage(): JSX.Element {
         )}
 
         {!isBootstrapping && !user && (
-          <div
-            className="animate-blur-in"
-            style={{ animationDelay: "300ms" }}
-          >
+          <div className="animate-blur-in" style={{ animationDelay: "300ms" }}>
             <Card className="border-border/60">
               <CardHeader>
                 <CardTitle>Authentication Required</CardTitle>
@@ -418,6 +422,19 @@ export function ThemeAddPage(): JSX.Element {
                       }
                       disabled={!user || isSubmitting}
                     />
+                    <textarea
+                      className="min-h-48 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm"
+                      placeholder='Or paste theme JSON here, for example: { "foreground": "#d1d5db" }'
+                      value={createThemeJson}
+                      onChange={(event) =>
+                        setCreateThemeJson(event.target.value)
+                      }
+                      disabled={!user || isSubmitting}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Paste JSON or upload a file. Pasted JSON is used when both
+                      are provided.
+                    </p>
                     <Button type="submit" disabled={!user || isSubmitting}>
                       Create theme
                     </Button>
@@ -505,6 +522,19 @@ export function ThemeAddPage(): JSX.Element {
                           disabled={!canEditSelectedTheme || isSubmitting}
                         />
                         <textarea
+                          className="min-h-48 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm"
+                          placeholder='Or paste the next theme JSON here, for example: { "background": "#141a24" }'
+                          value={publishThemeJson}
+                          onChange={(event) =>
+                            setPublishThemeJson(event.target.value)
+                          }
+                          disabled={!canEditSelectedTheme || isSubmitting}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Paste JSON or upload a file. Pasted JSON is used when
+                          both are provided.
+                        </p>
+                        <textarea
                           className="min-h-20 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                           placeholder="Changelog"
                           value={publishChangelog}
@@ -585,4 +615,8 @@ function getErrorMessage(error: unknown): string {
   }
 
   return "Unexpected error";
+}
+
+function hasThemePayload(themeFile: File | null, themeJson: string): boolean {
+  return themeFile !== null || themeJson.trim().length > 0;
 }

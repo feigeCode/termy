@@ -125,14 +125,15 @@ export async function createTheme(input: {
   description: string;
   isPublic: boolean;
   version: string;
-  themeFile: File;
+  themeFile?: File | null;
+  themeJson?: string;
 }): Promise<Theme> {
   const formData = new FormData();
   formData.append("name", input.name);
   formData.append("description", input.description);
   formData.append("isPublic", String(input.isPublic));
   formData.append("version", input.version);
-  formData.append("themeFile", input.themeFile);
+  appendThemePayload(formData, input.themeFile ?? null, input.themeJson);
 
   return requestJson<Theme>("/themes", {
     method: "POST",
@@ -164,14 +165,15 @@ export async function publishThemeVersion(
     version: string;
     changelog: string;
     checksumSha256: string;
-    themeFile: File;
+    themeFile?: File | null;
+    themeJson?: string;
   },
 ): Promise<{ theme: Theme; version: ThemeVersion }> {
   const formData = new FormData();
   formData.append("version", input.version);
   formData.append("changelog", input.changelog);
   formData.append("checksumSha256", input.checksumSha256);
-  formData.append("themeFile", input.themeFile);
+  appendThemePayload(formData, input.themeFile ?? null, input.themeJson);
 
   return requestJson<{ theme: Theme; version: ThemeVersion }>(
     `/themes/${slug}/versions`,
@@ -180,6 +182,23 @@ export async function publishThemeVersion(
       body: formData,
     },
   );
+}
+
+function appendThemePayload(
+  formData: FormData,
+  themeFile: File | null,
+  themeJson?: string,
+): void {
+  const trimmedThemeJson = themeJson?.trim();
+
+  if (trimmedThemeJson) {
+    formData.append("themeJson", trimmedThemeJson);
+    return;
+  }
+
+  if (themeFile) {
+    formData.append("themeFile", themeFile);
+  }
 }
 
 export interface ThemePalette {

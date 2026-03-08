@@ -20,7 +20,11 @@ function buildThemeInstallHref(slug: string): string {
   return `termy://store/theme-install?slug=${encodeURIComponent(slug)}`;
 }
 
-function ThemeColorSwatch({ fileUrl }: { fileUrl: string | null }): JSX.Element {
+function ThemeColorSwatch({
+  fileUrl,
+}: {
+  fileUrl: string | null;
+}): JSX.Element {
   const [palette, setPalette] = useState<ThemePalette | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -91,8 +95,23 @@ function ThemeStorePage(): JSX.Element {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const loginUrl = useMemo(() => getThemeLoginUrl("/themes"), []);
+  const filteredThemes = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return themes;
+    }
+
+    return themes.filter((theme) =>
+      [theme.name, theme.slug, theme.description, theme.githubUsernameClaim]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [searchQuery, themes]);
 
   useEffect(() => {
     void load();
@@ -162,9 +181,22 @@ function ThemeStorePage(): JSX.Element {
           </div>
         )}
 
+        <div className="mx-auto w-full max-w-2xl px-6">
+          <div className="rounded-2xl border border-border/60 bg-card/40 p-2 backdrop-blur-sm">
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search themes by name, slug, description, or author..."
+              className="w-full rounded-xl border border-transparent bg-background/70 px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary/40"
+              aria-label="Search themes"
+            />
+          </div>
+        </div>
+
         {/* Theme cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {themes.map((theme, i) => (
+          {filteredThemes.map((theme, i) => (
             <div
               key={theme.id}
               className="animate-blur-in group flex flex-col rounded-xl border border-border/40 bg-card/30 transition-all duration-300 hover:border-primary/20 hover:bg-card/60 overflow-hidden"
@@ -211,6 +243,12 @@ function ThemeStorePage(): JSX.Element {
         {!loading && themes.length === 0 && (
           <div className="rounded-xl border border-border/60 bg-card/50 px-4 py-6 text-center text-sm text-muted-foreground">
             No themes published yet.
+          </div>
+        )}
+
+        {!loading && themes.length > 0 && filteredThemes.length === 0 && (
+          <div className="rounded-xl border border-border/60 bg-card/50 px-4 py-6 text-center text-sm text-muted-foreground">
+            No themes match "{searchQuery.trim()}".
           </div>
         )}
 

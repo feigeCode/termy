@@ -39,6 +39,7 @@ function ThemeUpdatePage(): JSX.Element {
   const [publishChangelog, setPublishChangelog] = useState("");
   const [publishChecksum, setPublishChecksum] = useState("");
   const [publishThemeFile, setPublishThemeFile] = useState<File | null>(null);
+  const [publishThemeJson, setPublishThemeJson] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -116,8 +117,8 @@ function ThemeUpdatePage(): JSX.Element {
     if (!theme || !isOwner) {
       return;
     }
-    if (!publishThemeFile) {
-      setError("Theme JSON file is required.");
+    if (!hasThemePayload(publishThemeFile, publishThemeJson)) {
+      setError("Theme JSON file or pasted JSON is required.");
       return;
     }
 
@@ -130,6 +131,7 @@ function ThemeUpdatePage(): JSX.Element {
         changelog: publishChangelog,
         checksumSha256: publishChecksum,
         themeFile: publishThemeFile,
+        themeJson: publishThemeJson,
       });
       setTheme(response.theme);
       setVersions((previous) => [response.version, ...previous]);
@@ -137,6 +139,7 @@ function ThemeUpdatePage(): JSX.Element {
       setPublishChangelog("");
       setPublishChecksum("");
       setPublishThemeFile(null);
+      setPublishThemeJson("");
       setNotice("Version published.");
     } catch (err) {
       setError(getErrorMessage(err));
@@ -213,10 +216,7 @@ function ThemeUpdatePage(): JSX.Element {
         )}
 
         {!user && (
-          <div
-            className="animate-blur-in"
-            style={{ animationDelay: "200ms" }}
-          >
+          <div className="animate-blur-in" style={{ animationDelay: "200ms" }}>
             <Card className="border-border/60">
               <CardHeader>
                 <CardTitle>Authentication Required</CardTitle>
@@ -323,6 +323,19 @@ function ThemeUpdatePage(): JSX.Element {
                     disabled={isSubmitting}
                   />
                   <textarea
+                    className="min-h-48 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm"
+                    placeholder='Or paste the next theme JSON here, for example: { "background": "#141a24" }'
+                    value={publishThemeJson}
+                    onChange={(event) =>
+                      setPublishThemeJson(event.target.value)
+                    }
+                    disabled={isSubmitting}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Paste JSON or upload a file. Pasted JSON is used when both
+                    are provided.
+                  </p>
+                  <textarea
                     className="min-h-20 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     placeholder="Changelog"
                     value={publishChangelog}
@@ -335,9 +348,7 @@ function ThemeUpdatePage(): JSX.Element {
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     placeholder="Checksum SHA256 (optional)"
                     value={publishChecksum}
-                    onChange={(event) =>
-                      setPublishChecksum(event.target.value)
-                    }
+                    onChange={(event) => setPublishChecksum(event.target.value)}
                     disabled={isSubmitting}
                   />
                   <Button type="submit" disabled={isSubmitting}>
@@ -349,10 +360,7 @@ function ThemeUpdatePage(): JSX.Element {
           </div>
         )}
 
-        <div
-          className="animate-blur-in"
-          style={{ animationDelay: "300ms" }}
-        >
+        <div className="animate-blur-in" style={{ animationDelay: "300ms" }}>
           <Card className="border-border/60">
             <CardHeader>
               <CardTitle>Version history</CardTitle>
@@ -393,4 +401,8 @@ function getErrorMessage(error: unknown): string {
   }
 
   return "Unexpected error";
+}
+
+function hasThemePayload(themeFile: File | null, themeJson: string): boolean {
+  return themeFile !== null || themeJson.trim().length > 0;
 }

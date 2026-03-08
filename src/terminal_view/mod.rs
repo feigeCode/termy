@@ -27,6 +27,7 @@ use std::{
     sync::{Arc, Mutex, atomic::AtomicU64},
     time::{Duration, Instant},
 };
+use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 #[cfg(target_os = "macos")]
 use termy_auto_update::{AutoUpdater, UpdateState};
 use termy_search::SearchState;
@@ -97,6 +98,7 @@ const TERMINAL_SCROLLBAR_TRACK_WIDTH: f32 = 12.0;
 const TERMINAL_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 40.0;
 const TERMINAL_SCROLLBAR_HOLD_MS: u64 = 900;
 const TERMINAL_SCROLLBAR_FADE_MS: u64 = 140;
+const TERMINAL_SCROLLBAR_TRACK_HOLD_REPEAT_MS: u64 = 65;
 const TERMINAL_SCROLLBAR_HOLD_DURATION: Duration =
     Duration::from_millis(TERMINAL_SCROLLBAR_HOLD_MS);
 const TERMINAL_SCROLLBAR_FADE_DURATION: Duration =
@@ -116,11 +118,13 @@ const SEARCH_BAR_WIDTH: f32 = 320.0;
 const SEARCH_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_DEBOUNCE_MS: u64 = 50;
 const TMUX_RESIZE_ERROR_TOAST_DEBOUNCE_MS: u64 = 2000;
+const DEBUG_OVERLAY_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 #[cfg(target_os = "windows")]
 const TMUX_UNSUPPORTED_WINDOWS_TOAST: &str =
     "tmux integration is unsupported on Windows; using native runtime instead.";
 const INPUT_SCROLL_SUPPRESS_MS: u64 = 160;
 const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
+const WINDOW_RESIZE_INDICATOR_MS: u64 = 850;
 const CHILD_WORKING_DIR_CACHE_TTL: Duration = Duration::from_millis(CHILD_WORKING_DIR_CACHE_TTL_MS);
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
 const OVERLAY_PANEL_BORDER_ALPHA: f32 = 0.24;
@@ -629,6 +633,72 @@ impl TerminalRenderMetricsState {
     }
 }
 
+#[derive(Debug)]
+struct DebugOverlayStats {
+    system: System,
+    pid: Option<sysinfo::Pid>,
+    sample_started_at: Instant,
+    frames_in_sample: u32,
+    fps: f32,
+    cpu_percent: f32,
+    memory_bytes: u64,
+}
+
+impl DebugOverlayStats {
+    fn new() -> Self {
+        let mut stats = Self {
+            system: System::new(),
+            pid: get_current_pid().ok(),
+            sample_started_at: Instant::now(),
+            frames_in_sample: 0,
+            fps: 0.0,
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+        };
+        stats.refresh_process_metrics();
+        stats
+    }
+
+    fn reset(&mut self) {
+        self.sample_started_at = Instant::now();
+        self.frames_in_sample = 0;
+        self.fps = 0.0;
+        self.refresh_process_metrics();
+    }
+
+    fn record_frame(&mut self, now: Instant) {
+        self.frames_in_sample = self.frames_in_sample.saturating_add(1);
+        let elapsed = now.saturating_duration_since(self.sample_started_at);
+        if elapsed < DEBUG_OVERLAY_SAMPLE_INTERVAL {
+            return;
+        }
+
+        let elapsed_secs = elapsed.as_secs_f32();
+        if elapsed_secs > f32::EPSILON {
+            self.fps = self.frames_in_sample as f32 / elapsed_secs;
+        }
+        self.sample_started_at = now;
+        self.frames_in_sample = 0;
+        self.refresh_process_metrics();
+    }
+
+    fn refresh_process_metrics(&mut self) {
+        let Some(pid) = self.pid else {
+            self.cpu_percent = 0.0;
+            self.memory_bytes = 0;
+            return;
+        };
+
+        let _ = self
+            .system
+            .refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        if let Some(process) = self.system.process(pid) {
+            self.cpu_percent = process.cpu_usage();
+            self.memory_bytes = process.memory();
+        }
+    }
+}
+
 struct TerminalTab {
     id: TabId,
     window_id: String,
@@ -646,6 +716,13 @@ struct TerminalTab {
     sticky_title_width: f32,
     display_width: f32,
     running_process: bool,
+}
+
+struct NativePaneZoomSnapshot {
+    other_panes: Vec<TerminalPane>,
+    active_pane_geometry: (u16, u16, u16, u16),
+    active_pane_id: String,
+    active_original_index: usize,
 }
 impl TerminalTab {
     fn active_pane_index(&self) -> Option<usize> {
@@ -950,6 +1027,7 @@ pub(crate) fn initial_window_background_appearance(
 /// The main terminal view component
 pub struct TerminalView {
     tabs: Vec<TerminalTab>,
+    native_pane_zoom_snapshots: HashMap<TabId, NativePaneZoomSnapshot>,
     next_tab_id: TabId,
     active_tab: usize,
     renaming_tab: Option<usize>,
@@ -1012,6 +1090,12 @@ pub struct TerminalView {
     toast_manager: ToastManager,
     overlay_view: Option<Entity<TerminalOverlayView>>,
     command_palette: CommandPaletteState,
+    last_viewport_size_px: Option<(i32, i32)>,
+    resize_indicator_dims: Option<(u16, u16)>,
+    resize_indicator_visible_until: Option<Instant>,
+    resize_indicator_animation_scheduled: bool,
+    show_debug_overlay: bool,
+    debug_overlay_stats: DebugOverlayStats,
     install_cli_available: bool,
     tab_strip: TabStripState,
     inline_input_selecting: bool,
@@ -1024,6 +1108,8 @@ pub struct TerminalView {
     terminal_scrollbar_visibility_controller: ScrollbarVisibilityController,
     terminal_scrollbar_animation_active: bool,
     terminal_scrollbar_drag: Option<TerminalScrollbarDragState>,
+    terminal_scrollbar_track_hold_local_y: Option<f32>,
+    terminal_scrollbar_track_hold_active: bool,
     pane_resize_drag: Option<PaneResizeDragState>,
     terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache,
     /// Cached cell dimensions
@@ -1635,6 +1721,37 @@ impl TerminalView {
         });
     }
 
+    fn record_debug_overlay_frame(&mut self) {
+        if !self.show_debug_overlay {
+            return;
+        }
+        self.debug_overlay_stats.record_frame(Instant::now());
+    }
+
+    fn debug_overlay_memory_label(&self) -> String {
+        let mib = self.debug_overlay_stats.memory_bytes as f64 / (1024.0 * 1024.0);
+        format!("{mib:.1} MB")
+    }
+
+    fn track_window_resize_indicator(&mut self, viewport: Size<Pixels>, now: Instant) {
+        let viewport_width: f32 = viewport.width.into();
+        let viewport_height: f32 = viewport.height.into();
+        let viewport_key = (
+            viewport_width.round() as i32,
+            viewport_height.round() as i32,
+        );
+        if self.last_viewport_size_px == Some(viewport_key) {
+            return;
+        }
+        self.last_viewport_size_px = Some(viewport_key);
+
+        if let Some(size) = self.active_terminal().map(|terminal| terminal.size()) {
+            self.resize_indicator_dims = Some((size.cols, size.rows));
+            self.resize_indicator_visible_until =
+                Some(now + Duration::from_millis(WINDOW_RESIZE_INDICATOR_MS));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     pub(super) fn overlay_banner_visible_for_state(state: Option<&UpdateState>) -> bool {
         matches!(
@@ -1763,6 +1880,7 @@ impl TerminalView {
         thumb_grab_offset: f32,
         cx: &mut Context<Self>,
     ) {
+        self.terminal_scrollbar_track_hold_local_y = None;
         self.terminal_scrollbar_drag = Some(TerminalScrollbarDragState { thumb_grab_offset });
         self.terminal_scrollbar_visibility_controller
             .start_drag(Instant::now());
@@ -1778,6 +1896,50 @@ impl TerminalView {
             .end_drag(Instant::now());
         self.start_terminal_scrollbar_animation(cx);
         true
+    }
+
+    pub(super) fn start_terminal_scrollbar_track_hold(
+        &mut self,
+        local_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_scrollbar_track_hold_local_y = Some(local_y);
+        self.mark_terminal_scrollbar_activity(cx);
+        if self.terminal_scrollbar_track_hold_active {
+            return;
+        }
+
+        self.terminal_scrollbar_track_hold_active = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                smol::Timer::after(Duration::from_millis(
+                    TERMINAL_SCROLLBAR_TRACK_HOLD_REPEAT_MS,
+                ))
+                .await;
+                let mut keep_running = false;
+                let result = cx.update(|cx| {
+                    this.update(cx, |view, cx| {
+                        keep_running = view.handle_terminal_scrollbar_track_hold_tick(cx);
+                        if !keep_running {
+                            view.terminal_scrollbar_track_hold_active = false;
+                        }
+                    })
+                });
+
+                if result.is_err() || !keep_running {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn update_terminal_scrollbar_track_hold(&mut self, local_y: f32) {
+        self.terminal_scrollbar_track_hold_local_y = Some(local_y);
+    }
+
+    pub(super) fn stop_terminal_scrollbar_track_hold(&mut self) -> bool {
+        self.terminal_scrollbar_track_hold_local_y.take().is_some()
     }
 
     fn terminal_scrollbar_needs_animation(&self, now: Instant) -> bool {
@@ -1993,6 +2155,7 @@ impl TerminalView {
 
         let mut view = Self {
             tabs: Vec::new(),
+            native_pane_zoom_snapshots: HashMap::new(),
             next_tab_id: 1,
             active_tab: 0,
             renaming_tab: None,
@@ -2058,6 +2221,12 @@ impl TerminalView {
             toast_manager: ToastManager::new(),
             overlay_view: None,
             command_palette: CommandPaletteState::new(config.command_palette_show_keybinds),
+            last_viewport_size_px: None,
+            resize_indicator_dims: None,
+            resize_indicator_visible_until: None,
+            resize_indicator_animation_scheduled: false,
+            show_debug_overlay: config.show_debug_overlay,
+            debug_overlay_stats: DebugOverlayStats::new(),
             install_cli_available: Self::install_cli_available_from_system(),
             tab_strip: TabStripState::new(config.tab_switch_modifier_hints),
             inline_input_selecting: false,
@@ -2070,6 +2239,8 @@ impl TerminalView {
             terminal_scrollbar_visibility_controller: ScrollbarVisibilityController::default(),
             terminal_scrollbar_animation_active: false,
             terminal_scrollbar_drag: None,
+            terminal_scrollbar_track_hold_local_y: None,
+            terminal_scrollbar_track_hold_active: false,
             pane_resize_drag: None,
             terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache::default(),
             cell_size: None,
@@ -2191,9 +2362,11 @@ impl TerminalView {
             .sync_enabled(config.tab_switch_modifier_hints);
         let show_termy_in_titlebar_changed =
             self.show_termy_in_titlebar != config.show_termy_in_titlebar;
+        let show_debug_overlay_changed = self.show_debug_overlay != config.show_debug_overlay;
         self.tab_close_visibility = config.tab_close_visibility;
         self.tab_width_mode = config.tab_width_mode;
         self.show_termy_in_titlebar = config.show_termy_in_titlebar;
+        self.show_debug_overlay = config.show_debug_overlay;
         self.tab_shell_integration = TabTitleShellIntegration {
             enabled: self.tab_title.shell_integration,
             explicit_prefix: self.tab_title.explicit_prefix.clone(),
@@ -2291,11 +2464,18 @@ impl TerminalView {
             self.terminal_scrollbar_visibility = config.terminal_scrollbar_visibility;
             self.terminal_scrollbar_visibility_controller.reset();
             self.terminal_scrollbar_drag = None;
+            self.terminal_scrollbar_track_hold_local_y = None;
+            self.terminal_scrollbar_track_hold_active = false;
             self.terminal_scrollbar_animation_active = false;
             self.clear_terminal_scrollbar_marker_cache();
         }
         self.terminal_scrollbar_style = config.terminal_scrollbar_style;
         self.set_command_palette_show_keybinds(config.command_palette_show_keybinds);
+        if show_debug_overlay_changed {
+            self.debug_overlay_stats.reset();
+            self.notify_overlay(cx);
+            cx.notify();
+        }
         self.clear_pane_render_caches();
         let inactive_history = self
             .inactive_tab_scrollback

@@ -647,41 +647,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn auth_callback_deeplink_passes_session_payload(cx: &mut TestAppContext) {
-        let handled = RefCell::new(Vec::new());
-
-        cx.update(|app| {
-            handle_open_urls_with_main_window::<ReopenTestView>(
-                app,
-                &[String::from(
-                    "termy://auth/callback?session_token=abc123&id=123e4567-e89b-12d3-a456-426614174000&github_user_id=42&github_login=lasse",
-                )],
-                open_test_window,
-                |_, route, route_argument| {
-                    handled.borrow_mut().push((route, route_argument));
-                    Ok(())
-                },
-            );
-        });
-
-        assert_eq!(cx.windows().len(), 1);
-        assert_eq!(
-            *handled.borrow(),
-            vec![(
-                DeepLinkRoute::AuthCallback,
-                Some(DeepLinkArgument::AuthCallback(AuthCallbackDeepLink {
-                    session_token: "abc123".to_string(),
-                    user_id: Some("123e4567-e89b-12d3-a456-426614174000".to_string()),
-                    github_user_id: Some(42),
-                    github_login: Some("lasse".to_string()),
-                    avatar_url: None,
-                    name: None,
-                }))
-            )]
-        );
-    }
-
-    #[gpui::test]
     fn settings_deeplink_reuses_existing_settings_window(cx: &mut TestAppContext) {
         cx.update(|app| {
             app_actions::open_settings_window(app).expect("settings window should open");

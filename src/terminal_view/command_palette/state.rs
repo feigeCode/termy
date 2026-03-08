@@ -14,6 +14,11 @@ pub(in super::super) enum CommandPaletteMode {
     Layouts,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum CommandPaletteCommandIntent {
+    Browse,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CommandPaletteItemKind {
     Command(CommandAction),
@@ -139,6 +144,7 @@ impl CommandPaletteItem {
 pub(in super::super) struct CommandPaletteState {
     open: bool,
     mode: CommandPaletteMode,
+    pub(super) command_intent: CommandPaletteCommandIntent,
     pub(super) tmux_session_intent: TmuxSessionIntent,
     pub(super) saved_layout_intent: SavedLayoutIntent,
     pub(super) tmux_rename_source_session: Option<String>,
@@ -167,6 +173,7 @@ impl CommandPaletteState {
         Self {
             open: false,
             mode: CommandPaletteMode::Commands,
+            command_intent: CommandPaletteCommandIntent::Browse,
             tmux_session_intent: TmuxSessionIntent::AttachOrSwitch,
             saved_layout_intent: SavedLayoutIntent::Browse,
             tmux_rename_source_session: None,
@@ -234,6 +241,10 @@ impl CommandPaletteState {
     pub(super) fn set_items(&mut self, items: Vec<CommandPaletteItem>) {
         self.items = items;
         self.refilter_current_query();
+    }
+
+    pub(super) fn command_intent(&self) -> CommandPaletteCommandIntent {
+        self.command_intent
     }
 
     pub(super) fn cached_shortcut(&self, action: CommandAction) -> Option<Option<String>> {
@@ -385,6 +396,9 @@ impl CommandPaletteState {
             self.tmux_session_intent = TmuxSessionIntent::AttachOrSwitch;
             self.tmux_rename_source_session = None;
             self.tmux_rename_source_socket = None;
+        }
+        if self.mode != CommandPaletteMode::Commands {
+            self.command_intent = CommandPaletteCommandIntent::Browse;
         }
         if self.mode != CommandPaletteMode::Layouts {
             self.saved_layout_intent = SavedLayoutIntent::Browse;
@@ -696,6 +710,17 @@ mod tests {
             ordered_with_missing_current,
             vec!["tokyo-night", "dracula", "nord", SHELL_DECIDE_THEME_ID]
         );
+    }
+
+    #[test]
+    fn paste_auth_token_submit_requires_non_empty_token() {
+        let empty = CommandPaletteItem::paste_auth_token_submit("   ");
+        assert!(!empty.enabled);
+        assert_eq!(empty.status_hint, Some("token required"));
+
+        let populated = CommandPaletteItem::paste_auth_token_submit("session-token");
+        assert!(populated.enabled);
+        assert_eq!(populated.status_hint, None);
     }
 
     #[test]

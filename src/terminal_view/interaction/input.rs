@@ -174,6 +174,9 @@ impl TerminalView {
                 true
             }
             CommandAction::Paste => {
+                if self.paste_clipboard_into_active_inline_input(cx) {
+                    return true;
+                }
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.write_terminal_paste_input(text.as_bytes(), cx);
                     self.clear_selection();

@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_only_keybind_warns_when_tmux_is_disabled() {
+    fn resize_keybind_does_not_warn_when_tmux_is_disabled() {
         let report = validate_contents(
             "tmux_enabled = false\n\
              keybind = secondary-alt-shift-left=resize_pane_left\n\
@@ -179,12 +179,8 @@ mod tests {
             report.errors
         );
         assert!(
-            report.warnings.iter().any(|warning| {
-                warning.contains("Line 2:")
-                    && warning.contains("resize_pane_left")
-                    && warning.contains("tmux_enabled=true")
-            }),
-            "expected tmux-only keybind warning, got {:?}",
+            report.warnings.is_empty(),
+            "unexpected warnings: {:?}",
             report.warnings
         );
         assert!(
@@ -198,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_only_keybind_does_not_warn_when_tmux_is_enabled() {
+    fn resize_keybind_does_not_warn_when_tmux_is_enabled() {
         let report = validate_contents(
             "tmux_enabled = true\n\
              keybind = secondary-alt-shift-left=resize_pane_left\n",

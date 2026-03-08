@@ -164,6 +164,14 @@ pub(super) struct SearchableSetting {
 }
 
 impl SettingsWindow {
+    fn is_plugins_section_enabled(&self) -> bool {
+        self.config.show_plugins_tab
+    }
+
+    fn is_section_visible_with_plugins(section: SettingsSection, plugins_enabled: bool) -> bool {
+        section != SettingsSection::Plugins || plugins_enabled
+    }
+
     pub(super) fn settings_section_label(section: SettingsSection) -> &'static str {
         match section {
             SettingsSection::Appearance => "Appearance",
@@ -177,7 +185,8 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn settings_sections_in_order() -> [SettingsSection; 8] {
+    pub(super) fn settings_sections_in_order(&self) -> Vec<SettingsSection> {
+        let plugins_enabled = self.is_plugins_section_enabled();
         [
             SettingsSection::Appearance,
             SettingsSection::Terminal,
@@ -188,6 +197,9 @@ impl SettingsWindow {
             SettingsSection::Colors,
             SettingsSection::Keybindings,
         ]
+        .into_iter()
+        .filter(|section| Self::is_section_visible_with_plugins(*section, plugins_enabled))
+        .collect()
     }
 
     pub(super) fn set_active_section(
@@ -196,6 +208,12 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let section =
+            if Self::is_section_visible_with_plugins(section, self.is_plugins_section_enabled()) {
+                section
+            } else {
+                SettingsSection::Appearance
+            };
         self.active_section = section;
         self.active_input = None;
         self.capturing_action = None;
@@ -214,7 +232,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let sections = Self::settings_sections_in_order();
+        let sections = self.settings_sections_in_order();
         let current_index = sections
             .iter()
             .position(|section| *section == self.active_section)
@@ -231,9 +249,12 @@ impl SettingsWindow {
         self.set_active_section(sections[next_index], window, cx);
     }
 
-    pub(super) fn build_searchable_settings() -> Vec<SearchableSetting> {
+    pub(super) fn build_searchable_settings(include_plugins: bool) -> Vec<SearchableSetting> {
         SETTINGS_METADATA
             .iter()
+            .filter(|metadata| {
+                Self::is_section_visible_with_plugins(metadata.section, include_plugins)
+            })
             .map(|metadata| {
                 let title_lower = metadata.title.to_ascii_lowercase();
                 let description_lower = metadata.description.to_ascii_lowercase();
@@ -269,9 +290,13 @@ impl SettingsWindow {
 
     pub(super) fn build_setting_scroll_anchors(
         content_scroll_handle: &ScrollHandle,
+        include_plugins: bool,
     ) -> HashMap<&'static str, ScrollAnchor> {
         SETTINGS_METADATA
             .iter()
+            .filter(|setting| {
+                Self::is_section_visible_with_plugins(setting.section, include_plugins)
+            })
             .map(|setting| {
                 (
                     setting.key,
@@ -579,7 +604,13 @@ impl SettingsWindow {
                     .child(self.render_sidebar_item("Terminal", SettingsSection::Terminal, cx))
                     .child(self.render_sidebar_item("Tabs", SettingsSection::Tabs, cx))
                     .child(self.render_sidebar_item("Theme Store", SettingsSection::ThemeStore, cx))
-                    .child(self.render_sidebar_item("Plugins", SettingsSection::Plugins, cx))
+                    .when(self.config.show_plugins_tab, |this| {
+                        this.child(self.render_sidebar_item(
+                            "Plugins",
+                            SettingsSection::Plugins,
+                            cx,
+                        ))
+                    })
                     .child(self.render_sidebar_item("Advanced", SettingsSection::Advanced, cx))
                     .child(self.render_sidebar_item("Colors", SettingsSection::Colors, cx))
                     .child(self.render_sidebar_item(
@@ -685,28 +716,7 @@ impl SettingsWindow {
                     )
                     .into_any_element()
             }
-            None => div()
-                .id("theme-store-login-button")
-                .px_3()
-                .py(px(9.0))
-                .rounded(px(0.0))
-                .border_1()
-                .border_color(button_border)
-                .bg(login_bg)
-                .cursor_pointer()
-                .hover(|s| s.bg(hover_bg))
-                .text_sm()
-                .text_color(text_primary)
-                .child(if self.theme_store_auth_loading {
-                    "Waiting for GitHub login..."
-                } else {
-                    "Login with GitHub"
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    println!("clicked");
-                    view.begin_theme_store_login(cx);
-                }))
-                .into_any_element(),
+            None => div().into_any_element(),
         };
 
         let mut footer = div()

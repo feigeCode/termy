@@ -302,6 +302,7 @@ impl TerminalView {
         if index >= self.tabs.len() {
             return;
         }
+        let removed_tab_id = self.tabs[index].id;
         let removed_pane_ids = self.tabs[index]
             .panes
             .iter()
@@ -322,6 +323,7 @@ impl TerminalView {
         }
 
         self.tabs.remove(index);
+        self.native_pane_zoom_snapshots.remove(&removed_tab_id);
         self.mark_tab_strip_layout_dirty();
 
         if self.active_tab > index {
@@ -560,23 +562,173 @@ impl TerminalView {
     }
 
     pub(crate) fn resize_pane_left(&mut self, cx: &mut Context<Self>) -> bool {
-        self.tmux_resize_pane_left(cx)
+        match self.runtime_kind() {
+            RuntimeKind::Tmux => self.tmux_resize_pane_left(cx),
+            RuntimeKind::Native => self.native_resize_active_pane(
+                PaneResizeAxis::Horizontal,
+                PaneResizeEdge::Left,
+                -1,
+                cx,
+            ),
+        }
     }
 
     pub(crate) fn resize_pane_right(&mut self, cx: &mut Context<Self>) -> bool {
-        self.tmux_resize_pane_right(cx)
+        match self.runtime_kind() {
+            RuntimeKind::Tmux => self.tmux_resize_pane_right(cx),
+            RuntimeKind::Native => self.native_resize_active_pane(
+                PaneResizeAxis::Horizontal,
+                PaneResizeEdge::Right,
+                1,
+                cx,
+            ),
+        }
     }
 
     pub(crate) fn resize_pane_up(&mut self, cx: &mut Context<Self>) -> bool {
-        self.tmux_resize_pane_up(cx)
+        match self.runtime_kind() {
+            RuntimeKind::Tmux => self.tmux_resize_pane_up(cx),
+            RuntimeKind::Native => self.native_resize_active_pane(
+                PaneResizeAxis::Vertical,
+                PaneResizeEdge::Top,
+                -1,
+                cx,
+            ),
+        }
     }
 
     pub(crate) fn resize_pane_down(&mut self, cx: &mut Context<Self>) -> bool {
-        self.tmux_resize_pane_down(cx)
+        match self.runtime_kind() {
+            RuntimeKind::Tmux => self.tmux_resize_pane_down(cx),
+            RuntimeKind::Native => self.native_resize_active_pane(
+                PaneResizeAxis::Vertical,
+                PaneResizeEdge::Bottom,
+                1,
+                cx,
+            ),
+        }
     }
 
     pub(crate) fn toggle_pane_zoom(&mut self, cx: &mut Context<Self>) -> bool {
-        self.tmux_toggle_active_pane_zoom(cx)
+        match self.runtime_kind() {
+            RuntimeKind::Tmux => self.tmux_toggle_active_pane_zoom(cx),
+            RuntimeKind::Native => self.native_toggle_active_pane_zoom(cx),
+        }
+    }
+
+    fn clear_native_zoom_snapshot_for_active_tab(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            self.native_pane_zoom_snapshots.remove(&tab.id);
+        }
+    }
+
+    fn native_resize_active_pane(
+        &mut self,
+        axis: PaneResizeAxis,
+        edge: PaneResizeEdge,
+        divider_delta: i16,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(active_pane_id) = self.active_pane_id().map(ToOwned::to_owned) else {
+            return false;
+        };
+        self.clear_native_zoom_snapshot_for_active_tab();
+        if !self.native_resize_pane_step(active_pane_id.as_str(), axis, edge, divider_delta) {
+            return false;
+        }
+        self.clear_selection();
+        self.clear_hovered_link();
+        self.schedule_persist_native_workspace();
+        cx.notify();
+        true
+    }
+
+    fn native_toggle_active_pane_zoom(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(tab_id) = self.tabs.get(self.active_tab).map(|tab| tab.id) else {
+            return false;
+        };
+
+        if let Some(snapshot) = self.native_pane_zoom_snapshots.remove(&tab_id) {
+            let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+                return false;
+            };
+            let Some(mut active_pane) = tab.panes.pop() else {
+                return false;
+            };
+            active_pane.left = snapshot.active_pane_geometry.0;
+            active_pane.top = snapshot.active_pane_geometry.1;
+            active_pane.width = snapshot.active_pane_geometry.2;
+            active_pane.height = snapshot.active_pane_geometry.3;
+
+            let mut panes = snapshot.other_panes;
+            let insert_index = snapshot.active_original_index.min(panes.len());
+            panes.insert(insert_index, active_pane);
+            tab.panes = panes;
+            tab.active_pane_id = snapshot.active_pane_id;
+
+            self.clear_selection();
+            self.clear_hovered_link();
+            self.schedule_persist_native_workspace();
+            cx.notify();
+            return true;
+        }
+
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return false;
+        };
+        if tab.panes.len() <= 1 {
+            return false;
+        }
+        let active_pane_id = tab.active_pane_id.clone();
+        let Some(active_index) = tab.active_pane_index() else {
+            return false;
+        };
+
+        let max_cols = tab
+            .panes
+            .iter()
+            .map(|pane| pane.left.saturating_add(pane.width))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let max_rows = tab
+            .panes
+            .iter()
+            .map(|pane| pane.top.saturating_add(pane.height))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+
+        let mut panes = std::mem::take(&mut tab.panes);
+        let mut active_pane = panes.remove(active_index);
+        let active_geometry = (
+            active_pane.left,
+            active_pane.top,
+            active_pane.width,
+            active_pane.height,
+        );
+        active_pane.left = 0;
+        active_pane.top = 0;
+        active_pane.width = max_cols;
+        active_pane.height = max_rows;
+        tab.panes = vec![active_pane];
+        tab.active_pane_id = active_pane_id.clone();
+
+        self.native_pane_zoom_snapshots.insert(
+            tab_id,
+            NativePaneZoomSnapshot {
+                other_panes: panes,
+                active_pane_geometry: active_geometry,
+                active_pane_id,
+                active_original_index: active_index,
+            },
+        );
+
+        self.clear_selection();
+        self.clear_hovered_link();
+        self.schedule_persist_native_workspace();
+        cx.notify();
+        true
     }
 
     fn native_allocate_pane_id(&self) -> String {
@@ -631,6 +783,7 @@ impl TerminalView {
     }
 
     fn native_split_active_pane(&mut self, axis: NativeSplitAxis, cx: &mut Context<Self>) -> bool {
+        self.clear_native_zoom_snapshot_for_active_tab();
         let Some((active_pane_id, left, top, width, height)) =
             self.tabs.get(self.active_tab).and_then(|tab| {
                 let index = tab.active_pane_index()?;
@@ -866,6 +1019,7 @@ impl TerminalView {
     }
 
     fn native_close_active_pane(&mut self, cx: &mut Context<Self>) -> bool {
+        self.clear_native_zoom_snapshot_for_active_tab();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return false;
         };

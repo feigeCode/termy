@@ -2,8 +2,8 @@ use super::*;
 use crate::theme_store;
 use gpui::point;
 use state::{
-    CommandPaletteItem, CommandPaletteItemKind, command_palette_next_scroll_y,
-    command_palette_target_scroll_y, ordered_theme_ids_for_palette,
+    CommandPaletteCommandIntent, CommandPaletteItem, CommandPaletteItemKind,
+    command_palette_next_scroll_y, command_palette_target_scroll_y, ordered_theme_ids_for_palette,
 };
 use termy_command_core::{CommandAvailability, CommandCapabilities, CommandUnavailableReason};
 
@@ -491,6 +491,7 @@ impl TerminalView {
                 match Self::command_palette_escape_action(
                     self.command_palette.mode(),
                     self.command_palette.tmux_session_intent(),
+                    self.command_palette.command_intent(),
                     self.command_palette.saved_layout_intent(),
                 ) {
                     CommandPaletteEscapeAction::ClosePalette => self.close_command_palette(cx),
@@ -548,6 +549,7 @@ impl TerminalView {
     fn command_palette_escape_action(
         mode: CommandPaletteMode,
         tmux_session_intent: TmuxSessionIntent,
+        _command_intent: CommandPaletteCommandIntent,
         saved_layout_intent: SavedLayoutIntent,
     ) -> CommandPaletteEscapeAction {
         match mode {
@@ -1014,6 +1016,7 @@ mod tests {
             TerminalView::command_palette_escape_action(
                 CommandPaletteMode::Commands,
                 TmuxSessionIntent::AttachOrSwitch,
+                CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
             ),
             CommandPaletteEscapeAction::ClosePalette
@@ -1022,6 +1025,7 @@ mod tests {
             TerminalView::command_palette_escape_action(
                 CommandPaletteMode::Themes,
                 TmuxSessionIntent::AttachOrSwitch,
+                CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToCommands
@@ -1030,6 +1034,7 @@ mod tests {
             TerminalView::command_palette_escape_action(
                 CommandPaletteMode::TmuxSessions,
                 TmuxSessionIntent::AttachOrSwitch,
+                CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToCommands
@@ -1038,6 +1043,7 @@ mod tests {
             TerminalView::command_palette_escape_action(
                 CommandPaletteMode::TmuxSessions,
                 TmuxSessionIntent::RenameInput,
+                CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToTmuxRenameSelect
@@ -1149,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_only_commands_are_present_but_disabled_when_tmux_runtime_is_off() {
+    fn resize_commands_remain_available_when_tmux_runtime_is_off() {
         let items = TerminalView::command_palette_core_command_items_for_state(false, false);
         let resize = items.iter().find(|item| {
             matches!(
@@ -1160,8 +1166,8 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         {
             let resize = resize.expect("missing resize pane command");
-            assert!(!resize.enabled);
-            assert_eq!(resize.status_hint, Some("tmux required"));
+            assert!(resize.enabled);
+            assert_eq!(resize.status_hint, None);
         }
         #[cfg(target_os = "windows")]
         assert!(
@@ -1183,14 +1189,14 @@ mod tests {
     }
 
     #[test]
-    fn tmux_disabled_message_matches_expected_copy() {
+    fn unknown_disabled_message_matches_expected_copy() {
         assert_eq!(
             TerminalView::command_palette_disabled_action_message_for_state(
                 CommandAction::ResizePaneLeft,
                 true,
                 false,
             ),
-            "Attach a tmux session to use this command"
+            "Command is currently unavailable"
         );
     }
 }

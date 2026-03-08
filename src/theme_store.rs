@@ -6,7 +6,6 @@ use termy_themes::{Rgb8, ThemeColors, normalize_theme_id};
 
 const DEFAULT_THEME_STORE_API_URL: &str = "https://api.termy.run";
 const DEFAULT_THEME_DEEPLINK_API_URL: &str = "https://termy.run/theme-api";
-const DEFAULT_THEME_STORE_DEVICE_URL: &str = "https://termy.run/device";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ThemeStoreTheme {
@@ -41,12 +40,6 @@ pub(crate) struct ThemeStoreAuthSession {
 
 pub(crate) fn theme_store_api_base_url() -> String {
     std::env::var("THEME_STORE_API_URL").unwrap_or_else(|_| DEFAULT_THEME_STORE_API_URL.into())
-}
-
-pub(crate) fn theme_store_native_login_url(api_base: &str) -> String {
-    let _ = api_base;
-    std::env::var("THEME_STORE_DEVICE_URL")
-        .unwrap_or_else(|_| DEFAULT_THEME_STORE_DEVICE_URL.to_string())
 }
 
 pub(crate) fn fetch_theme_store_themes_blocking(
@@ -328,13 +321,13 @@ fn auth_session_path() -> Option<PathBuf> {
 fn extract_auth_session_token_from_input(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err("Clipboard does not contain a theme store auth token".to_string());
+        return Err("Input does not contain a theme store auth token".to_string());
     }
 
     if trimmed.starts_with("termy://") {
         let (route, argument) = DeepLinkRoute::parse(trimmed)?;
         if route != DeepLinkRoute::AuthCallback {
-            return Err("Clipboard deeplink is not a theme store auth callback".to_string());
+            return Err("Input deeplink is not a theme store auth callback".to_string());
         }
         let Some(DeepLinkArgument::AuthCallback(payload)) = argument else {
             return Err("Auth callback deeplink is missing a session token".to_string());

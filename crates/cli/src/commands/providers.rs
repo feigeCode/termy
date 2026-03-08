@@ -337,9 +337,9 @@ mod tests {
             .iter()
             .find(|line| line.starts_with(CommandId::ResizePaneLeft.config_name()))
             .expect("missing resize_pane_left action metadata");
-        assert!(resize_pane_line.contains("available=false"));
-        assert!(resize_pane_line.contains("tmux_required=true"));
-        assert!(resize_pane_line.contains("restart_required=true"));
+        assert!(resize_pane_line.contains("available=true"));
+        assert!(resize_pane_line.contains("tmux_required=false"));
+        assert!(resize_pane_line.contains("restart_required=false"));
     }
 
     #[test]
@@ -362,7 +362,7 @@ mod tests {
             .find(|line| line.starts_with(CommandId::ResizePaneLeft.config_name()))
             .expect("missing resize_pane_left action metadata");
         assert!(resize_pane_line.contains("available=true"));
-        assert!(resize_pane_line.contains("tmux_required=true"));
+        assert!(resize_pane_line.contains("tmux_required=false"));
         assert!(resize_pane_line.contains("restart_required=false"));
     }
 
@@ -400,9 +400,9 @@ mod tests {
             .iter()
             .find(|line| line.starts_with("secondary-alt-shift-left = resize_pane_left"))
             .expect("missing secondary-alt-shift-left resize pane keybind metadata");
-        assert!(resize_pane_line.contains("available=false"));
-        assert!(resize_pane_line.contains("tmux_required=true"));
-        assert!(resize_pane_line.contains("restart_required=true"));
+        assert!(resize_pane_line.contains("available=true"));
+        assert!(resize_pane_line.contains("tmux_required=false"));
+        assert!(resize_pane_line.contains("restart_required=false"));
     }
 
     #[test]
@@ -439,7 +439,7 @@ mod tests {
             .find(|line| line.starts_with("secondary-alt-shift-left = resize_pane_left"))
             .expect("missing resize_pane_left keybind metadata");
         assert!(resize_pane_line.contains("available=true"));
-        assert!(resize_pane_line.contains("tmux_required=true"));
+        assert!(resize_pane_line.contains("tmux_required=false"));
         assert!(resize_pane_line.contains("restart_required=false"));
     }
 

@@ -1020,6 +1020,30 @@ impl TerminalView {
         }
     }
 
+    pub(super) fn paste_clipboard_into_active_inline_input(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.has_active_inline_input() {
+            return false;
+        }
+
+        let Some(clipboard_text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return true;
+        };
+
+        let filtered_text = filter_inline_paste_text(&clipboard_text);
+        if filtered_text.is_empty() {
+            return true;
+        }
+
+        self.apply_inline_input_mutation(
+            move |state| state.replace_text_in_range(None, &filtered_text),
+            cx,
+        );
+        true
+    }
+
     pub(super) fn handle_inline_input_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1289,6 +1313,12 @@ impl EntityInputHandler for TerminalView {
     }
 }
 
+fn filter_inline_paste_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| *character != '\n' && *character != '\r')
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1394,6 +1424,14 @@ mod tests {
         assert_eq!(
             TerminalView::inline_input_notify_target_for_target(InlineInputTarget::RenameTab),
             InlineInputNotifyTarget::Parent
+        );
+    }
+
+    #[test]
+    fn inline_paste_filter_removes_line_breaks() {
+        assert_eq!(
+            filter_inline_paste_text("line-1\r\nline-2\nline-3\rline-4"),
+            "line-1line-2line-3line-4"
         );
     }
 }

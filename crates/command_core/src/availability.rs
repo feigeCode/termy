@@ -47,17 +47,14 @@ mod tests {
     use crate::CommandId;
 
     #[test]
-    fn command_availability_reports_requires_tmux_when_runtime_disabled() {
+    fn resize_commands_are_available_without_tmux_runtime() {
         let caps = CommandCapabilities {
             tmux_runtime_active: false,
             install_cli_available: true,
         };
         let availability = CommandId::ResizePaneLeft.availability(caps);
-        assert!(!availability.enabled);
-        assert_eq!(
-            availability.reason,
-            Some(CommandUnavailableReason::RequiresTmuxRuntime)
-        );
+        assert!(availability.enabled);
+        assert_eq!(availability.reason, None);
     }
 
     #[test]

@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn native_mode_filters_tmux_only_default_keybindings() {
+    fn native_mode_keeps_resize_default_keybindings() {
         let config = AppConfig::default();
 
         let (tmux_resolved, tmux_warnings) = resolve_keybinds_for_config(&config, true);
@@ -293,21 +293,15 @@ mod tests {
         assert!(
             tmux_resolved
                 .iter()
-                .any(|binding| binding.action.is_tmux_only())
+                .any(|binding| binding.action == CommandId::ResizePaneLeft)
         );
 
         let (native_resolved, native_warnings) = resolve_keybinds_for_config(&config, false);
-        assert_eq!(native_warnings.len(), 1);
-        assert_eq!(native_warnings[0].line_number, 0);
-        assert!(
-            native_warnings[0]
-                .message
-                .contains("tmux-only keybind(s) ignored while tmux is disabled")
-        );
+        assert!(native_warnings.is_empty());
         assert!(
             native_resolved
                 .iter()
-                .all(|binding| !binding.action.is_tmux_only())
+                .any(|binding| binding.action == CommandId::ResizePaneLeft)
         );
     }
 

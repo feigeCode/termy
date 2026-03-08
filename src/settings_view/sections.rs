@@ -1669,6 +1669,8 @@ impl SettingsWindow {
         let native_tab_persistence = self.config.native_tab_persistence;
         let native_layout_autosave = self.config.native_layout_autosave;
         let native_buffer_persistence = self.config.native_buffer_persistence;
+        let show_plugins_tab = self.config.show_plugins_tab;
+        let show_debug_overlay = self.config.show_debug_overlay;
         let window_width = self.config.window_width;
         let window_height = self.config.window_height;
         let bg_card = self.bg_card();
@@ -1763,6 +1765,26 @@ impl SettingsWindow {
             ),
         ];
         let window_group = self.render_settings_group("WINDOW", window_rows);
+
+        let ui_rows = vec![
+            self.render_root_bool_setting_row(
+                "show_plugins_tab",
+                "show_plugins_tab-toggle",
+                RootSettingId::ShowPluginsTab,
+                show_plugins_tab,
+                "Saved",
+                cx,
+            ),
+            self.render_root_bool_setting_row(
+                "show_debug_overlay",
+                "show_debug_overlay-toggle",
+                RootSettingId::ShowDebugOverlay,
+                show_debug_overlay,
+                "Saved",
+                cx,
+            ),
+        ];
+        let ui_group = self.render_settings_group("UI", ui_rows);
 
         let ai_provider_meta = Self::setting_metadata_or_fallback("ai_provider");
         let openai_api_key_meta = Self::setting_metadata_or_fallback("openai_api_key");
@@ -1904,6 +1926,7 @@ impl SettingsWindow {
             .child(startup_group)
             .child(safety_group)
             .child(window_group)
+            .child(ui_group)
             .child(ai_group)
             .child(updates_group)
             .child(config_group)

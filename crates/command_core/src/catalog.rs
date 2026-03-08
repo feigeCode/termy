@@ -111,14 +111,8 @@ macro_rules! define_command_catalog {
             }
 
             pub const fn is_tmux_only(self) -> bool {
-                matches!(
-                    self,
-                    Self::ResizePaneLeft
-                        | Self::ResizePaneRight
-                        | Self::ResizePaneUp
-                        | Self::ResizePaneDown
-                        | Self::TogglePaneZoom
-                )
+                let _ = self;
+                false
             }
 
             pub fn all() -> impl std::iter::ExactSizeIterator<Item = Self> + Clone {
@@ -173,14 +167,7 @@ mod tests {
             .collect::<Vec<_>>();
         actual.sort_unstable();
 
-        let mut expected = vec![
-            "resize_pane_down",
-            "resize_pane_left",
-            "resize_pane_right",
-            "resize_pane_up",
-            "toggle_pane_zoom",
-        ];
-        expected.sort_unstable();
+        let expected: Vec<&str> = vec![];
 
         assert_eq!(actual, expected);
     }

@@ -157,8 +157,9 @@ pub fn compute_metrics(range: ScrollbarRange, min_thumb_height: f32) -> Option<S
 
     let offset = range.offset.clamp(0.0, max_offset);
     let content_extent = viewport_extent + max_offset;
-    let thumb_height = ((viewport_extent / content_extent) * track_extent)
-        .clamp(min_thumb_height.max(1.0), track_extent);
+    let min_thumb_height = min_thumb_height.max(1.0).min(track_extent);
+    let thumb_height =
+        ((viewport_extent / content_extent) * track_extent).clamp(min_thumb_height, track_extent);
     let travel = (track_extent - thumb_height).max(0.0);
     let thumb_top = if travel <= f32::EPSILON {
         0.0
@@ -353,6 +354,20 @@ mod tests {
         assert_eq!(metrics.track_height, 260.0);
         assert!(metrics.thumb_height <= 260.0);
         assert!(metrics.thumb_top <= metrics.travel);
+    }
+
+    #[test]
+    fn metrics_handle_track_smaller_than_min_thumb_without_panicking() {
+        let range = ScrollbarRange {
+            offset: 4.0,
+            max_offset: 200.0,
+            viewport_extent: 80.0,
+            track_extent: 19.6,
+        };
+        let metrics = compute_metrics(range, 40.0).expect("expected metrics");
+        assert_eq!(metrics.thumb_height, 19.6);
+        assert_eq!(metrics.travel, 0.0);
+        assert_eq!(metrics.thumb_top, 0.0);
     }
 
     #[test]

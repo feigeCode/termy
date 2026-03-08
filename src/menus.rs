@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_only_actions_remain_hidden_when_tmux_is_disabled() {
+    fn pane_actions_remain_visible_when_tmux_is_disabled() {
         let all_menu_titles = app_menus(true, false)
             .into_iter()
             .flat_map(|menu| menu.items)
@@ -290,9 +290,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(!all_menu_titles.iter().any(|title| matches!(
-            title.as_str(),
-            "Close Pane" | "Focus Previous Pane" | "Toggle Pane Zoom"
-        )));
+        assert!(
+            all_menu_titles
+                .iter()
+                .any(|title| title.as_str() == "Toggle Pane Zoom")
+        );
     }
 }

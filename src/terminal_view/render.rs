@@ -1479,12 +1479,18 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let now = Instant::now();
         self.toast_manager.ingest_pending();
         self.toast_manager.tick_with_hovered(self.hovered_toast);
         if let Some((_, copied_at)) = self.copied_toast_feedback
             && copied_at.elapsed() >= Duration::from_millis(TOAST_COPY_FEEDBACK_MS)
         {
             self.copied_toast_feedback = None;
+        }
+        if let Some(until) = self.resize_indicator_visible_until
+            && now >= until
+        {
+            self.resize_indicator_visible_until = None;
         }
 
         // Request re-render during toast animations for smooth fade in/out.
@@ -1495,6 +1501,21 @@ impl TerminalView {
                 let _ = cx.update(|cx| {
                     this.update(cx, |view, cx| {
                         view.toast_animation_scheduled = false;
+                        view.notify_overlay(cx);
+                    })
+                });
+            })
+            .detach();
+        }
+        if self.resize_indicator_visible_until.is_some()
+            && !self.resize_indicator_animation_scheduled
+        {
+            self.resize_indicator_animation_scheduled = true;
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                smol::Timer::after(Duration::from_millis(16)).await;
+                let _ = cx.update(|cx| {
+                    this.update(cx, |view, cx| {
+                        view.resize_indicator_animation_scheduled = false;
                         view.notify_overlay(cx);
                     })
                 });
@@ -1536,6 +1557,69 @@ impl TerminalView {
                 .into_any_element()
         });
         let toast_overlay = self.render_toast_overlay(&colors, cx);
+        let resize_overlay = self
+            .resize_indicator_visible_until
+            .zip(self.resize_indicator_dims)
+            .map(|(_, (cols, rows))| {
+                let overlay_style = self.overlay_style();
+                div()
+                    .id("window-resize-indicator-overlay")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px(px(14.0))
+                            .py(px(8.0))
+                            .rounded(px(6.0))
+                            .bg(overlay_style.panel_background(0.84))
+                            .border_1()
+                            .border_color(overlay_style.panel_foreground(0.24))
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(overlay_style.panel_foreground(0.95))
+                            .child(format!("{} x {}", cols, rows)),
+                    )
+                    .into_any_element()
+            });
+        let debug_overlay = self.show_debug_overlay.then(|| {
+            let overlay_style = self.overlay_style();
+            let cpu_percent = self.debug_overlay_stats.cpu_percent;
+            let render_fps = self.debug_overlay_stats.fps;
+            let memory = self.debug_overlay_memory_label();
+            #[cfg(target_os = "macos")]
+            let display_hint = "up to 120Hz";
+            #[cfg(not(target_os = "macos"))]
+            let display_hint = "system";
+
+            div()
+                .id("debug-metrics-overlay")
+                .absolute()
+                .top(px(chrome_height + 10.0))
+                .right(px(10.0))
+                .px(px(10.0))
+                .py(px(8.0))
+                .rounded(px(6.0))
+                .bg(overlay_style.panel_background(0.84))
+                .border_1()
+                .border_color(overlay_style.panel_foreground(0.24))
+                .text_size(px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(overlay_style.panel_foreground(0.95))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(format!("Display: {}", display_hint))
+                .child(format!("Render FPS: {:.1}", render_fps))
+                .child(format!("CPU: {:.1}%", cpu_percent))
+                .child(format!("MEM: {}", memory))
+                .into_any_element()
+        });
 
         #[cfg(target_os = "macos")]
         let banner_overlay: Option<AnyElement> = if self.show_update_banner {
@@ -1567,6 +1651,8 @@ impl TerminalView {
             .size_full()
             .children(banner_overlay)
             .children(terminal_overlay)
+            .children(resize_overlay)
+            .children(debug_overlay)
             .children(toast_overlay)
             .into_any_element()
     }
@@ -1574,6 +1660,8 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.record_debug_overlay_frame();
+
         // Process pending OSC 52 clipboard writes
         if let Some(text) = self.pending_clipboard.take() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -1591,8 +1679,9 @@ impl Render for TerminalView {
         terminal_surface_bg.a = self.scaled_background_alpha(terminal_surface_bg.a);
 
         self.sync_terminal_size(window, cell_size);
-
         let now = Instant::now();
+        self.track_window_resize_indicator(window.viewport_size(), now);
+
         let active_pane_id = self.active_pane_id().map(ToOwned::to_owned);
         let active_tab_focus_snapshot = self
             .tabs
@@ -2127,14 +2216,11 @@ impl Render for TerminalView {
                     .on_action(cx.listener(Self::handle_focus_pane_up_action))
                     .on_action(cx.listener(Self::handle_focus_pane_down_action))
                     .on_action(cx.listener(Self::handle_focus_pane_previous_action))
-                    // Resize/zoom remain tmux-only actions.
-                    .when(self.runtime_uses_tmux(), |s| {
-                        s.on_action(cx.listener(Self::handle_resize_pane_left_action))
-                            .on_action(cx.listener(Self::handle_resize_pane_right_action))
-                            .on_action(cx.listener(Self::handle_resize_pane_up_action))
-                            .on_action(cx.listener(Self::handle_resize_pane_down_action))
-                            .on_action(cx.listener(Self::handle_toggle_pane_zoom_action))
-                    })
+                    .on_action(cx.listener(Self::handle_resize_pane_left_action))
+                    .on_action(cx.listener(Self::handle_resize_pane_right_action))
+                    .on_action(cx.listener(Self::handle_resize_pane_up_action))
+                    .on_action(cx.listener(Self::handle_resize_pane_down_action))
+                    .on_action(cx.listener(Self::handle_toggle_pane_zoom_action))
                     .on_action(cx.listener(Self::handle_minimize_window_action))
                     .on_action(cx.listener(Self::handle_copy_action))
                     .on_action(cx.listener(Self::handle_paste_action))

@@ -296,6 +296,7 @@ impl TerminalView {
         let metrics = layout.metrics;
 
         if hit.thumb_hit {
+            self.stop_terminal_scrollbar_track_hold();
             let thumb_grab_offset = (hit.local_y - hit.thumb_top).clamp(0.0, metrics.thumb_height);
             self.start_terminal_scrollbar_drag(thumb_grab_offset, cx);
             cx.notify();
@@ -309,8 +310,51 @@ impl TerminalView {
         if changed {
             self.terminal_scroll_accumulator_y = 0.0;
         }
+        self.start_terminal_scrollbar_track_hold(hit.local_y, cx);
         self.mark_terminal_scrollbar_activity(cx);
         cx.notify();
+    }
+
+    pub(in super::super) fn handle_terminal_scrollbar_track_hold_tick(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(local_y) = self.terminal_scrollbar_track_hold_local_y else {
+            return false;
+        };
+        if self.terminal_scrollbar_drag.is_some() {
+            return false;
+        }
+
+        let Some(surface) = self.terminal_viewport_geometry() else {
+            self.terminal_scrollbar_track_hold_local_y = None;
+            return false;
+        };
+        let Some(layout) = self.terminal_scrollbar_layout_for_track(surface.height) else {
+            self.terminal_scrollbar_track_hold_local_y = None;
+            return false;
+        };
+        let range = layout.range;
+        let metrics = layout.metrics;
+        let thumb_contains_point =
+            local_y >= metrics.thumb_top && local_y <= metrics.thumb_top + metrics.thumb_height;
+        if thumb_contains_point {
+            self.terminal_scrollbar_track_hold_local_y = None;
+            return false;
+        }
+
+        let changed = self.apply_terminal_scroll_offset(
+            ui_scrollbar::offset_from_track_click(local_y, range, metrics),
+            layout,
+        );
+        if !changed {
+            self.terminal_scrollbar_track_hold_local_y = None;
+            return false;
+        }
+        self.terminal_scroll_accumulator_y = 0.0;
+        cx.notify();
+        self.mark_terminal_scrollbar_activity(cx);
+        self.terminal_scrollbar_track_hold_local_y.is_some()
     }
 
     pub(in super::super) fn handle_terminal_scrollbar_drag(

@@ -120,7 +120,7 @@ impl TerminalView {
         })
     }
 
-    fn native_resize_pane_step(
+    pub(in crate::terminal_view) fn native_resize_pane_step(
         &mut self,
         pane_id: &str,
         axis: PaneResizeAxis,
@@ -672,6 +672,14 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
+        if event.dragging()
+            && self.terminal_scrollbar_track_hold_local_y.is_some()
+            && let Some(hit) = self.terminal_scrollbar_hit_test(event.position, window)
+        {
+            self.update_terminal_scrollbar_track_hold(hit.local_y);
+            cx.stop_propagation();
+            return;
+        }
         if self.pane_resize_drag.is_some() {
             if event.dragging() {
                 if self.apply_pane_resize_drag(event.position) {
@@ -721,6 +729,11 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.button == MouseButton::Left && self.stop_terminal_scrollbar_track_hold() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if event.button == MouseButton::Left && self.finish_terminal_scrollbar_drag(cx) {
             cx.stop_propagation();
             cx.notify();

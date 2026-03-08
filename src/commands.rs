@@ -717,16 +717,7 @@ define_commands!(
             MenuActionRole::Normal
         ))
     ),
-    (
-        ImportThemeStoreAuth,
-        GLOBAL_CONTEXT,
-        Some(palette(
-            "Import Theme Store Auth",
-            "github login auth token session clipboard paste",
-            CommandPaletteVisibility::Always
-        )),
-        None
-    ),
+    (ImportThemeStoreAuth, GLOBAL_CONTEXT, None, None),
     (
         ImportColors,
         TERMINAL_CONTEXT,
@@ -969,6 +960,7 @@ actions!(
 
 pub fn inline_input_keybindings() -> Vec<KeyBinding> {
     vec![
+        KeyBinding::new("secondary-v", Paste, INLINE_INPUT_CONTEXT),
         KeyBinding::new("backspace", InlineBackspace, INLINE_INPUT_CONTEXT),
         KeyBinding::new("delete", InlineDelete, INLINE_INPUT_CONTEXT),
         KeyBinding::new("left", InlineMoveLeft, INLINE_INPUT_CONTEXT),
@@ -1000,6 +992,7 @@ pub fn inline_input_keybindings() -> Vec<KeyBinding> {
 mod tests {
     use super::{
         CommandAction, CommandPaletteVisibility, MenuActionRole, MenuRoot, MenuVisibility,
+        inline_input_keybindings,
     };
     use std::collections::HashSet;
     use termy_command_core::{CommandCapabilities, CommandId, CommandUnavailableReason};
@@ -1267,11 +1260,8 @@ mod tests {
             install_cli_available: true,
         };
         let availability = CommandAction::ResizePaneLeft.availability(caps);
-        assert!(!availability.enabled);
-        assert_eq!(
-            availability.reason,
-            Some(CommandUnavailableReason::RequiresTmuxRuntime)
-        );
+        assert!(availability.enabled);
+        assert_eq!(availability.reason, None);
     }
 
     #[test]
@@ -1297,14 +1287,7 @@ mod tests {
             .collect::<Vec<_>>();
         actual.sort_unstable();
 
-        let mut expected = vec![
-            "resize_pane_left",
-            "resize_pane_right",
-            "resize_pane_up",
-            "resize_pane_down",
-            "toggle_pane_zoom",
-        ];
-        expected.sort_unstable();
+        let expected: Vec<&str> = vec![];
 
         assert_eq!(actual, expected);
     }

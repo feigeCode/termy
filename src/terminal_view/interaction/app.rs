@@ -12,7 +12,7 @@ impl TerminalView {
                 true
             }
             CommandAction::ImportThemeStoreAuth => {
-                self.import_theme_store_auth_action(cx);
+                self.import_theme_store_auth_action_from_clipboard(cx);
                 true
             }
             CommandAction::ImportColors => {
@@ -75,15 +75,23 @@ impl TerminalView {
         .detach();
     }
 
-    fn import_theme_store_auth_action(&mut self, cx: &mut Context<Self>) {
+    fn import_theme_store_auth_action_from_clipboard(&mut self, cx: &mut Context<Self>) {
         let Some(input) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            termy_toast::info("Copy a theme store auth deeplink or session token first");
+            termy_toast::info("Copy a theme store session token first");
             self.notify_overlay(cx);
             return;
         };
 
+        self.import_theme_store_auth_action(input, cx);
+    }
+
+    pub(in super::super) fn import_theme_store_auth_action(
+        &mut self,
+        input: String,
+        cx: &mut Context<Self>,
+    ) {
         let api_base = crate::theme_store::theme_store_api_base_url();
-        let loading_id = termy_toast::loading("Importing theme store auth...");
+        let loading_id = termy_toast::loading("Signing in with auth token...");
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = smol::unblock(move || {
@@ -106,10 +114,7 @@ impl TerminalView {
                     termy_toast::success(format!("Signed in as @{}", session.user.github_login));
                 }
                 Err(error) => {
-                    log::error!(
-                        "Failed to import theme store auth from clipboard: {}",
-                        error
-                    );
+                    log::error!("Failed to import theme store auth: {}", error);
                     let _ = this.update(cx, |view, cx| view.notify_overlay(cx));
                     termy_toast::error(error);
                 }

@@ -131,11 +131,12 @@ impl SettingsWindow {
         available_font_families.sort_unstable_by_key(|font| font.to_ascii_lowercase());
         available_font_families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
         let colors = TerminalColors::from_theme(&config.theme, &config.colors);
-        let searchable_settings = Self::build_searchable_settings();
+        let searchable_settings = Self::build_searchable_settings(config.show_plugins_tab);
         let searchable_setting_indices =
             Self::build_searchable_setting_indices(&searchable_settings);
         let content_scroll_handle = ScrollHandle::new();
-        let setting_scroll_anchors = Self::build_setting_scroll_anchors(&content_scroll_handle);
+        let setting_scroll_anchors =
+            Self::build_setting_scroll_anchors(&content_scroll_handle, config.show_plugins_tab);
         let theme_store_auth_session = theme_store::load_auth_session();
         let (plugin_directory, plugin_inventory, plugin_inventory_error) =
             Self::load_plugin_inventory();
@@ -461,23 +462,6 @@ impl SettingsWindow {
         .detach();
     }
 
-    fn begin_theme_store_login(&mut self, cx: &mut Context<Self>) {
-        let login_url = "https://termy.run/device";
-        self.theme_store_auth_error = None;
-        match SettingsWindow::open_url(&login_url) {
-            Ok(()) => {
-                self.theme_store_auth_loading = true;
-                cx.notify();
-            }
-            Err(error) => {
-                self.theme_store_auth_loading = false;
-                self.theme_store_auth_error = Some(error.clone());
-                termy_toast::error(error);
-                cx.notify();
-            }
-        }
-    }
-
     fn logout_theme_store_user(&mut self, cx: &mut Context<Self>) {
         if self.theme_store_auth_loading {
             return;
@@ -625,6 +609,8 @@ impl SettingsWindow {
     fn apply_runtime_config(&mut self, config: AppConfig) -> bool {
         let previous_provider = self.config.ai_provider;
         let next_provider = config.ai_provider;
+        let previous_show_plugins_tab = self.config.show_plugins_tab;
+        let next_show_plugins_tab = config.show_plugins_tab;
         let previous_api_key = match previous_provider {
             ConfigAiProvider::OpenAi => self.config.openai_api_key.clone(),
             ConfigAiProvider::Gemini => self.config.gemini_api_key.clone(),
@@ -642,6 +628,18 @@ impl SettingsWindow {
         }
         self.colors = TerminalColors::from_theme(&config.theme, &config.colors);
         self.config = config;
+        if previous_show_plugins_tab != next_show_plugins_tab {
+            self.searchable_settings = Self::build_searchable_settings(next_show_plugins_tab);
+            self.searchable_setting_indices =
+                Self::build_searchable_setting_indices(&self.searchable_settings);
+            self.setting_scroll_anchors = Self::build_setting_scroll_anchors(
+                &self.content_scroll_handle,
+                next_show_plugins_tab,
+            );
+            if self.active_section == SettingsSection::Plugins && !next_show_plugins_tab {
+                self.active_section = SettingsSection::Appearance;
+            }
+        }
         true
     }
 

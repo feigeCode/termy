@@ -171,6 +171,20 @@ impl AppConfig {
                         config.native_buffer_persistence = parsed;
                     }
                 }
+                RootSettingId::ShowPluginsTab => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.show_plugins_tab = parsed;
+                    }
+                }
+                RootSettingId::ShowDebugOverlay => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.show_debug_overlay = parsed;
+                    }
+                }
                 RootSettingId::TmuxBinary => {
                     if let Some(parsed) = parse_string_field(
                         &mut diagnostics,

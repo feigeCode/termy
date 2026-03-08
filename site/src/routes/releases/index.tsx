@@ -81,7 +81,7 @@ function ReleasesPage(): JSX.Element {
         )}
 
         <div className="mt-16 pt-6 border-t border-border/50 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          <span>Powered by</span>
+          <span>Powered by Notra</span>
           <img src="/notra.svg" alt="Notra" className="h-5 w-5" />
         </div>
       </div>

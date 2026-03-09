@@ -829,6 +829,14 @@ impl Terminal {
         cursor_state_from_term(&term)
     }
 
+    /// Returns the cursor position regardless of visibility (for IME positioning).
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let term = self.term.lock();
+        let cursor = term.renderable_content().cursor;
+        let row = usize::try_from(cursor.point.line.0).unwrap_or(0);
+        (cursor.point.column.0, row)
+    }
+
     /// Check if there are pending events
     #[allow(dead_code)]
     pub fn has_pending_events(&self) -> bool {

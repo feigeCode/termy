@@ -140,6 +140,15 @@ impl PaneTerminal {
         cursor_state_from_term(&term)
     }
 
+    /// Returns the cursor position regardless of visibility (for IME positioning).
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let term = self.cloned_term_arc();
+        let term = term.lock();
+        let cursor = term.renderable_content().cursor;
+        let row = usize::try_from(cursor.point.line.0).unwrap_or(0);
+        (cursor.point.column.0, row)
+    }
+
     pub fn set_term_options(&self, options: TerminalOptions) {
         self.with_term_mut(|term, _inner| term.set_options(options.term_config()));
     }

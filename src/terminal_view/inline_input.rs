@@ -1256,25 +1256,21 @@ impl TerminalView {
         Some(0..len_utf16)
     }
 
-    fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+    pub(super) fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
         let geometry = self.terminal_viewport_geometry()?;
         let pane = self.active_pane_ref()?;
         let size = pane.terminal.size();
         let cell_width: f32 = size.cell_width.into();
         let cell_height: f32 = size.cell_height.into();
-        let cursor = pane.terminal.cursor_state()?;
-        let (cursor_col, cursor_row) = (cursor.col, cursor.row);
+        // Use cursor_position() instead of cursor_state() so that IME
+        // preedit is shown even when the TUI app hides the cursor.
+        let (cursor_col, cursor_row) = pane.terminal.cursor_position();
         let x = geometry.origin_x + (cursor_col as f32) * cell_width;
         let y = geometry.origin_y + (cursor_row as f32) * cell_height;
         Some(Bounds::new(
             point(px(x), px(y)),
             gpui::size(px(cell_width), px(cell_height)),
         ))
-    }
-
-    fn is_alt_screen(&self) -> bool {
-        self.active_terminal()
-            .is_some_and(|terminal| terminal.alternate_screen_mode())
     }
 }
 
@@ -1301,8 +1297,9 @@ impl EntityInputHandler for TerminalView {
         if let Some(state) = self.active_inline_input_state() {
             return Some(state.selected_text_range());
         }
+        let range = self.ime_selected_range.clone().unwrap_or(0..0);
         Some(UTF16Selection {
-            range: 0..0,
+            range,
             reversed: false,
         })
     }
@@ -1326,6 +1323,7 @@ impl EntityInputHandler for TerminalView {
         // Only clear marked text; do NOT commit to PTY.
         // Commit only happens in replace_text_in_range.
         self.ime_marked_text = None;
+        self.ime_selected_range = None;
         cx.notify();
     }
 
@@ -1345,6 +1343,7 @@ impl EntityInputHandler for TerminalView {
         }
         // Terminal IME mode: confirmed text → send to PTY
         self.ime_marked_text = None;
+        self.ime_selected_range = None;
         if !text.is_empty() {
             self.write_terminal_input(text.as_bytes(), cx);
         }
@@ -1375,6 +1374,7 @@ impl EntityInputHandler for TerminalView {
         } else {
             Some(new_text.to_string())
         };
+        self.ime_selected_range = _new_selected_range;
         cx.notify();
     }
 
@@ -1388,8 +1388,16 @@ impl EntityInputHandler for TerminalView {
         if let Some(state) = self.active_inline_input_state() {
             return Some(state.bounds_for_range(range_utf16, element_bounds));
         }
-        // Offset candidate window by preedit cursor position
-        let mut bounds = self.ime_cursor_bounds()?;
+        // ime_cursor_bounds returns coordinates relative to the terminal
+        // content area.  Offset by element_bounds.origin to convert to
+        // window coordinates so macOS positions the candidate window correctly.
+        let cursor = self.ime_cursor_bounds()?;
+        let x = element_bounds.origin.x + cursor.origin.x;
+        let y = element_bounds.origin.y + cursor.origin.y;
+        let mut bounds = Bounds::new(
+            point(x, y),
+            cursor.size,
+        );
         if let Some(pane) = self.active_pane_ref() {
             let cell_width: f32 = pane.terminal.size().cell_width.into();
             bounds.origin.x += px(range_utf16.start as f32 * cell_width);

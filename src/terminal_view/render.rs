@@ -2346,6 +2346,30 @@ impl Render for TerminalView {
         .absolute()
         .size_full()
         .into_any_element();
+        let ime_preedit_overlay = self.ime_marked_text.as_ref().and_then(|text| {
+            if text.is_empty() {
+                return None;
+            }
+            let bounds = self.ime_cursor_bounds()?;
+            let fg_color: gpui::Hsla = self.colors.foreground.into();
+            let bg_color: gpui::Hsla = self.colors.background.into();
+            Some(
+                div()
+                    .absolute()
+                    .left(bounds.origin.x)
+                    .top(bounds.origin.y)
+                    .h(bounds.size.height)
+                    .bg(bg_color)
+                    .border_b_1()
+                    .border_color(fg_color)
+                    .text_color(fg_color)
+                    .font_family(font_family.clone())
+                    .text_size(font_size)
+                    .line_height(bounds.size.height)
+                    .child(text.clone())
+                    .into_any_element(),
+            )
+        });
         let mut agent_sidebar_muted: gpui::Hsla = self.colors.foreground.into();
         agent_sidebar_muted.a = 0.72;
         let agent_sidebar = self.agent_sidebar_visible().then(|| {
@@ -2637,6 +2661,7 @@ impl Render for TerminalView {
                                     .text_size(font_size)
                                     .child(ime_input_layer)
                                     .child(terminal_grid_layer)
+                                    .children(ime_preedit_overlay)
                                     .children(terminal_scrollbar_overlay),
                             )
                             .children(agent_sidebar),

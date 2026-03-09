@@ -916,7 +916,7 @@ impl TerminalView {
             Some(InlineInputTarget::RenameTab)
         } else if self.ai_input_open {
             Some(InlineInputTarget::AiInput)
-        } else if self.agent_sidebar_input_active {
+        } else if self.agent_sidebar_input_active && self.agent_sidebar_visible() {
             Some(InlineInputTarget::AgentSidebar)
         } else {
             None

@@ -846,7 +846,7 @@ impl SettingsWindow {
                                         .child(if enabled { "On" } else { "Off" }),
                                 )
                                 .child(self.render_switch(
-                                    Box::leak(toggle_id.to_string().into_boxed_str()),
+                                    toggle_id,
                                     enabled,
                                     cx,
                                     move |view, cx| {

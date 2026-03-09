@@ -514,8 +514,10 @@ impl SettingsWindow {
                 let parsed = value
                     .parse::<f32>()
                     .map_err(|_| "Agent sidebar width must be a positive number".to_string())?;
-                if parsed <= 0.0 {
-                    return Err("Agent sidebar width must be greater than 0".to_string());
+                if parsed < 180.0 || parsed > 1000.0 {
+                    return Err(
+                        "Agent sidebar width must be between 180 and 1000".to_string(),
+                    );
                 }
                 self.config.agent_sidebar_width = parsed;
                 config::set_root_setting(

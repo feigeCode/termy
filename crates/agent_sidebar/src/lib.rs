@@ -246,9 +246,7 @@ fn render_composer(
                                 .flex()
                                 .items_center()
                                 .gap_3()
-                                .child(
-                                    div().text_xs().text_color(text_muted).child("Read Only"),
-                                )
+                                .child(div().text_xs().text_color(text_muted).child("Read Only"))
                                 .child(div().text_xs().text_color(text_muted).child("gpt-5.4"))
                                 .child(div().text_xs().text_color(text_muted).child("Medium"))
                                 .child(

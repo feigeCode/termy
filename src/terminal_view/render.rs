@@ -394,6 +394,7 @@ impl TerminalView {
     fn pane_render_cache_key(
         &self,
         is_active_pane: bool,
+        alternate_screen_mode: bool,
         search_active: bool,
         cell_color_transform: CellColorTransform,
         effective_background_opacity: f32,
@@ -410,6 +411,7 @@ impl TerminalView {
 
         TerminalPaneRenderCacheKey {
             is_active_pane,
+            alternate_screen_mode,
             selection_range: is_active_pane.then(|| self.selection_range()).flatten(),
             search_results_revision,
             search_position,
@@ -1793,8 +1795,10 @@ impl Render for TerminalView {
                     self.tmux_show_active_pane_border,
                 );
                 let pane_focus_target_bg = colors.background;
+                let alternate_screen_mode = terminal.alternate_screen_mode();
                 let pane_cache_key = self.pane_render_cache_key(
                     is_active_pane,
+                    alternate_screen_mode,
                     search_active,
                     cell_color_transform,
                     effective_background_opacity,
@@ -2382,13 +2386,12 @@ impl Render for TerminalView {
                                         cx.listener(Self::handle_mouse_up),
                                     )
                                     .on_drop(cx.listener(Self::handle_file_drop))
-                                    .when_some(
-                                        self.pane_resize_drag.as_ref(),
-                                        |s, drag| match drag.axis {
-                                            PaneResizeAxis::Horizontal => s.cursor_col_resize(),
-                                            PaneResizeAxis::Vertical => s.cursor_row_resize(),
-                                        },
-                                    )
+                                    .when_some(self.pane_resize_drag.as_ref(), |s, drag| match drag
+                                        .axis
+                                    {
+                                        PaneResizeAxis::Horizontal => s.cursor_col_resize(),
+                                        PaneResizeAxis::Vertical => s.cursor_row_resize(),
+                                    })
                                     .font_family(font_family.clone())
                                     .text_size(font_size)
                                     .child(terminal_grid_layer)
@@ -2751,6 +2754,18 @@ mod tests {
                 left_col: 0,
                 right_col: 1,
             }]),
+        );
+        assert_eq!(strategy, PaneCacheUpdateStrategy::Full);
+    }
+
+    #[test]
+    fn pane_cache_strategy_forces_full_rebuild_when_cache_key_changes_with_empty_damage() {
+        let strategy = pane_cache_update_strategy(
+            true,
+            true,
+            true,
+            false,
+            &TerminalDamageSnapshot::Partial(Vec::new()),
         );
         assert_eq!(strategy, PaneCacheUpdateStrategy::Full);
     }

@@ -778,10 +778,8 @@ impl SettingsWindow {
                 let hover_bg = self.bg_hover();
                 let destination = entry.settings_section;
                 let destination_label = destination.map(Self::settings_section_label);
-                let action_id = SharedString::from(format!(
-                    "experimental-feature-{}",
-                    entry.crate_name
-                ));
+                let action_id =
+                    SharedString::from(format!("experimental-feature-{}", entry.crate_name));
                 let toggle_info = entry.toggle_setting_key.and_then(|setting_key| {
                     let setting = root_setting_from_key(setting_key)?;
                     (root_setting_value_kind(setting) == RootSettingValueKind::Boolean)
@@ -792,10 +790,8 @@ impl SettingsWindow {
                         .as_deref()
                         .and_then(|value| value.parse::<bool>().ok())
                         .unwrap_or(false);
-                    let toggle_id = SharedString::from(format!(
-                        "experimental-toggle-{}",
-                        entry.crate_name
-                    ));
+                    let toggle_id =
+                        SharedString::from(format!("experimental-toggle-{}", entry.crate_name));
 
                     div()
                         .flex()
@@ -820,16 +816,11 @@ impl SettingsWindow {
                                         .text_color(text_primary)
                                         .child("Enabled"),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(text_muted)
-                                        .child(if enabled {
-                                            "This experimental feature is visible in Settings."
-                                        } else {
-                                            "This experimental feature is currently hidden."
-                                        }),
-                                ),
+                                .child(div().text_xs().text_color(text_muted).child(if enabled {
+                                    "This experimental feature is visible in Settings."
+                                } else {
+                                    "This experimental feature is currently hidden."
+                                })),
                         )
                         .child(
                             div()
@@ -895,10 +886,7 @@ impl SettingsWindow {
                                             .child(entry.title),
                                     )
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(text_muted)
-                                            .child(entry.summary),
+                                        div().text_xs().text_color(text_muted).child(entry.summary),
                                     ),
                             )
                             .child(
@@ -934,9 +922,7 @@ impl SettingsWindow {
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(accent)
                                 .cursor_pointer()
-                                .hover(move |style| {
-                                    style.bg(hover_bg).text_color(text_primary)
-                                })
+                                .hover(move |style| style.bg(hover_bg).text_color(text_primary))
                                 .child(format!("Open {label}"))
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     if let Some(section) = destination {

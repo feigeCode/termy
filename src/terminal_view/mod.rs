@@ -533,6 +533,7 @@ struct TerminalPaneCellColorTransformKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TerminalPaneRenderCacheKey {
     is_active_pane: bool,
+    alternate_screen_mode: bool,
     selection_range: Option<(SelectionPos, SelectionPos)>,
     search_results_revision: Option<u64>,
     search_position: Option<(usize, usize)>,
@@ -2791,6 +2792,7 @@ mod tests {
             display_offset: 4,
             key: Some(TerminalPaneRenderCacheKey {
                 is_active_pane: true,
+                alternate_screen_mode: false,
                 selection_range: Some((
                     SelectionPos { line: 1, col: 1 },
                     SelectionPos { line: 1, col: 2 },

@@ -179,12 +179,9 @@ impl AppConfig {
                     }
                 }
                 RootSettingId::AgentSidebarWidth => {
-                    if let Some(parsed) = parse_positive_f32_field(
-                        &mut diagnostics,
-                        line_number,
-                        key,
-                        value,
-                    ) {
+                    if let Some(parsed) =
+                        parse_positive_f32_field(&mut diagnostics, line_number, key, value)
+                    {
                         config.agent_sidebar_width = parsed;
                     }
                 }

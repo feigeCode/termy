@@ -747,6 +747,14 @@ impl Terminal {
         self.term.lock().resize(new_size);
     }
 
+    /// Re-send the current size to the PTY without touching the term grid.
+    /// This delivers SIGWINCH to the child process, nudging TUI applications
+    /// (e.g. lazygit) to refresh their display after an alternate-screen
+    /// transition even though the actual dimensions have not changed.
+    pub fn nudge_resize(&self) {
+        let _ = self.pty_tx.0.send(Msg::Resize(self.size.into()));
+    }
+
     /// Get the current terminal size
     pub fn size(&self) -> TerminalSize {
         self.size

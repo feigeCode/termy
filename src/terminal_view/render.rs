@@ -1511,9 +1511,15 @@ impl TerminalView {
         {
             let state = self.terminal_context_menu?;
             let overlay_style = self.overlay_style();
-            let menu_width = 170.0;
+            let menu_width = 220.0;
             let row_height = 30.0;
-            let menu_height = row_height * 5.0 + 8.0;
+            let row_count =
+                5.0 + if state.buffer_position.is_some() {
+                    1.0
+                } else {
+                    0.0
+                } + 1.0;
+            let menu_height = row_height * row_count + 8.0;
             let (menu_x, menu_y) = self.clamped_terminal_context_menu_origin(
                 state.anchor_position,
                 menu_width,
@@ -1524,6 +1530,18 @@ impl TerminalView {
             let text_active = overlay_style.panel_foreground(0.95);
             let text_disabled = overlay_style.panel_foreground(0.42);
             let hover_bg = overlay_style.panel_cursor(0.22);
+            let buffer_position_item = |label: String| {
+                div()
+                    .id("terminal-context-menu-buffer-position")
+                    .h(px(row_height))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.0))
+                    .text_color(text_disabled)
+                    .child(label)
+                    .into_any_element()
+            };
 
             let command_item =
                 |id: &'static str, label: &'static str, enabled: bool, action: CommandAction| {
@@ -1620,6 +1638,30 @@ impl TerminalView {
                     .child("Search Google")
                     .into_any_element()
             };
+            let copy_buffer_position_item = |enabled: bool| {
+                let text_color = if enabled { text_active } else { text_disabled };
+                div()
+                    .id("terminal-context-menu-copy-buffer-position")
+                    .h(px(row_height))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(13.0))
+                    .text_color(text_color)
+                    .when(enabled, |s| s.cursor_pointer())
+                    .when(enabled, |s| s.hover(|style| style.bg(hover_bg)))
+                    .when(enabled, |s| {
+                        s.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _event: &MouseDownEvent, _window, cx| {
+                                view.execute_terminal_context_menu_copy_buffer_position(cx);
+                                cx.stop_propagation();
+                            }),
+                        )
+                    })
+                    .child("Copy Buffer Position")
+                    .into_any_element()
+            };
 
             Some(
                 div()
@@ -1679,6 +1721,12 @@ impl TerminalView {
                                     cx.stop_propagation();
                                 }),
                             )
+                            .when_some(state.buffer_position, |panel, position| {
+                                panel.child(buffer_position_item(
+                                    TerminalView::format_terminal_buffer_position(position),
+                                ))
+                            })
+                            .child(copy_buffer_position_item(state.buffer_position.is_some()))
                             .child(command_item(
                                 "terminal-context-menu-copy",
                                 "Copy",
@@ -2658,6 +2706,7 @@ impl Render for TerminalView {
                                     .h_full()
                                     .overflow_hidden()
                                     .bg(terminal_surface_bg_hsla)
+                                    .cursor_text()
                                     .on_scroll_wheel(
                                         cx.listener(Self::handle_terminal_scroll_wheel),
                                     )

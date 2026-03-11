@@ -217,6 +217,14 @@ struct AgentSidebarResizeDragState;
 #[derive(Clone, Copy, Debug)]
 struct VerticalTabStripResizeDragState;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingCursorMoveClick {
+    pane_id: String,
+    selection_start: SelectionPos,
+    start_cell: CellPos,
+    target: CellPos,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct TerminalScrollbarHit {
     local_y: f32,
@@ -224,9 +232,10 @@ struct TerminalScrollbarHit {
     thumb_top: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct TerminalContextMenuState {
     anchor_position: gpui::Point<Pixels>,
+    buffer_position: Option<SelectionPos>,
     can_copy: bool,
     can_paste: bool,
     can_ask_ai: bool,
@@ -1139,6 +1148,8 @@ pub struct TerminalView {
     selection_head: Option<SelectionPos>,
     selection_dragging: bool,
     selection_moved: bool,
+    pending_cursor_move_click: Option<PendingCursorMoveClick>,
+    last_terminal_context_menu_buffer_position: Option<SelectionPos>,
     terminal_context_menu: Option<TerminalContextMenuState>,
     hovered_link: Option<HoveredLink>,
     hovered_toast: Option<u64>,
@@ -2310,6 +2321,8 @@ impl TerminalView {
             selection_head: None,
             selection_dragging: false,
             selection_moved: false,
+            pending_cursor_move_click: None,
+            last_terminal_context_menu_buffer_position: None,
             terminal_context_menu: None,
             hovered_link: None,
             hovered_toast: None,

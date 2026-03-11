@@ -1,1 +1,0 @@
-/Users/lassevestergaard/Documents/dev/termy/examples/plugin-full/target/debug/plugin-full: /Users/lassevestergaard/Documents/dev/termy/crates/plugin_core/src/lib.rs /Users/lassevestergaard/Documents/dev/termy/crates/plugin_sdk/src/lib.rs /Users/lassevestergaard/Documents/dev/termy/examples/plugin-full/src/main.rs

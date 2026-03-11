@@ -13,13 +13,16 @@ import { Route as AddRouteImport } from "./routes/add"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ThemesIndexRouteImport } from "./routes/themes/index"
 import { Route as ReleasesIndexRouteImport } from "./routes/releases/index"
+import { Route as PluginsIndexRouteImport } from "./routes/plugins/index"
 import { Route as DocsIndexRouteImport } from "./routes/docs/index"
 import { Route as ContributorsIndexRouteImport } from "./routes/contributors/index"
 import { Route as ThemesStudioRouteImport } from "./routes/themes/studio"
 import { Route as ThemesAddRouteImport } from "./routes/themes/add"
 import { Route as ReleasesTagRouteImport } from "./routes/releases/$tag"
+import { Route as PluginsAddRouteImport } from "./routes/plugins/add"
 import { Route as DocsSplatRouteImport } from "./routes/docs/$"
 import { Route as ThemesSlugIndexRouteImport } from "./routes/themes/$slug/index"
+import { Route as PluginsSlugIndexRouteImport } from "./routes/plugins/$slug/index"
 import { Route as ThemesSlugUpdateRouteImport } from "./routes/themes/$slug/update"
 
 const AddRoute = AddRouteImport.update({
@@ -40,6 +43,11 @@ const ThemesIndexRoute = ThemesIndexRouteImport.update({
 const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
   id: "/releases/",
   path: "/releases/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PluginsIndexRoute = PluginsIndexRouteImport.update({
+  id: "/plugins/",
+  path: "/plugins/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsIndexRoute = DocsIndexRouteImport.update({
@@ -67,6 +75,11 @@ const ReleasesTagRoute = ReleasesTagRouteImport.update({
   path: "/releases/$tag",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PluginsAddRoute = PluginsAddRouteImport.update({
+  id: "/plugins/add",
+  path: "/plugins/add",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DocsSplatRoute = DocsSplatRouteImport.update({
   id: "/docs/$",
   path: "/docs/$",
@@ -75,6 +88,11 @@ const DocsSplatRoute = DocsSplatRouteImport.update({
 const ThemesSlugIndexRoute = ThemesSlugIndexRouteImport.update({
   id: "/themes/$slug/",
   path: "/themes/$slug/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PluginsSlugIndexRoute = PluginsSlugIndexRouteImport.update({
+  id: "/plugins/$slug/",
+  path: "/plugins/$slug/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ThemesSlugUpdateRoute = ThemesSlugUpdateRouteImport.update({
@@ -87,28 +105,34 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/add": typeof AddRoute
   "/docs/$": typeof DocsSplatRoute
+  "/plugins/add": typeof PluginsAddRoute
   "/releases/$tag": typeof ReleasesTagRoute
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
   "/contributors/": typeof ContributorsIndexRoute
   "/docs/": typeof DocsIndexRoute
+  "/plugins/": typeof PluginsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
   "/themes/": typeof ThemesIndexRoute
   "/themes/$slug/update": typeof ThemesSlugUpdateRoute
+  "/plugins/$slug/": typeof PluginsSlugIndexRoute
   "/themes/$slug/": typeof ThemesSlugIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/add": typeof AddRoute
   "/docs/$": typeof DocsSplatRoute
+  "/plugins/add": typeof PluginsAddRoute
   "/releases/$tag": typeof ReleasesTagRoute
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
   "/contributors": typeof ContributorsIndexRoute
   "/docs": typeof DocsIndexRoute
+  "/plugins": typeof PluginsIndexRoute
   "/releases": typeof ReleasesIndexRoute
   "/themes": typeof ThemesIndexRoute
   "/themes/$slug/update": typeof ThemesSlugUpdateRoute
+  "/plugins/$slug": typeof PluginsSlugIndexRoute
   "/themes/$slug": typeof ThemesSlugIndexRoute
 }
 export interface FileRoutesById {
@@ -116,14 +140,17 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/add": typeof AddRoute
   "/docs/$": typeof DocsSplatRoute
+  "/plugins/add": typeof PluginsAddRoute
   "/releases/$tag": typeof ReleasesTagRoute
   "/themes/add": typeof ThemesAddRoute
   "/themes/studio": typeof ThemesStudioRoute
   "/contributors/": typeof ContributorsIndexRoute
   "/docs/": typeof DocsIndexRoute
+  "/plugins/": typeof PluginsIndexRoute
   "/releases/": typeof ReleasesIndexRoute
   "/themes/": typeof ThemesIndexRoute
   "/themes/$slug/update": typeof ThemesSlugUpdateRoute
+  "/plugins/$slug/": typeof PluginsSlugIndexRoute
   "/themes/$slug/": typeof ThemesSlugIndexRoute
 }
 export interface FileRouteTypes {
@@ -132,42 +159,51 @@ export interface FileRouteTypes {
     | "/"
     | "/add"
     | "/docs/$"
+    | "/plugins/add"
     | "/releases/$tag"
     | "/themes/add"
     | "/themes/studio"
     | "/contributors/"
     | "/docs/"
+    | "/plugins/"
     | "/releases/"
     | "/themes/"
     | "/themes/$slug/update"
+    | "/plugins/$slug/"
     | "/themes/$slug/"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
     | "/add"
     | "/docs/$"
+    | "/plugins/add"
     | "/releases/$tag"
     | "/themes/add"
     | "/themes/studio"
     | "/contributors"
     | "/docs"
+    | "/plugins"
     | "/releases"
     | "/themes"
     | "/themes/$slug/update"
+    | "/plugins/$slug"
     | "/themes/$slug"
   id:
     | "__root__"
     | "/"
     | "/add"
     | "/docs/$"
+    | "/plugins/add"
     | "/releases/$tag"
     | "/themes/add"
     | "/themes/studio"
     | "/contributors/"
     | "/docs/"
+    | "/plugins/"
     | "/releases/"
     | "/themes/"
     | "/themes/$slug/update"
+    | "/plugins/$slug/"
     | "/themes/$slug/"
   fileRoutesById: FileRoutesById
 }
@@ -175,14 +211,17 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AddRoute: typeof AddRoute
   DocsSplatRoute: typeof DocsSplatRoute
+  PluginsAddRoute: typeof PluginsAddRoute
   ReleasesTagRoute: typeof ReleasesTagRoute
   ThemesAddRoute: typeof ThemesAddRoute
   ThemesStudioRoute: typeof ThemesStudioRoute
   ContributorsIndexRoute: typeof ContributorsIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
+  PluginsIndexRoute: typeof PluginsIndexRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   ThemesIndexRoute: typeof ThemesIndexRoute
   ThemesSlugUpdateRoute: typeof ThemesSlugUpdateRoute
+  PluginsSlugIndexRoute: typeof PluginsSlugIndexRoute
   ThemesSlugIndexRoute: typeof ThemesSlugIndexRoute
 }
 
@@ -214,6 +253,13 @@ declare module "@tanstack/react-router" {
       path: "/releases"
       fullPath: "/releases/"
       preLoaderRoute: typeof ReleasesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/plugins/": {
+      id: "/plugins/"
+      path: "/plugins"
+      fullPath: "/plugins/"
+      preLoaderRoute: typeof PluginsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/docs/": {
@@ -251,6 +297,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ReleasesTagRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/plugins/add": {
+      id: "/plugins/add"
+      path: "/plugins/add"
+      fullPath: "/plugins/add"
+      preLoaderRoute: typeof PluginsAddRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/docs/$": {
       id: "/docs/$"
       path: "/docs/$"
@@ -263,6 +316,13 @@ declare module "@tanstack/react-router" {
       path: "/themes/$slug"
       fullPath: "/themes/$slug/"
       preLoaderRoute: typeof ThemesSlugIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/plugins/$slug/": {
+      id: "/plugins/$slug/"
+      path: "/plugins/$slug"
+      fullPath: "/plugins/$slug/"
+      preLoaderRoute: typeof PluginsSlugIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/themes/$slug/update": {
@@ -279,14 +339,17 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AddRoute: AddRoute,
   DocsSplatRoute: DocsSplatRoute,
+  PluginsAddRoute: PluginsAddRoute,
   ReleasesTagRoute: ReleasesTagRoute,
   ThemesAddRoute: ThemesAddRoute,
   ThemesStudioRoute: ThemesStudioRoute,
   ContributorsIndexRoute: ContributorsIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
+  PluginsIndexRoute: PluginsIndexRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
   ThemesIndexRoute: ThemesIndexRoute,
   ThemesSlugUpdateRoute: ThemesSlugUpdateRoute,
+  PluginsSlugIndexRoute: PluginsSlugIndexRoute,
   ThemesSlugIndexRoute: ThemesSlugIndexRoute,
 }
 export const routeTree = rootRouteImport

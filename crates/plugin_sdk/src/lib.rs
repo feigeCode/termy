@@ -1,9 +1,9 @@
 use std::io::{self, BufRead, BufReader, Stdin, Stdout, Write};
 
 use termy_plugin_core::{
-    HostCommandInvocation, HostHello, HostRpcMessage, PLUGIN_PROTOCOL_VERSION, PluginCapability,
-    PluginHello, PluginLogLevel, PluginLogMessage, PluginRpcMessage, PluginToastLevel,
-    PluginToastMessage,
+    HostCommandInvocation, HostEvent, HostHello, HostRpcMessage, PLUGIN_PROTOCOL_VERSION,
+    PluginCapability, PluginHello, PluginLogLevel, PluginLogMessage, PluginPanelAction,
+    PluginPanelUpdate, PluginRpcMessage, PluginToastLevel, PluginToastMessage,
 };
 use thiserror::Error;
 
@@ -139,11 +139,39 @@ where
         }))
     }
 
+    pub fn send_panel(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Result<(), PluginSessionError> {
+        self.send_panel_with_actions(title, body, Vec::new())
+    }
+
+    pub fn send_panel_with_actions(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        actions: Vec<PluginPanelAction>,
+    ) -> Result<(), PluginSessionError> {
+        self.send(PluginRpcMessage::Panel(PluginPanelUpdate {
+            title: title.into(),
+            body: body.into(),
+            actions,
+        }))
+    }
+
     pub fn command_id(message: &HostRpcMessage) -> Option<&str> {
         match message {
             HostRpcMessage::InvokeCommand(HostCommandInvocation { command_id }) => {
                 Some(command_id.as_str())
             }
+            _ => None,
+        }
+    }
+
+    pub fn event(message: &HostRpcMessage) -> Option<&HostEvent> {
+        match message {
+            HostRpcMessage::Event(event) => Some(event),
             _ => None,
         }
     }
@@ -284,6 +312,7 @@ mod tests {
                     HostRpcMessage::Shutdown => "shutdown",
                     HostRpcMessage::Hello(_) => "hello",
                     HostRpcMessage::InvokeCommand(_) => "invoke",
+                    HostRpcMessage::Event(_) => "event",
                 });
                 if matches!(message, HostRpcMessage::Ping) {
                     session.send_pong()?;
@@ -323,6 +352,62 @@ mod tests {
     }
 
     #[test]
+    fn sends_panel_message() {
+        let input = Cursor::new(
+            b"{\"type\":\"hello\",\"payload\":{\"protocol_version\":1,\"host_name\":\"termy\",\"host_version\":\"0.1.44\",\"plugin_id\":\"example.hello\"}}\n"
+                .to_vec(),
+        );
+        let mut output = Vec::new();
+        let mut session = PluginSession::initialize(
+            input,
+            &mut output,
+            PluginMetadata::new("example.hello", "Hello Plugin", "0.1.0"),
+        )
+        .expect("session should initialize");
+
+        session
+            .send_panel("Status", "Everything is healthy")
+            .expect("panel should send");
+
+        let sent = String::from_utf8(output).expect("output utf8");
+        assert!(sent.contains("\"type\":\"panel\""));
+        assert!(sent.contains("\"title\":\"Status\""));
+        assert!(sent.contains("Everything is healthy"));
+    }
+
+    #[test]
+    fn sends_panel_actions() {
+        let input = Cursor::new(
+            b"{\"type\":\"hello\",\"payload\":{\"protocol_version\":1,\"host_name\":\"termy\",\"host_version\":\"0.1.44\",\"plugin_id\":\"example.hello\"}}\n"
+                .to_vec(),
+        );
+        let mut output = Vec::new();
+        let mut session = PluginSession::initialize(
+            input,
+            &mut output,
+            PluginMetadata::new("example.hello", "Hello Plugin", "0.1.0"),
+        )
+        .expect("session should initialize");
+
+        session
+            .send_panel_with_actions(
+                "Status",
+                "Everything is healthy",
+                vec![PluginPanelAction {
+                    command_id: "example.hello.refresh".to_string(),
+                    label: "Refresh".to_string(),
+                    enabled: true,
+                }],
+            )
+            .expect("panel should send");
+
+        let sent = String::from_utf8(output).expect("output utf8");
+        assert!(sent.contains("\"actions\""));
+        assert!(sent.contains("\"command_id\":\"example.hello.refresh\""));
+        assert!(sent.contains("\"label\":\"Refresh\""));
+    }
+
+    #[test]
     fn exposes_host_hello() {
         let input = Cursor::new(
             b"{\"type\":\"hello\",\"payload\":{\"protocol_version\":1,\"host_name\":\"termy\",\"host_version\":\"0.1.44\",\"plugin_id\":\"example.hello\"}}\n"
@@ -344,6 +429,20 @@ mod tests {
                 host_version: "0.1.44".to_string(),
                 plugin_id: "example.hello".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn extracts_host_event() {
+        let event = HostRpcMessage::Event(HostEvent::ThemeChanged {
+            theme_id: "nord".to_string(),
+        });
+
+        assert_eq!(
+            PluginSession::<Cursor<Vec<u8>>, Vec<u8>>::event(&event),
+            Some(&HostEvent::ThemeChanged {
+                theme_id: "nord".to_string(),
+            })
         );
     }
 }

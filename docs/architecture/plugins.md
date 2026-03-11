@@ -65,7 +65,9 @@ Shutdown:
 - host hello validation
 - plugin hello emission
 - typed receive/send helpers
+- host event extraction helper
 - toast helper
+- panel update helper
 - a `run_until_shutdown` loop
 
 Rust example:
@@ -92,6 +94,89 @@ Plugins can request host toasts by declaring `"notifications"` in their manifest
 session.send_toast(PluginToastLevel::Info, "hello from plugin", Some(2500))?;
 ```
 
+Plugins can publish a lightweight settings panel by declaring the `ui_panels` permission, advertising the `ui_panel` capability, and calling:
+
+```rust
+session.send_panel("Plugin Status", "Everything is healthy")?;
+```
+
+Panels can also expose action buttons that invoke contributed plugin commands:
+
+```rust
+use termy_plugin_core::PluginPanelAction;
+
+session.send_panel_with_actions(
+    "Plugin Status",
+    "Everything is healthy",
+    vec![PluginPanelAction {
+        command_id: "example.status.refresh".to_string(),
+        label: "Refresh".to_string(),
+        enabled: true,
+    }],
+)?;
+```
+
+## Event subscriptions
+
+Plugins can subscribe to selected host events in the manifest:
+
+```json
+{
+  "schema_version": 1,
+  "id": "example.events",
+  "name": "Events Plugin",
+  "version": "0.1.0",
+  "runtime": "executable",
+  "entrypoint": "./plugin.sh",
+  "permissions": ["host_events"],
+  "subscribes": {
+    "events": ["app_started", "theme_changed", "active_tab_changed"]
+  }
+}
+```
+
+Subscribed events currently available:
+
+- `app_started`
+- `theme_changed`
+- `active_tab_changed`
+
+Plugins must declare the `host_events` permission and advertise the `event_subscriber` capability during handshake if they subscribe to host events.
+
+Rust example:
+
+```rust
+use termy_plugin_core::{HostEvent, HostRpcMessage, PluginCapability};
+use termy_plugin_sdk::{PluginMetadata, PluginSession};
+
+let metadata = PluginMetadata::new("example.events", "Events Plugin", "0.1.0")
+    .with_capabilities(vec![PluginCapability::EventSubscriber]);
+let mut session = PluginSession::stdio(metadata)?;
+
+session.run_until_shutdown(|message, session| {
+    if let Some(event) = PluginSession::event(message) {
+        match event {
+            HostEvent::AppStarted { host_version } => {
+                session.send_log(termy_plugin_core::PluginLogLevel::Info, format!("host {host_version}"))?;
+            }
+            HostEvent::ThemeChanged { theme_id } => {
+                session.send_log(termy_plugin_core::PluginLogLevel::Info, format!("theme={theme_id}"))?;
+            }
+            HostEvent::ActiveTabChanged { tab_index, tab_title } => {
+                session.send_log(
+                    termy_plugin_core::PluginLogLevel::Info,
+                    format!("active tab #{tab_index}: {tab_title}"),
+                )?;
+            }
+        }
+    }
+    if matches!(message, HostRpcMessage::Ping) {
+        session.send_pong()?;
+    }
+    Ok(())
+})?;
+```
+
 ## First-phase capabilities
 
 - plugin discovery
@@ -99,6 +184,8 @@ session.send_toast(PluginToastLevel::Info, "hello from plugin", Some(2500))?;
 - stdio process launch
 - protocol version check
 - command dispatch into plugins
+- host event subscriptions
+- settings UI panels
 - runtime plugin log consumption
 - startup failure isolation
 - plugin shutdown on host drop
@@ -113,6 +200,14 @@ Use the CLI to inspect discovered manifests without starting the UI:
 cargo run -p termy_cli -- -list-plugins
 ```
 
+Create a starter plugin scaffold that already demonstrates command handling, event subscriptions, toasts, and settings panel updates:
+
+```bash
+cargo run -p termy_cli -- -plugin-init
+```
+
+A dedicated Rust reference plugin also lives in `crates/plugin_example_status/`.
+
 ## Settings integration
 
 The Settings `Plugins` tab currently supports:
@@ -124,10 +219,10 @@ The Settings `Plugins` tab currently supports:
 - toggling `autostart` in the manifest
 - live `Start` / `Stop` for currently discovered plugins
 - viewing recent runtime log lines captured by the host
+- rendering the latest plugin-provided panel content for running `ui_panel` plugins
 
 ## Not implemented yet
 
-- UI panels
-- event subscriptions
 - broader permission enforcement beyond current toast and capability gating
-- registry/marketplace
+- native in-app registry install flows
+- richer registry/marketplace moderation and discovery flows

@@ -35,6 +35,19 @@ pub fn run() {
                         .join(", ");
                     println!("  permissions: {permissions}");
                 }
+                if plugin.manifest.subscribes.events.is_empty() {
+                    println!("  subscriptions: none");
+                } else {
+                    let subscriptions = plugin
+                        .manifest
+                        .subscribes
+                        .events
+                        .iter()
+                        .map(|subscription| format!("{subscription:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("  subscriptions: {subscriptions}");
+                }
                 if plugin.manifest.contributes.commands.is_empty() {
                     println!("  commands: none");
                 } else {

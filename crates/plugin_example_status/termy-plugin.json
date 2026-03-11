@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "example.status",
+  "name": "Status Example",
+  "version": "0.1.0",
+  "description": "Reference plugin showing commands, host events, toasts, and settings panels",
+  "runtime": "executable",
+  "entrypoint": "/Users/lassevestergaard/Documents/dev/termy/target/release/plugin_example_status",
+  "autostart": true,
+  "permissions": ["notifications", "ui_panels", "host_events"],
+  "subscribes": {
+    "events": ["app_started", "theme_changed", "active_tab_changed"]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "example.status.refresh",
+        "title": "Refresh Status Example",
+        "description": "Refreshes the example plugin panel"
+      }
+    ]
+  }
+}

@@ -118,7 +118,10 @@ fn manifest_template(
   "runtime": "executable",
   "entrypoint": "./{entrypoint_name}",
   "autostart": false,
-  "permissions": ["notifications"],
+  "permissions": ["notifications", "ui_panels", "host_events"],
+  "subscribes": {{
+    "events": ["app_started", "theme_changed", "active_tab_changed"]
+  }},
   "contributes": {{
     "commands": [
       {{
@@ -152,7 +155,8 @@ setlocal enabledelayedexpansion
 for /f "usebackq delims=" %%L in (`more`) do (
   set "line=%%L"
   echo(!line! | findstr /c:"""type"":""hello""" >nul && (
-    echo {{"type":"hello","payload":{{"protocol_version":1,"plugin_id":"{plugin_id}","name":"{plugin_name}","version":"{DEFAULT_PLUGIN_VERSION}","capabilities":["command_provider"]}}}}
+    echo {{"type":"hello","payload":{{"protocol_version":1,"plugin_id":"{plugin_id}","name":"{plugin_name}","version":"{DEFAULT_PLUGIN_VERSION}","capabilities":["command_provider","event_subscriber","ui_panel"]}}}}
+    echo {{"type":"panel","payload":{{"title":"{plugin_name}","body":"Ready. Invoke {command_id} or change the active tab/theme."}}}}
   )
   echo(!line! | findstr /c:"""type"":""ping""" >nul && (
     echo {{"type":"pong"}}
@@ -160,6 +164,19 @@ for /f "usebackq delims=" %%L in (`more`) do (
   echo(!line! | findstr /c:"""type"":""invoke_command""" >nul && echo(!line! | findstr /c:"""command_id"":""{command_id}""" >nul && (
     echo {{"type":"log","payload":{{"level":"info","message":"{command_id} invoked"}}}}
     echo {{"type":"toast","payload":{{"level":"success","message":"Hello from {plugin_id}","duration_ms":2000}}}}
+    echo {{"type":"panel","payload":{{"title":"{plugin_name}","body":"Command {command_id} just ran successfully."}}}}
+  )
+  echo(!line! | findstr /c:"""type"":""event""" >nul && echo(!line! | findstr /c:"""event"":""app_started""" >nul && (
+    echo {{"type":"log","payload":{{"level":"info","message":"observed app_started"}}}}
+    echo {{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed host startup."}}}}
+  )
+  echo(!line! | findstr /c:"""type"":""event""" >nul && echo(!line! | findstr /c:"""event"":""theme_changed""" >nul && (
+    echo {{"type":"log","payload":{{"level":"info","message":"observed theme_changed"}}}}
+    echo {{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed a theme change event."}}}}
+  )
+  echo(!line! | findstr /c:"""type"":""event""" >nul && echo(!line! | findstr /c:"""event"":""active_tab_changed""" >nul && (
+    echo {{"type":"log","payload":{{"level":"info","message":"observed active_tab_changed"}}}}
+    echo {{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed an active tab change event."}}}}
   )
   echo(!line! | findstr /c:"""type"":""shutdown""" >nul && exit /b 0
 )
@@ -176,7 +193,8 @@ set -eu
 while IFS= read -r line; do
   case "$line" in
     *'"type":"hello"'*)
-      printf '%s\n' '{{"type":"hello","payload":{{"protocol_version":1,"plugin_id":"{plugin_id}","name":"{plugin_name}","version":"{DEFAULT_PLUGIN_VERSION}","capabilities":["command_provider"]}}}}'
+      printf '%s\n' '{{"type":"hello","payload":{{"protocol_version":1,"plugin_id":"{plugin_id}","name":"{plugin_name}","version":"{DEFAULT_PLUGIN_VERSION}","capabilities":["command_provider","event_subscriber","ui_panel"]}}}}'
+      printf '%s\n' '{{"type":"panel","payload":{{"title":"{plugin_name}","body":"Ready. Invoke {command_id} or change the active tab/theme."}}}}'
       ;;
     *'"type":"ping"'*)
       printf '%s\n' '{{"type":"pong"}}'
@@ -186,8 +204,21 @@ while IFS= read -r line; do
         *'"command_id":"{command_id}"'*)
           printf '%s\n' '{{"type":"log","payload":{{"level":"info","message":"{command_id} invoked"}}}}'
           printf '%s\n' '{{"type":"toast","payload":{{"level":"success","message":"Hello from {plugin_id}","duration_ms":2000}}}}'
+          printf '%s\n' '{{"type":"panel","payload":{{"title":"{plugin_name}","body":"Command {command_id} just ran successfully."}}}}'
           ;;
       esac
+      ;;
+    *'"type":"event"'*'"event":"app_started"'*)
+      printf '%s\n' '{{"type":"log","payload":{{"level":"info","message":"observed app_started"}}}}'
+      printf '%s\n' '{{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed host startup."}}}}'
+      ;;
+    *'"type":"event"'*'"event":"theme_changed"'*)
+      printf '%s\n' '{{"type":"log","payload":{{"level":"info","message":"observed theme_changed"}}}}'
+      printf '%s\n' '{{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed a theme change event."}}}}'
+      ;;
+    *'"type":"event"'*'"event":"active_tab_changed"'*)
+      printf '%s\n' '{{"type":"log","payload":{{"level":"info","message":"observed active_tab_changed"}}}}'
+      printf '%s\n' '{{"type":"panel","payload":{{"title":"{plugin_name}","body":"Observed an active tab change event."}}}}'
       ;;
     *'"type":"shutdown"'*)
       exit 0
@@ -241,6 +272,11 @@ mod tests {
         assert!(manifest.contains(r#""id": "example.hello""#));
         assert!(manifest.contains(r#""entrypoint": "./"#));
         assert!(entrypoint.contains("command_provider"));
+        assert!(manifest.contains(r#""ui_panels""#));
+        assert!(manifest.contains(r#""host_events""#));
+        assert!(manifest.contains(r#""subscribes""#));
+        assert!(entrypoint.contains("event_subscriber"));
+        assert!(entrypoint.contains("\"type\":\"panel\""));
 
         fs::remove_dir_all(root).ok();
     }

@@ -1,0 +1,8 @@
+[package]
+name = "plugin_example_status"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+termy_plugin_core = { path = "../plugin_core" }
+termy_plugin_sdk = { path = "../plugin_sdk" }

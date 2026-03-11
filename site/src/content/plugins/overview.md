@@ -30,6 +30,18 @@ Open `Settings -> Plugins` and use:
 - `Open Folder` to open the plugin root
 - Per-plugin controls for `Start/Stop`, `Enable/Disable Autostart`, `Open Folder`, `View Logs`, and `Remove`
 
+## Registry foundation
+
+- Public registry browse page: `/plugins`
+- Publishing dashboard: `/plugins/add`
+- Current scope: public browsing plus authenticated metadata/version publishing
+- Planned next step: native install flows backed by the same API
+
+## Example plugin
+
+- Rust example crate: `crates/plugin_example_status`
+- Starter scaffold: `cargo run -p termy_cli -- -plugin-init`
+
 ## Manifest format
 
 The schema is defined in `crates/plugin_core` (`PluginManifest`).
@@ -45,7 +57,10 @@ The schema is defined in `crates/plugin_core` (`PluginManifest`).
   "runtime": "executable",
   "entrypoint": "./plugin",
   "autostart": true,
-  "permissions": ["network"],
+  "permissions": ["network", "host_events"],
+  "subscribes": {
+    "events": ["app_started", "theme_changed"]
+  },
   "contributes": {
     "commands": [
       { "id": "hello.run", "title": "Run Hello" }
@@ -61,12 +76,14 @@ The schema is defined in `crates/plugin_core` (`PluginManifest`).
 - Host sends:
   - `hello`
   - `invoke_command`
+  - `event`
   - `ping`
   - `shutdown`
 - Plugin sends:
   - `hello`
   - `log`
   - `toast`
+  - `panel`
   - `pong`
 
 ## Permissions
@@ -75,6 +92,7 @@ Available permissions from `plugin_core`:
 
 - `filesystem_read`
 - `filesystem_write`
+- `host_events`
 - `network`
 - `shell`
 - `clipboard`

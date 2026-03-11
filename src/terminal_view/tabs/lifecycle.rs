@@ -293,6 +293,7 @@ impl TerminalView {
                 self.reset_tab_interaction_state();
                 self.scroll_active_tab_into_view();
                 self.schedule_persist_native_workspace();
+                self.emit_active_tab_changed_plugin_event();
                 cx.notify();
             }
         }
@@ -357,6 +358,7 @@ impl TerminalView {
         self.clear_selection();
         self.scroll_active_tab_into_view();
         self.schedule_persist_native_workspace();
+        self.emit_active_tab_changed_plugin_event();
         cx.notify();
     }
 
@@ -418,6 +420,8 @@ impl TerminalView {
                 cx.notify();
             }
         }
+
+        self.emit_active_tab_changed_plugin_event();
     }
 
     pub(crate) fn commit_rename_tab(&mut self, cx: &mut Context<Self>) {

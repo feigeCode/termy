@@ -39,7 +39,10 @@ PluginSession::send(&mut self, message: PluginRpcMessage) -> Result<(), PluginSe
 PluginSession::send_log(&mut self, level: PluginLogLevel, message) -> Result<(), PluginSessionError>
 PluginSession::send_pong(&mut self) -> Result<(), PluginSessionError>
 PluginSession::send_toast(&mut self, level: PluginToastLevel, message, duration_ms) -> Result<(), PluginSessionError>
+PluginSession::send_panel(&mut self, title, body) -> Result<(), PluginSessionError>
+PluginSession::send_panel_with_actions(&mut self, title, body, actions) -> Result<(), PluginSessionError>
 PluginSession::command_id(message: &HostRpcMessage) -> Option<&str>
+PluginSession::event(message: &HostRpcMessage) -> Option<&HostEvent>
 PluginSession::run_until_shutdown(&mut self, on_message) -> Result<(), PluginSessionError>
 ```
 
@@ -78,11 +81,14 @@ Then SDK sends plugin `hello` automatically.
 - `send(PluginRpcMessage)`
 - `send_log(level, message)`
 - `send_toast(level, message, duration_ms)`
+- `send_panel(title, body)`
+- `send_panel_with_actions(title, body, actions)`
 - `send_pong()`
 
 Convenience:
 
 - `PluginSession::command_id(&HostRpcMessage)`
+- `PluginSession::event(&HostRpcMessage)`
 - `run_until_shutdown(handler)`
 
 ## Typical handler pattern

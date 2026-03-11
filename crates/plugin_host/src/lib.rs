@@ -4,17 +4,18 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use termy_config_core::config_path;
 use termy_plugin_core::{
-    DiscoveredPlugin, HostCommandInvocation, HostHello, HostRpcMessage, PluginCapability,
-    PluginHello, PluginManifest, PluginPermission, PluginRpcMessage, PluginRuntime,
-    PluginToastLevel, PluginToastMessage, PLUGIN_MANIFEST_FILE_NAME, PLUGIN_PROTOCOL_VERSION,
+    DiscoveredPlugin, HostCommandInvocation, HostEvent, HostHello, HostRpcMessage,
+    PLUGIN_MANIFEST_FILE_NAME, PLUGIN_PROTOCOL_VERSION, PluginCapability, PluginEventSubscription,
+    PluginHello, PluginManifest, PluginPanelUpdate, PluginPermission, PluginRpcMessage,
+    PluginRuntime, PluginToastLevel, PluginToastMessage,
 };
 use thiserror::Error;
 
@@ -22,6 +23,7 @@ const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_LOG_LINES_PER_PLUGIN: usize = 40;
 
 type SharedPluginLogs = Arc<Mutex<HashMap<String, VecDeque<String>>>>;
+type SharedPluginPanels = Arc<Mutex<HashMap<String, PluginPanelUpdate>>>;
 
 #[derive(Debug)]
 pub struct PluginHost {
@@ -30,6 +32,7 @@ pub struct PluginHost {
     running_plugins: Vec<RunningPlugin>,
     failures: Vec<PluginLoadFailure>,
     logs: SharedPluginLogs,
+    panels: SharedPluginPanels,
 }
 
 impl PluginHost {
@@ -48,6 +51,7 @@ impl PluginHost {
             running_plugins: Vec::new(),
             failures: Vec::new(),
             logs: Arc::new(Mutex::new(HashMap::new())),
+            panels: Arc::new(Mutex::new(HashMap::new())),
         };
 
         for plugin in discover_plugins(&host.root_dir)? {
@@ -81,6 +85,13 @@ impl PluginHost {
             .unwrap_or_default()
     }
 
+    pub fn latest_panel(&self, plugin_id: &str) -> Option<PluginPanelUpdate> {
+        self.panels
+            .lock()
+            .ok()
+            .and_then(|panels| panels.get(plugin_id).cloned())
+    }
+
     pub fn start_plugin(&mut self, plugin_id: &str) -> Result<(), PluginLoadFailure> {
         if self
             .running_plugins
@@ -112,6 +123,7 @@ impl PluginHost {
 
         let mut plugin = self.running_plugins.remove(index);
         plugin.shutdown().map_err(|error| error.to_string())?;
+        clear_plugin_panel(&self.panels, plugin_id);
         self.record_log(plugin_id, "plugin stopped by host".to_string());
         self.failures
             .retain(|failure| failure.plugin_id() != plugin_id);
@@ -146,6 +158,32 @@ impl PluginHost {
         Ok(())
     }
 
+    pub fn emit_event(&mut self, event: HostEvent) {
+        let subscription = event.subscription();
+        let logs = self.logs.clone();
+
+        for plugin in &mut self.running_plugins {
+            if !plugin.receives_event_subscription(subscription) {
+                continue;
+            }
+
+            match plugin.send_event(&event) {
+                Ok(()) => {
+                    record_plugin_log(
+                        &logs,
+                        plugin.id(),
+                        format!("sent host event `{subscription:?}`"),
+                    );
+                }
+                Err(error) => {
+                    let entry = format!("failed to send host event `{subscription:?}`: {error}");
+                    record_plugin_log(&logs, plugin.id(), entry.clone());
+                    log::warn!("Plugin {} {}", plugin.id(), entry);
+                }
+            }
+        }
+    }
+
     fn start_plugin_from_discovered(
         &mut self,
         discovered: DiscoveredPlugin,
@@ -153,12 +191,14 @@ impl PluginHost {
         let plugin_id = discovered.manifest.id.clone();
         self.failures
             .retain(|failure| failure.plugin_id() != plugin_id);
+        clear_plugin_panel(&self.panels, &plugin_id);
 
         match RunningPlugin::start(
             discovered,
             &self.host_version,
             DEFAULT_HANDSHAKE_TIMEOUT,
             self.logs.clone(),
+            self.panels.clone(),
         ) {
             Ok(plugin) => {
                 self.record_log(&plugin_id, "plugin started".to_string());
@@ -205,6 +245,7 @@ impl RunningPlugin {
         host_version: &str,
         handshake_timeout: Duration,
         logs: SharedPluginLogs,
+        panels: SharedPluginPanels,
     ) -> Result<Self, PluginLoadFailure> {
         let entrypoint = discovered.resolved_entrypoint();
         if !entrypoint.exists() {
@@ -259,6 +300,7 @@ impl RunningPlugin {
             plugin_id.clone(),
             permissions,
             logs,
+            panels,
             handshake_timeout,
         )
         .map_err(|error| {
@@ -298,6 +340,35 @@ impl RunningPlugin {
             return Err(PluginLoadFailure::new(
                 discovered.manifest.id.clone(),
                 anyhow!("plugin contributes commands but does not advertise `command_provider`"),
+            ));
+        }
+
+        if !discovered.manifest.subscribes.events.is_empty()
+            && !plugin_hello
+                .capabilities
+                .contains(&PluginCapability::EventSubscriber)
+        {
+            let _ = child.kill();
+            return Err(PluginLoadFailure::new(
+                discovered.manifest.id.clone(),
+                anyhow!(
+                    "plugin subscribes to host events but does not advertise `event_subscriber`"
+                ),
+            ));
+        }
+
+        if !discovered.manifest.subscribes.events.is_empty()
+            && !discovered
+                .manifest
+                .permissions
+                .contains(&PluginPermission::HostEvents)
+        {
+            let _ = child.kill();
+            return Err(PluginLoadFailure::new(
+                discovered.manifest.id.clone(),
+                anyhow!(
+                    "plugin subscribes to host events but manifest is missing `host_events` permission"
+                ),
             ));
         }
 
@@ -362,6 +433,16 @@ impl RunningPlugin {
             .commands
             .iter()
             .any(|command| command.id == command_id)
+    }
+
+    fn receives_event_subscription(&self, subscription: PluginEventSubscription) -> bool {
+        self.has_capability(PluginCapability::EventSubscriber)
+            && self.manifest.subscribes.events.contains(&subscription)
+    }
+
+    fn send_event(&mut self, event: &HostEvent) -> Result<()> {
+        write_message(&mut self.stdin, &HostRpcMessage::Event(event.clone()))
+            .context("send host event")
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
@@ -466,6 +547,7 @@ fn start_runtime_thread(
     plugin_id: String,
     permissions: Vec<PluginPermission>,
     logs: SharedPluginLogs,
+    panels: SharedPluginPanels,
     timeout: Duration,
 ) -> Result<(PluginHello, JoinHandle<()>)> {
     let (sender, receiver) = mpsc::channel();
@@ -487,6 +569,10 @@ fn start_runtime_thread(
                 other => Err(anyhow!("expected plugin hello message, got {other:?}")),
             }
         })();
+        let runtime_capabilities = result
+            .as_ref()
+            .map(|hello| hello.capabilities.clone())
+            .unwrap_or_default();
         let _ = sender.send(result);
 
         line.clear();
@@ -502,8 +588,10 @@ fn start_runtime_thread(
                     match serde_json::from_str::<PluginRpcMessage>(trimmed) {
                         Ok(message) => log_plugin_runtime_message(
                             &thread_plugin_id,
+                            &runtime_capabilities,
                             &permissions,
                             &logs,
+                            &panels,
                             message,
                         ),
                         Err(error) => {
@@ -536,8 +624,10 @@ fn start_runtime_thread(
 
 fn log_plugin_runtime_message(
     plugin_id: &str,
+    capabilities: &[PluginCapability],
     permissions: &[PluginPermission],
     logs: &SharedPluginLogs,
+    panels: &SharedPluginPanels,
     message: PluginRpcMessage,
 ) {
     match message {
@@ -580,6 +670,26 @@ fn log_plugin_runtime_message(
             record_plugin_log(logs, plugin_id, format!("toast: {}", toast_message.message));
             enqueue_plugin_toast(plugin_id, toast_message);
         }
+        PluginRpcMessage::Panel(panel_update) => {
+            if !capabilities.contains(&PluginCapability::UiPanel) {
+                let entry = "panel rejected: ui_panel capability missing".to_string();
+                record_plugin_log(logs, plugin_id, entry.clone());
+                log::warn!("Plugin {} {}", plugin_id, entry);
+                return;
+            }
+            if !permissions.contains(&PluginPermission::UiPanels) {
+                let entry = "panel rejected: ui_panels permission missing".to_string();
+                record_plugin_log(logs, plugin_id, entry.clone());
+                log::warn!("Plugin {} {}", plugin_id, entry);
+                return;
+            }
+            record_plugin_log(
+                logs,
+                plugin_id,
+                format!("panel updated: {}", panel_update.title),
+            );
+            record_plugin_panel(panels, plugin_id, panel_update);
+        }
     }
 }
 
@@ -604,6 +714,20 @@ fn record_plugin_log(logs: &SharedPluginLogs, plugin_id: &str, line: String) {
     while queue.len() > MAX_LOG_LINES_PER_PLUGIN {
         queue.pop_front();
     }
+}
+
+fn record_plugin_panel(panels: &SharedPluginPanels, plugin_id: &str, panel: PluginPanelUpdate) {
+    let Ok(mut panels) = panels.lock() else {
+        return;
+    };
+    panels.insert(plugin_id.to_string(), panel);
+}
+
+fn clear_plugin_panel(panels: &SharedPluginPanels, plugin_id: &str) {
+    let Ok(mut panels) = panels.lock() else {
+        return;
+    };
+    panels.remove(plugin_id);
 }
 
 #[cfg(test)]
@@ -772,10 +896,11 @@ done
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, termy_toast::ToastKind::Success);
         assert_eq!(pending[0].message, "example.toast: toast from plugin");
-        assert!(host
-            .recent_logs("example.toast")
-            .iter()
-            .any(|line| line.contains("toast")));
+        assert!(
+            host.recent_logs("example.toast")
+                .iter()
+                .any(|line| line.contains("toast"))
+        );
 
         drop(host);
         let _ = fs::remove_dir_all(root);
@@ -832,10 +957,11 @@ done
 
         host.start_plugin("example.toggle").expect("restart plugin");
         assert_eq!(host.running_plugins().len(), 1);
-        assert!(host
-            .recent_logs("example.toggle")
-            .iter()
-            .any(|line| line.contains("started")));
+        assert!(
+            host.recent_logs("example.toggle")
+                .iter()
+                .any(|line| line.contains("started"))
+        );
 
         drop(host);
         let _ = fs::remove_dir_all(root);
@@ -899,13 +1025,16 @@ done
         thread::sleep(Duration::from_millis(50));
         let pending = termy_toast::drain_pending();
 
-        assert!(pending
-            .iter()
-            .any(|toast| toast.message.contains("invoke worked")));
-        assert!(host
-            .recent_logs("example.invoke")
-            .iter()
-            .any(|line| line.contains("invoke")));
+        assert!(
+            pending
+                .iter()
+                .any(|toast| toast.message.contains("invoke worked"))
+        );
+        assert!(
+            host.recent_logs("example.invoke")
+                .iter()
+                .any(|line| line.contains("invoke"))
+        );
 
         drop(host);
         let _ = fs::remove_dir_all(root);
@@ -1066,9 +1195,306 @@ done
 
         assert!(host.running_plugins().is_empty());
         assert_eq!(host.failures().len(), 1);
-        assert!(host.failures()[0]
-            .message()
-            .contains("does not advertise `command_provider`"));
+        assert!(
+            host.failures()[0]
+                .message()
+                .contains("does not advertise `command_provider`")
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn emits_subscribed_host_events_to_running_plugins() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("emit-event");
+        let plugin_dir = root.join("event-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.events","name":"Events Plugin","version":"0.1.0","capabilities":["event_subscriber"]}}'
+while read line; do
+  case "$line" in
+    *'"type":"event"'*'"event":"theme_changed"'*'"theme_id":"nord"'*)
+      printf '%s\n' '{"type":"log","payload":{"level":"info","message":"theme changed to nord"}}'
+      ;;
+    *'"type":"shutdown"'*)
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.events",
+                "name": "Events Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "permissions": ["host_events"],
+                "subscribes": {
+                    "events": ["theme_changed"]
+                }
+            }"#,
+        )
+        .expect("write manifest");
+
+        let mut host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+        host.start_plugin("example.events").expect("start plugin");
+        host.emit_event(HostEvent::ThemeChanged {
+            theme_id: "nord".to_string(),
+        });
+        thread::sleep(Duration::from_millis(50));
+
+        assert!(
+            host.recent_logs("example.events")
+                .iter()
+                .any(|line| line.contains("theme changed to nord"))
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_plugins_that_subscribe_without_event_subscriber_capability() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("invalid-event-subscriber");
+        let plugin_dir = root.join("invalid-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.invalid-events","name":"Invalid Events Plugin","version":"0.1.0","capabilities":[]}}'
+while read line; do
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.invalid-events",
+                "name": "Invalid Events Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "permissions": ["host_events"],
+                "subscribes": {
+                    "events": ["app_started"]
+                }
+            }"#,
+        )
+        .expect("write manifest");
+
+        let host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+
+        assert!(host.running_plugins().is_empty());
+        assert_eq!(host.failures().len(), 1);
+        assert!(
+            host.failures()[0]
+                .message()
+                .contains("does not advertise `event_subscriber`")
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_plugins_that_subscribe_without_host_events_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("invalid-event-permission");
+        let plugin_dir = root.join("invalid-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.invalid-events","name":"Invalid Events Plugin","version":"0.1.0","capabilities":["event_subscriber"]}}'
+while read line; do
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.invalid-events",
+                "name": "Invalid Events Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "subscribes": {
+                    "events": ["app_started"]
+                }
+            }"#,
+        )
+        .expect("write manifest");
+
+        let host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+
+        assert!(host.running_plugins().is_empty());
+        assert_eq!(host.failures().len(), 1);
+        assert!(
+            host.failures()[0]
+                .message()
+                .contains("missing `host_events` permission")
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_with_ui_panel_permission_can_publish_panel() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("panel");
+        let plugin_dir = root.join("panel-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.panel","name":"Panel Plugin","version":"0.1.0","capabilities":["ui_panel"]}}'
+printf '%s\n' '{"type":"panel","payload":{"title":"Plugin Status","body":"Waiting for commands","actions":[{"command_id":"example.panel.refresh","label":"Refresh","enabled":true}]}}'
+while read line; do
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.panel",
+                "name": "Panel Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "permissions": ["ui_panels"]
+            }"#,
+        )
+        .expect("write manifest");
+
+        let mut host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+        host.start_plugin("example.panel").ok();
+        thread::sleep(Duration::from_millis(50));
+
+        assert_eq!(
+            host.latest_panel("example.panel"),
+            Some(PluginPanelUpdate {
+                title: "Plugin Status".to_string(),
+                body: "Waiting for commands".to_string(),
+                actions: vec![termy_plugin_core::PluginPanelAction {
+                    command_id: "example.panel.refresh".to_string(),
+                    label: "Refresh".to_string(),
+                    enabled: true,
+                }],
+            })
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_panel_update_requires_ui_panels_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("panel-no-permission");
+        let plugin_dir = root.join("panel-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        let script_path = plugin_dir.join("plugin.sh");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+read line
+printf '%s\n' '{"type":"hello","payload":{"protocol_version":1,"plugin_id":"example.panel","name":"Panel Plugin","version":"0.1.0","capabilities":["ui_panel"]}}'
+printf '%s\n' '{"type":"panel","payload":{"title":"Plugin Status","body":"Waiting for commands"}}'
+while read line; do
+  if [ "$line" = '{"type":"shutdown"}' ]; then
+    exit 0
+  fi
+done
+"#,
+        )
+        .expect("write plugin script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("set script mode");
+        fs::write(
+            plugin_dir.join(PLUGIN_MANIFEST_FILE_NAME),
+            r#"{
+                "schema_version": 1,
+                "id": "example.panel",
+                "name": "Panel Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh"
+            }"#,
+        )
+        .expect("write manifest");
+
+        let mut host = PluginHost::load_from_dir(root.clone(), "0.1.0").expect("load host");
+        host.start_plugin("example.panel").ok();
+        thread::sleep(Duration::from_millis(50));
+
+        assert_eq!(host.latest_panel("example.panel"), None);
+        assert!(
+            host.recent_logs("example.panel")
+                .iter()
+                .any(|line| line.contains("ui_panels permission missing"))
+        );
 
         drop(host);
         let _ = fs::remove_dir_all(root);

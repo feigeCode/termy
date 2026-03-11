@@ -22,8 +22,10 @@ members = [
   "crates/plugin_sdk",
   "crates/termy_api",
   "crates/plugin_release_notes",
+  "crates/plugin_example_status",
   "crates/agent_sidebar",
 ]
+exclude = ["examples/plugin-full"]
 resolver = "2"
 
 [package]

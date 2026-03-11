@@ -21,6 +21,10 @@ Detailed API references:
 - [plugin_core Reference](/docs/plugins/plugin-core)
 - [plugin_host Reference](/docs/plugins/plugin-host)
 
+Reference implementation:
+
+- `crates/plugin_example_status`
+
 ## Rust plugin quickstart
 
 ```rust
@@ -155,6 +159,12 @@ When invoked, host sends `invoke_command` with the `command_id`.
 - Use `send_log` / `sendLog` for diagnostics.
 - Use `send_toast` / `sendToast` for user-visible feedback.
 - Runtime logs are visible via `Settings -> Plugins -> View Logs`.
+
+## Panels and panel actions
+
+- Use `send_panel` for read-only settings panel content.
+- Use `send_panel_with_actions` to attach buttons that invoke contributed commands.
+- See `crates/plugin_example_status` for a full Rust example using commands, events, toasts, and panel actions.
 
 ## Environment variables
 

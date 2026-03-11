@@ -2497,6 +2497,7 @@ impl TerminalView {
             let binary = config.tmux_binary.trim().to_string();
             (!binary.is_empty()).then_some(binary)
         };
+        let previous_theme_id = self.theme_id.clone();
         let previous_font_family = self.font_family.clone();
         let previous_font_size = self.font_size;
         self.theme_id = config.theme.clone();
@@ -2523,6 +2524,11 @@ impl TerminalView {
         let show_termy_in_titlebar_changed =
             self.show_termy_in_titlebar != config.show_termy_in_titlebar;
         let show_debug_overlay_changed = self.show_debug_overlay != config.show_debug_overlay;
+        if self.theme_id != previous_theme_id {
+            crate::plugins::emit_plugin_event(termy_plugin_core::HostEvent::ThemeChanged {
+                theme_id: self.theme_id.clone(),
+            });
+        }
         self.tab_close_visibility = config.tab_close_visibility;
         self.tab_width_mode = config.tab_width_mode;
         self.vertical_tabs = config.vertical_tabs;
@@ -2706,6 +2712,17 @@ impl TerminalView {
         }
 
         true
+    }
+
+    fn emit_active_tab_changed_plugin_event(&self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+
+        crate::plugins::emit_plugin_event(termy_plugin_core::HostEvent::ActiveTabChanged {
+            tab_index: self.active_tab,
+            tab_title: tab.title.clone(),
+        });
     }
 
     #[cfg(not(test))]

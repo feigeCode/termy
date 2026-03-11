@@ -1572,11 +1572,14 @@ impl SettingsWindow {
         let text_muted = self.text_muted();
         let commands_count = plugin.commands.len();
         let permissions_count = plugin.permissions.len();
+        let subscriptions_count = plugin.subscriptions.len();
         let capabilities_count = plugin.capabilities.len();
         let description = plugin
             .description
             .clone()
             .unwrap_or_else(|| "No description provided.".to_string());
+        let panel = plugin.panel.clone();
+        let plugin_id_for_panel_action = plugin.id.clone();
         let status = if let Some(error) = plugin.load_error.clone() {
             format!("Failed to start: {error}")
         } else if plugin.is_running {
@@ -1723,10 +1726,101 @@ impl SettingsWindow {
                     .text_color(text_muted)
                     .line_height(px(17.0))
                     .child(format!(
-                        "{} command(s), {} permission(s), {} capability(s)",
-                        commands_count, permissions_count, capabilities_count
+                        "{} command(s), {} permission(s), {} subscription(s), {} capability(s)",
+                        commands_count, permissions_count, subscriptions_count, capabilities_count
                     )),
             )
+            .when_some(panel, |s, panel| {
+                let panel_actions = panel
+                    .actions
+                    .iter()
+                    .cloned()
+                    .map(|action| {
+                        let action_enabled = plugin.is_running
+                            && action.enabled
+                            && plugin
+                                .capabilities
+                                .contains(&termy_plugin_core::PluginCapability::CommandProvider);
+                        let action_fill = if action_enabled {
+                            self.accent_with_alpha(0.18)
+                        } else {
+                            bg_card
+                        };
+                        let action_border = if action_enabled {
+                            self.accent_with_alpha(0.38)
+                        } else {
+                            self.border_color()
+                        };
+                        let action_text = if action_enabled { accent } else { text_muted };
+                        let plugin_id = plugin_id_for_panel_action.clone();
+                        let command_id = action.command_id.clone();
+
+                        div()
+                            .id(SharedString::from(format!(
+                                "plugin-panel-action-{}-{}",
+                                plugin.id, action.command_id
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(action_fill)
+                            .border_1()
+                            .border_color(action_border)
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(action_text)
+                            .when(action_enabled, |button| button.cursor_pointer())
+                            .when(action_enabled, |button| button.hover(move |s| s.bg(hover_bg)))
+                            .child(action.label)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if !action_enabled {
+                                    termy_toast::info("Plugin panel action is unavailable");
+                                    return;
+                                }
+                                match crate::plugins::invoke_plugin_command(&plugin_id, &command_id)
+                                {
+                                    Ok(()) => {
+                                        view.refresh_plugin_inventory();
+                                        termy_toast::success("Triggered plugin panel action");
+                                    }
+                                    Err(error) => termy_toast::error(error),
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>();
+
+                s.child(
+                    div()
+                        .px_3()
+                        .py_3()
+                        .bg(bg_input)
+                        .border_1()
+                        .border_color(self.accent_with_alpha(0.22))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(text_primary)
+                                .child(panel.title),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(text_secondary)
+                                .line_height(px(17.0))
+                                .child(panel.body),
+                        )
+                        .when(!panel_actions.is_empty(), |panel_card| {
+                            panel_card
+                                .child(div().flex().flex_wrap().gap_2().children(panel_actions))
+                        }),
+                )
+            })
             .child(
                 div()
                     .flex()

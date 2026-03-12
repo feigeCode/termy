@@ -3,6 +3,7 @@ use super::*;
 use crate::ui::scrollbar::{self as ui_scrollbar, ScrollbarPaintStyle};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 use gpui::prelude::FluentBuilder;
 use gpui::{ElementInputHandler, canvas};
 use std::sync::Arc;
@@ -165,6 +166,80 @@ struct PaneCellBuildContext<'a> {
     terminal_surface_bg: gpui::Rgba,
     selection_range: Option<(SelectionPos, SelectionPos)>,
     pane_search_results: Option<&'a termy_search::SearchResults>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResolvedCellColors {
+    fg: gpui::Rgba,
+    bg: gpui::Rgba,
+    uses_terminal_default_bg: bool,
+}
+
+fn uses_terminal_default_background(color: AnsiColor) -> bool {
+    matches!(color, AnsiColor::Named(NamedColor::Background))
+}
+
+fn uses_block_element_background(c: char) -> bool {
+    matches!(c as u32, 0x2580..=0x259F)
+}
+
+fn resolved_default_cell_colors(context: PaneCellBuildContext<'_>) -> (gpui::Rgba, gpui::Rgba) {
+    let mut default_bg = context.colors.background;
+    default_bg.a *= context.effective_background_opacity;
+    apply_cell_color_transform(
+        context.colors.foreground,
+        default_bg,
+        context.cell_color_transform,
+        context.pane_focus_target_bg,
+        context.terminal_surface_bg,
+    )
+}
+
+fn pane_requires_default_background_fill(
+    pane_default_bg: gpui::Rgba,
+    terminal_surface_bg: gpui::Rgba,
+) -> bool {
+    pane_default_bg != terminal_surface_bg
+}
+
+fn resolve_cell_colors(
+    cell_content: &alacritty_terminal::term::cell::Cell,
+    context: PaneCellBuildContext<'_>,
+) -> ResolvedCellColors {
+    let mut fg_source = cell_content.fg;
+    let mut bg_source = cell_content.bg;
+    if cell_content.flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg_source, &mut bg_source);
+    }
+
+    // Decide transparency from the terminal color source, not the resolved RGB.
+    // Block-element workloads like doom fire encode visible pixels in the cell
+    // background, so those explicit backgrounds must stay opaque even when they
+    // numerically match the theme background.
+    let mut fg = context.colors.convert(fg_source);
+    let mut bg = context.colors.convert(bg_source);
+    if cell_content.flags.contains(Flags::DIM) {
+        fg.r *= DIM_TEXT_FACTOR;
+        fg.g *= DIM_TEXT_FACTOR;
+        fg.b *= DIM_TEXT_FACTOR;
+    }
+    let uses_terminal_default_bg = uses_terminal_default_background(bg_source);
+    if uses_terminal_default_bg || !uses_block_element_background(cell_content.c) {
+        bg.a *= context.effective_background_opacity;
+    }
+    (fg, bg) = apply_cell_color_transform(
+        fg,
+        bg,
+        context.cell_color_transform,
+        context.pane_focus_target_bg,
+        context.terminal_surface_bg,
+    );
+
+    ResolvedCellColors {
+        fg,
+        bg,
+        uses_terminal_default_bg,
+    }
 }
 
 fn selection_range_contains(
@@ -433,24 +508,7 @@ impl TerminalView {
         cell_content: &alacritty_terminal::term::cell::Cell,
         context: PaneCellBuildContext<'_>,
     ) -> CellRenderInfo {
-        let mut fg = context.colors.convert(cell_content.fg);
-        let mut bg = context.colors.convert(cell_content.bg);
-        if cell_content.flags.contains(Flags::INVERSE) {
-            std::mem::swap(&mut fg, &mut bg);
-        }
-        if cell_content.flags.contains(Flags::DIM) {
-            fg.r *= DIM_TEXT_FACTOR;
-            fg.g *= DIM_TEXT_FACTOR;
-            fg.b *= DIM_TEXT_FACTOR;
-        }
-        bg.a *= context.effective_background_opacity;
-        (fg, bg) = apply_cell_color_transform(
-            fg,
-            bg,
-            context.cell_color_transform,
-            context.pane_focus_target_bg,
-            context.terminal_surface_bg,
-        );
+        let resolved_colors = resolve_cell_colors(cell_content, context);
 
         let (search_current, search_match) = if let Some(results) = context.pane_search_results {
             let is_current = results.is_current_match(term_line, col);
@@ -464,8 +522,9 @@ impl TerminalView {
             col,
             row,
             char: cell_content.c,
-            fg: fg.into(),
-            bg: bg.into(),
+            fg: resolved_colors.fg.into(),
+            bg: resolved_colors.bg.into(),
+            uses_terminal_default_bg: resolved_colors.uses_terminal_default_bg,
             bold: cell_content.flags.contains(Flags::BOLD),
             render_text: !cell_content.flags.intersects(
                 Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN,
@@ -550,15 +609,7 @@ impl TerminalView {
         display_offset: usize,
         context: PaneCellBuildContext<'_>,
     ) -> PaneRenderCells {
-        let mut default_bg = context.colors.background;
-        default_bg.a *= context.effective_background_opacity;
-        let (default_fg, default_bg) = apply_cell_color_transform(
-            context.colors.foreground,
-            default_bg,
-            context.cell_color_transform,
-            context.pane_focus_target_bg,
-            context.terminal_surface_bg,
-        );
+        let (default_fg, default_bg) = resolved_default_cell_colors(context);
         let mut rows_cache = Vec::with_capacity(rows);
         for row in 0..rows {
             let mut row_cells = Vec::with_capacity(cols);
@@ -569,6 +620,7 @@ impl TerminalView {
                     char: ' ',
                     fg: default_fg.into(),
                     bg: default_bg.into(),
+                    uses_terminal_default_bg: true,
                     bold: false,
                     render_text: false,
                     selected: false,
@@ -776,11 +828,6 @@ impl TerminalView {
         let mut selection_bg = colors.cursor;
         selection_bg.a = SELECTION_BG_ALPHA;
         let selection_fg = colors.background;
-        let default_cell_bg: gpui::Hsla = {
-            let mut bg = colors.background;
-            bg.a = self.scaled_background_alpha(bg.a);
-            bg.into()
-        };
         TerminalGrid {
             cells,
             paint_cache,
@@ -788,8 +835,10 @@ impl TerminalView {
             cell_size,
             cols,
             rows,
+            // The shared terminal surface already owns the translucent default
+            // background. Clearing the grid to that same translucent color would
+            // composite it twice and darken the viewport rectangle.
             clear_bg: gpui::Hsla::transparent_black(),
-            default_bg: default_cell_bg,
             cursor_color: colors.cursor.into(),
             selection_bg: selection_bg.into(),
             selection_fg: selection_fg.into(),
@@ -2060,6 +2109,16 @@ impl Render for TerminalView {
                 } else {
                     None
                 };
+                let pane_build_context = PaneCellBuildContext {
+                    colors: &colors,
+                    effective_background_opacity,
+                    cell_color_transform,
+                    pane_focus_target_bg,
+                    terminal_surface_bg,
+                    selection_range: pane_cache_key.selection_range,
+                    pane_search_results,
+                };
+                let (_, pane_default_bg) = resolved_default_cell_colors(pane_build_context);
                 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
                 let (pane_cells, cache_strategy, paint_damage, paint_cache) = {
                     let mut pane_render_cache = pane.render_cache.borrow_mut();
@@ -2071,15 +2130,7 @@ impl Render for TerminalView {
                         pane_display_offset,
                         &mut pane_render_cache,
                         pane_cache_key.clone(),
-                        PaneCellBuildContext {
-                            colors: &colors,
-                            effective_background_opacity,
-                            cell_color_transform,
-                            pane_focus_target_bg,
-                            terminal_surface_bg,
-                            selection_range: pane_cache_key.selection_range,
-                            pane_search_results,
-                        },
+                        pane_build_context,
                         #[cfg(debug_assertions)]
                         &mut render_pass_cache_counts,
                     );
@@ -2144,6 +2195,7 @@ impl Render for TerminalView {
                 if pane_width <= f32::EPSILON || pane_height <= f32::EPSILON {
                     continue;
                 }
+                let pane_default_bg_hsla: gpui::Hsla = pane_default_bg.into();
 
                 let pane_right_cells = u32::from(pane.left).saturating_add(u32::from(pane.width));
                 let pane_bottom_cells = u32::from(pane.top).saturating_add(u32::from(pane.height));
@@ -2249,6 +2301,13 @@ impl Render for TerminalView {
                         .top(px(pane_top))
                         .w(px(pane_width))
                         .h(px(pane_height))
+                        .when(
+                            pane_requires_default_background_fill(
+                                pane_default_bg,
+                                terminal_surface_bg,
+                            ),
+                            |pane_layer| pane_layer.bg(pane_default_bg_hsla),
+                        )
                         .child(terminal_grid)
                         .into_any_element(),
                 );
@@ -2314,7 +2373,6 @@ impl Render for TerminalView {
 
         let focus_handle = self.focus_handle.clone();
         let titlebar_height = Self::titlebar_height();
-        let titlebar_bg = terminal_surface_bg;
         let tabbar_bg = terminal_surface_bg;
         let tabs_row = self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx);
 
@@ -2486,6 +2544,9 @@ impl Render for TerminalView {
             "Terminal"
         };
         let titlebar_element: Option<AnyElement> = (titlebar_height > 0.0).then(|| {
+            // The root already paints the shared translucent window background.
+            // Repainting that same fill on the titlebar darkens the top strip
+            // relative to the terminal content.
             let titlebar_container = div()
                 .id("titlebar")
                 .w_full()
@@ -2494,8 +2555,7 @@ impl Render for TerminalView {
                 .relative()
                 .flex()
                 .items_center()
-                .on_mouse_move(cx.listener(Self::handle_titlebar_tab_strip_mouse_move))
-                .bg(titlebar_bg);
+                .on_mouse_move(cx.listener(Self::handle_titlebar_tab_strip_mouse_move));
 
             titlebar_container
                 .on_mouse_down(
@@ -2649,7 +2709,6 @@ impl Render for TerminalView {
                                     .flex_1()
                                     .h_full()
                                     .overflow_hidden()
-                                    .bg(terminal_surface_bg_hsla)
                                     .on_scroll_wheel(
                                         cx.listener(Self::handle_terminal_scroll_wheel),
                                     )
@@ -2715,12 +2774,58 @@ mod tests {
             char: c,
             fg: gpui::Hsla::transparent_black(),
             bg: gpui::Hsla::transparent_black(),
+            uses_terminal_default_bg: false,
             bold: false,
             render_text: true,
             selected: false,
             search_current: false,
             search_match: false,
         }
+    }
+
+    fn test_build_context(opacity: f32) -> PaneCellBuildContext<'static> {
+        static COLORS: std::sync::LazyLock<TerminalColors> =
+            std::sync::LazyLock::new(TerminalColors::default);
+        PaneCellBuildContext {
+            colors: &COLORS,
+            effective_background_opacity: opacity,
+            cell_color_transform: CellColorTransform::default(),
+            pane_focus_target_bg: COLORS.background,
+            terminal_surface_bg: COLORS.background,
+            selection_range: None,
+            pane_search_results: None,
+        }
+    }
+
+    fn test_build_context_with_transform(
+        opacity: f32,
+        cell_color_transform: CellColorTransform,
+        pane_focus_target_bg: gpui::Rgba,
+        terminal_surface_bg: gpui::Rgba,
+    ) -> PaneCellBuildContext<'static> {
+        static COLORS: std::sync::LazyLock<TerminalColors> =
+            std::sync::LazyLock::new(TerminalColors::default);
+        PaneCellBuildContext {
+            colors: &COLORS,
+            effective_background_opacity: opacity,
+            cell_color_transform,
+            pane_focus_target_bg,
+            terminal_surface_bg,
+            selection_range: None,
+            pane_search_results: None,
+        }
+    }
+
+    fn test_term_cell(
+        fg: AnsiColor,
+        bg: AnsiColor,
+        flags: Flags,
+    ) -> alacritty_terminal::term::cell::Cell {
+        let mut cell = alacritty_terminal::term::cell::Cell::default();
+        cell.fg = fg;
+        cell.bg = bg;
+        cell.flags = flags;
+        cell
     }
 
     fn tmux_test_pane(id: &str, left: u16, top: u16, cols: u16, rows: u16) -> TerminalPane {
@@ -2961,6 +3066,170 @@ mod tests {
         let separated = tmux_test_pane("%2", 10, 6, 5, 3);
         let panes = vec![base, separated];
         assert_eq!(TerminalView::pane_right_gap_cells(&panes[0], &panes), None);
+    }
+
+    #[test]
+    fn resolve_cell_colors_scales_only_terminal_default_background_alpha() {
+        let context = test_build_context(0.2);
+
+        let default_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Named(NamedColor::Background),
+                Flags::empty(),
+            ),
+            context,
+        );
+        assert!(default_background.uses_terminal_default_bg);
+        assert!((default_background.bg.a - 0.2).abs() <= f32::EPSILON);
+
+        let ansi_black_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Named(NamedColor::Black),
+                Flags::empty(),
+            ),
+            context,
+        );
+        assert!(!ansi_black_background.uses_terminal_default_bg);
+        assert!((ansi_black_background.bg.a - 0.2).abs() <= f32::EPSILON);
+
+        let indexed_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Indexed(232),
+                Flags::empty(),
+            ),
+            context,
+        );
+        assert!(!indexed_background.uses_terminal_default_bg);
+        assert!((indexed_background.bg.a - 0.2).abs() <= f32::EPSILON);
+
+        let rgb_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Spec(alacritty_terminal::vte::ansi::Rgb {
+                    r: 12,
+                    g: 34,
+                    b: 56,
+                }),
+                Flags::empty(),
+            ),
+            context,
+        );
+        assert!(!rgb_background.uses_terminal_default_bg);
+        assert!((rgb_background.bg.a - 0.2).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_cell_colors_keeps_block_element_backgrounds_opaque() {
+        let context = test_build_context(0.2);
+        let mut block_cell = test_term_cell(
+            AnsiColor::Named(NamedColor::Foreground),
+            AnsiColor::Indexed(232),
+            Flags::empty(),
+        );
+        block_cell.c = '\u{2580}';
+
+        let resolved = resolve_cell_colors(&block_cell, context);
+
+        assert!(!resolved.uses_terminal_default_bg);
+        assert!((resolved.bg.a - 1.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_cell_colors_classifies_inverse_background_after_swap() {
+        let context = test_build_context(0.2);
+        let inverse_default_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Background),
+                AnsiColor::Named(NamedColor::Red),
+                Flags::INVERSE,
+            ),
+            context,
+        );
+
+        assert!(inverse_default_background.uses_terminal_default_bg);
+        assert!((inverse_default_background.bg.a - 0.2).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_cell_colors_keeps_transformed_default_background_in_sync_with_default_fill() {
+        let pane_focus_target_bg = gpui::Rgba {
+            r: 0.8,
+            g: 0.7,
+            b: 0.6,
+            a: 1.0,
+        };
+        let terminal_surface_bg = gpui::Rgba {
+            r: 0.1,
+            g: 0.2,
+            b: 0.3,
+            a: 0.4,
+        };
+        let context = test_build_context_with_transform(
+            0.2,
+            CellColorTransform {
+                fg_blend: 0.0,
+                bg_blend: 0.5,
+                desaturate: 0.25,
+            },
+            pane_focus_target_bg,
+            terminal_surface_bg,
+        );
+        let (_, default_bg) = resolved_default_cell_colors(context);
+        let resolved = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Named(NamedColor::Background),
+                Flags::empty(),
+            ),
+            context,
+        );
+
+        assert!(resolved.uses_terminal_default_bg);
+        assert_eq!(resolved.bg, default_bg);
+    }
+
+    #[test]
+    fn resolve_cell_colors_scales_inverse_explicit_background_for_non_block_cells() {
+        let context = test_build_context(0.2);
+        let inverse_explicit_background = resolve_cell_colors(
+            &test_term_cell(
+                AnsiColor::Named(NamedColor::Green),
+                AnsiColor::Named(NamedColor::Background),
+                Flags::INVERSE,
+            ),
+            context,
+        );
+
+        assert!(!inverse_explicit_background.uses_terminal_default_bg);
+        assert!((inverse_explicit_background.bg.a - 0.2).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn pane_default_background_fill_is_only_needed_for_transformed_panes() {
+        let shared_surface = gpui::Rgba {
+            r: 0.1,
+            g: 0.2,
+            b: 0.3,
+            a: 0.2,
+        };
+        assert!(!pane_requires_default_background_fill(
+            shared_surface,
+            shared_surface
+        ));
+
+        let transformed_pane = gpui::Rgba {
+            r: 0.16,
+            g: 0.24,
+            b: 0.32,
+            a: 0.2,
+        };
+        assert!(pane_requires_default_background_fill(
+            transformed_pane,
+            shared_surface
+        ));
     }
 
     #[test]

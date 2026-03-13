@@ -4,7 +4,6 @@ import { Hono, type Context } from "hono";
 
 const app = new Hono();
 
-const NOTRA_ORG_ID = process.env.NOTRA_ORG_ID;
 const NOTRA_API_KEY = process.env.NOTRA_API_KEY;
 const PORT = Number(process.env.PORT) || 3000;
 const THEME_STORE_API_URL = process.env.THEME_STORE_API_URL || "http://127.0.0.1:8080";
@@ -112,7 +111,6 @@ function getNotraCacheMaxAgeSeconds(): number {
 
 interface NotraConfig {
   client: Notra;
-  organizationId: string;
 }
 
 function respondNotConfigured(context: Context): Response {
@@ -120,13 +118,12 @@ function respondNotConfigured(context: Context): Response {
 }
 
 function getNotraConfig(context: Context): NotraConfig | Response {
-  if (!notra || !NOTRA_ORG_ID) {
+  if (!notra) {
     return respondNotConfigured(context);
   }
 
   return {
     client: notra,
-    organizationId: NOTRA_ORG_ID,
   };
 }
 
@@ -288,7 +285,6 @@ app.get("/api/changelogs", async (c) => {
 
   try {
     const result = await config.client.content.listPosts({
-      organizationId: config.organizationId,
       status: "published",
       contentType: "changelog",
       sort: "desc",
@@ -339,7 +335,6 @@ app.get("/api/changelogs/:id", async (c) => {
 
   try {
     const result = await config.client.content.getPost({
-      organizationId: config.organizationId,
       postId,
     });
 

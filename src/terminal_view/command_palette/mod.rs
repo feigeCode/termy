@@ -14,7 +14,7 @@ mod state_tmux;
 pub(super) mod style;
 mod tmux_sessions;
 
-pub(super) use state::{CommandPaletteMode, CommandPaletteState};
+pub(super) use state::{CommandPaletteMode, CommandPaletteState, TaskIntent};
 pub(super) use state_layouts::SavedLayoutIntent;
 pub(super) use state_tmux::TmuxSessionIntent;
 
@@ -24,6 +24,7 @@ enum CommandPaletteEscapeAction {
     BackToCommands,
     BackToTmuxRenameSelect,
     BackToSavedLayoutRenameSelect,
+    BackToTaskBrowse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,10 +220,263 @@ impl TerminalView {
                 self.tmux_active_session_name_for_session_palette()
                     .as_deref(),
             ),
-            CommandPaletteMode::Layouts => self
-                .command_palette
-                .saved_layout_items_for_query(self.command_palette.input().text()),
+            CommandPaletteMode::Layouts => {
+                let mut items = self
+                    .command_palette
+                    .saved_layout_items_for_query(self.command_palette.input().text());
+                self.insert_saved_layout_tasks_item(&mut items);
+                items
+            }
+            CommandPaletteMode::Tasks => self.command_palette_task_items(),
         }
+    }
+
+    fn saved_layout_tasks_item_for_state(
+        saved_layout_intent: SavedLayoutIntent,
+        query_text: &str,
+        current_named_layout: Option<&str>,
+        layout_has_tasks: bool,
+    ) -> Option<CommandPaletteItem> {
+        if saved_layout_intent != SavedLayoutIntent::Browse
+            || !query_text.trim().is_empty()
+            || !layout_has_tasks
+        {
+            return None;
+        }
+
+        let layout_name = current_named_layout?;
+        Some(CommandPaletteItem {
+            title: format!("Run Tasks for \"{}\"", layout_name),
+            keywords: format!("saved layout tasks run {}", layout_name.replace('-', " ")),
+            enabled: true,
+            status_hint: None,
+            tmux_status_hint: None,
+            kind: CommandPaletteItemKind::SavedLayoutOpenTasksMode {
+                layout_name: layout_name.to_string(),
+            },
+        })
+    }
+
+    fn insert_saved_layout_tasks_item(&self, items: &mut Vec<CommandPaletteItem>) {
+        let current_named_layout = self.current_named_layout.as_deref();
+        let layout_has_tasks =
+            current_named_layout.is_some_and(|layout_name| self.layout_has_tasks(layout_name));
+        if let Some(item) = Self::saved_layout_tasks_item_for_state(
+            self.command_palette.saved_layout_intent(),
+            self.command_palette.input().text(),
+            current_named_layout,
+            layout_has_tasks,
+        ) {
+            items.insert(1.min(items.len()), item);
+        }
+    }
+
+    fn palette_task_name_is_valid(task_name: &str) -> bool {
+        !task_name.trim().contains('.')
+    }
+
+    fn layout_has_tasks(&self, layout_name: &str) -> bool {
+        self.tasks.iter().any(|task| {
+            task.layout
+                .as_deref()
+                .is_some_and(|task_layout| task_layout.eq_ignore_ascii_case(layout_name))
+        })
+    }
+
+    fn active_current_command(&self) -> Option<&str> {
+        self.tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.current_command.as_deref())
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+    }
+
+    fn suggested_task_name_for_command(command: &str) -> String {
+        let first_token = command.split_whitespace().next().unwrap_or("task");
+        let base = std::path::Path::new(first_token)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(first_token)
+            .trim_start_matches('-')
+            .trim_end_matches(".exe");
+
+        let mut normalized = String::with_capacity(base.len());
+        let mut last_was_sep = false;
+        for ch in base.chars() {
+            if ch.is_ascii_alphanumeric() {
+                normalized.push(ch.to_ascii_lowercase());
+                last_was_sep = false;
+            } else if !last_was_sep {
+                normalized.push('_');
+                last_was_sep = true;
+            }
+        }
+        let normalized = normalized.trim_matches('_');
+        if normalized.is_empty() {
+            "task".to_string()
+        } else {
+            normalized.to_string()
+        }
+    }
+
+    fn command_palette_task_items(&self) -> Vec<CommandPaletteItem> {
+        let query = self.command_palette.input().text().trim();
+        let current_layout = self.current_named_layout.as_deref();
+
+        match self.command_palette.task_intent() {
+            TaskIntent::Browse => {
+                let mut items = self
+                    .tasks
+                    .iter()
+                    .filter(|task| match (task.layout.as_deref(), current_layout) {
+                        (None, _) => true,
+                        (Some(task_layout), Some(current_layout)) => {
+                            task_layout.eq_ignore_ascii_case(current_layout)
+                        }
+                        (Some(_), None) => false,
+                    })
+                    .map(|task| {
+                        CommandPaletteItem::task(
+                            task.name.as_str(),
+                            task.command.as_str(),
+                            task.working_dir.as_deref(),
+                            task.layout.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                if query.is_empty() {
+                    items.insert(
+                        0,
+                        CommandPaletteItem {
+                            title: "New Task…".to_string(),
+                            keywords: "task new create add".to_string(),
+                            enabled: true,
+                            status_hint: None,
+                            tmux_status_hint: None,
+                            kind: CommandPaletteItemKind::TaskOpenCreateGlobalMode,
+                        },
+                    );
+
+                    let active_command = self.active_current_command();
+                    items.insert(
+                        1.min(items.len()),
+                        CommandPaletteItem {
+                            title: "Save Current Command as Task…".to_string(),
+                            keywords: "task save current command active".to_string(),
+                            enabled: active_command.is_some(),
+                            status_hint: active_command.is_none().then_some("no active command"),
+                            tmux_status_hint: None,
+                            kind: CommandPaletteItemKind::TaskOpenSaveCurrentCommandGlobalMode,
+                        },
+                    );
+
+                    if let Some(layout_name) = current_layout {
+                        items.insert(
+                            2.min(items.len()),
+                            CommandPaletteItem {
+                                title: format!("New Task for \"{}\"…", layout_name),
+                                keywords: format!(
+                                    "task new create add layout {}",
+                                    layout_name.replace('-', " ")
+                                ),
+                                enabled: true,
+                                status_hint: None,
+                                tmux_status_hint: None,
+                                kind: CommandPaletteItemKind::TaskOpenCreateLayoutMode {
+                                    layout_name: layout_name.to_string(),
+                                },
+                            },
+                        );
+                        items.insert(
+                            3.min(items.len()),
+                            CommandPaletteItem {
+                                title: format!("Save Current Command for \"{}\"…", layout_name),
+                                keywords: format!(
+                                    "task save current command active layout {}",
+                                    layout_name.replace('-', " ")
+                                ),
+                                enabled: active_command.is_some(),
+                                status_hint: active_command
+                                    .is_none()
+                                    .then_some("no active command"),
+                                tmux_status_hint: None,
+                                kind:
+                                    CommandPaletteItemKind::TaskOpenSaveCurrentCommandLayoutMode {
+                                        layout_name: layout_name.to_string(),
+                                    },
+                            },
+                        );
+                    }
+                }
+
+                items
+            }
+            TaskIntent::CreateGlobalInput | TaskIntent::CreateLayoutInput => {
+                let layout_name = match self.command_palette.task_intent() {
+                    TaskIntent::CreateLayoutInput => current_layout.map(ToOwned::to_owned),
+                    _ => None,
+                };
+
+                vec![self.command_palette_task_create_item(query, layout_name)]
+            }
+        }
+    }
+
+    fn command_palette_task_create_item(
+        &self,
+        query: &str,
+        layout_name: Option<String>,
+    ) -> CommandPaletteItem {
+        let Some((task_name, command)) = Self::parse_task_definition_input(query) else {
+            return CommandPaletteItem {
+                title: "Create Task".to_string(),
+                keywords: "task new create add".to_string(),
+                enabled: false,
+                status_hint: Some("use name: command"),
+                tmux_status_hint: None,
+                kind: CommandPaletteItemKind::TaskCreate {
+                    task_name: String::new(),
+                    command: String::new(),
+                    layout_name,
+                },
+            };
+        };
+
+        let already_exists = self
+            .tasks
+            .iter()
+            .any(|task| task.name.eq_ignore_ascii_case(task_name));
+
+        CommandPaletteItem {
+            title: match layout_name.as_deref() {
+                Some(layout_name) => format!("Save Task \"{}\" for \"{}\"", task_name, layout_name),
+                None => format!("Save Task \"{}\"", task_name),
+            },
+            keywords: format!(
+                "task save create {} {}",
+                task_name.replace('-', " "),
+                command
+            ),
+            enabled: !already_exists,
+            status_hint: already_exists.then_some("task exists"),
+            tmux_status_hint: None,
+            kind: CommandPaletteItemKind::TaskCreate {
+                task_name: task_name.to_string(),
+                command: command.to_string(),
+                layout_name,
+            },
+        }
+    }
+
+    fn parse_task_definition_input(query: &str) -> Option<(&str, &str)> {
+        let (task_name, command) = query.split_once(':')?;
+        let task_name = task_name.trim();
+        let command = command.trim();
+        if task_name.is_empty() || command.is_empty() {
+            return None;
+        }
+        Some((task_name, command))
     }
 
     fn command_palette_theme_items(&self) -> Vec<CommandPaletteItem> {
@@ -320,6 +574,10 @@ impl TerminalView {
         self.open_command_palette_in_mode(CommandPaletteMode::Layouts, cx);
     }
 
+    pub(super) fn open_tasks_palette(&mut self, cx: &mut Context<Self>) {
+        self.open_command_palette_in_mode(CommandPaletteMode::Tasks, cx);
+    }
+
     pub(super) fn close_command_palette(&mut self, cx: &mut Context<Self>) {
         if !self.command_palette.is_open() {
             return;
@@ -343,9 +601,13 @@ impl TerminalView {
             );
             self.command_palette.set_items(items);
         } else if self.command_palette.mode() == CommandPaletteMode::Layouts {
-            let items = self
+            let mut items = self
                 .command_palette
                 .saved_layout_items_for_query(self.command_palette.input().text());
+            self.insert_saved_layout_tasks_item(&mut items);
+            self.command_palette.set_items(items);
+        } else if self.command_palette.mode() == CommandPaletteMode::Tasks {
+            let items = self.command_palette_task_items();
             self.command_palette.set_items(items);
         } else {
             self.command_palette.refilter_current_query();
@@ -494,6 +756,7 @@ impl TerminalView {
                     self.command_palette.tmux_session_intent(),
                     self.command_palette.command_intent(),
                     self.command_palette.saved_layout_intent(),
+                    self.command_palette.task_intent(),
                 ) {
                     CommandPaletteEscapeAction::ClosePalette => self.close_command_palette(cx),
                     CommandPaletteEscapeAction::BackToCommands => {
@@ -518,6 +781,15 @@ impl TerminalView {
                                 cx,
                             );
                         }
+                    }
+                    CommandPaletteEscapeAction::BackToTaskBrowse => {
+                        self.command_palette.set_task_intent(TaskIntent::Browse);
+                        self.apply_command_palette_mode_setup(
+                            CommandPaletteMode::Tasks,
+                            false,
+                            CommandPaletteNotifyEvent::InteractionOnly,
+                            cx,
+                        );
                     }
                 }
             }
@@ -552,6 +824,7 @@ impl TerminalView {
         tmux_session_intent: TmuxSessionIntent,
         _command_intent: CommandPaletteCommandIntent,
         saved_layout_intent: SavedLayoutIntent,
+        task_intent: TaskIntent,
     ) -> CommandPaletteEscapeAction {
         match mode {
             CommandPaletteMode::Commands => CommandPaletteEscapeAction::ClosePalette,
@@ -568,6 +841,15 @@ impl TerminalView {
                 CommandPaletteEscapeAction::BackToSavedLayoutRenameSelect
             }
             CommandPaletteMode::Layouts => CommandPaletteEscapeAction::BackToCommands,
+            CommandPaletteMode::Tasks
+                if matches!(
+                    task_intent,
+                    TaskIntent::CreateGlobalInput | TaskIntent::CreateLayoutInput
+                ) =>
+            {
+                CommandPaletteEscapeAction::BackToTaskBrowse
+            }
+            CommandPaletteMode::Tasks => CommandPaletteEscapeAction::BackToCommands,
         }
     }
 
@@ -689,6 +971,9 @@ impl TerminalView {
             CommandPaletteItemKind::SavedLayoutOpen { layout_name } => {
                 self.load_saved_layout_from_palette(layout_name.as_str(), cx)
             }
+            CommandPaletteItemKind::SavedLayoutOpenTasksMode { layout_name } => {
+                self.open_tasks_palette_from_saved_layout(layout_name.as_str(), cx)
+            }
             CommandPaletteItemKind::SavedLayoutOpenSaveMode => {
                 self.open_save_layout_input_from_palette(cx)
             }
@@ -716,6 +1001,168 @@ impl TerminalView {
             CommandPaletteItemKind::SavedLayoutDelete { layout_name } => {
                 self.delete_saved_layout_from_palette(layout_name.as_str(), cx)
             }
+            CommandPaletteItemKind::TaskOpenCreateGlobalMode => {
+                self.open_task_create_input_from_palette(None, cx)
+            }
+            CommandPaletteItemKind::TaskOpenCreateLayoutMode { layout_name } => {
+                self.open_task_create_input_from_palette(Some(layout_name.as_str()), cx)
+            }
+            CommandPaletteItemKind::TaskOpenSaveCurrentCommandGlobalMode => {
+                self.open_save_current_command_task_input_from_palette(None, cx)
+            }
+            CommandPaletteItemKind::TaskOpenSaveCurrentCommandLayoutMode { layout_name } => self
+                .open_save_current_command_task_input_from_palette(Some(layout_name.as_str()), cx),
+            CommandPaletteItemKind::TaskCreate {
+                task_name,
+                command,
+                layout_name,
+            } => self.save_task_from_palette(
+                task_name.as_str(),
+                command.as_str(),
+                layout_name.as_deref(),
+                item.enabled,
+                cx,
+            ),
+            CommandPaletteItemKind::Task {
+                task_name,
+                command,
+                working_dir,
+                layout_name,
+            } => self.run_task_from_palette(
+                task_name.as_str(),
+                command.as_str(),
+                working_dir.as_deref(),
+                layout_name.as_deref(),
+                cx,
+            ),
+        }
+    }
+
+    fn run_task_from_palette(
+        &mut self,
+        task_name: &str,
+        command: &str,
+        working_dir: Option<&str>,
+        layout_name: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let command = command.trim();
+        if command.is_empty() {
+            termy_toast::error(format!("Task \"{task_name}\" has no command"));
+            self.notify_overlay(cx);
+            return;
+        }
+
+        self.close_command_palette(cx);
+
+        let mut command_input = command.to_string();
+        if !command_input.ends_with('\n') {
+            command_input.push('\n');
+        }
+
+        self.add_tab_with_working_dir(working_dir, cx);
+        if let Some(tab) = self.tabs.get(self.active_tab)
+            && let Some(terminal) = tab.active_terminal()
+        {
+            terminal.write_input(command_input.as_bytes());
+            cx.notify();
+        }
+        match layout_name {
+            Some(layout_name) => termy_toast::success(format!(
+                "Started task \"{task_name}\" for layout \"{layout_name}\""
+            )),
+            None => termy_toast::success(format!("Started task \"{task_name}\"")),
+        }
+        self.notify_overlay(cx);
+    }
+
+    fn open_task_create_input_from_palette(
+        &mut self,
+        layout_name: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let intent = if layout_name.is_some() {
+            TaskIntent::CreateLayoutInput
+        } else {
+            TaskIntent::CreateGlobalInput
+        };
+        self.command_palette.set_task_intent(intent);
+        self.command_palette.input_mut().clear();
+        self.apply_command_palette_mode_setup(
+            CommandPaletteMode::Tasks,
+            false,
+            CommandPaletteNotifyEvent::InteractionOnly,
+            cx,
+        );
+    }
+
+    fn open_save_current_command_task_input_from_palette(
+        &mut self,
+        layout_name: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = self.active_current_command().map(ToOwned::to_owned) else {
+            termy_toast::info("No active command to save");
+            self.notify_overlay(cx);
+            return;
+        };
+
+        let suggested_name = Self::suggested_task_name_for_command(command.as_str());
+        let prefill = format!("{suggested_name}: {command}");
+        self.open_task_create_input_from_palette(layout_name, cx);
+        self.command_palette.input_mut().set_text(prefill);
+        self.refresh_command_palette_matches(false, cx);
+        self.notify_overlay(cx);
+    }
+
+    fn save_task_from_palette(
+        &mut self,
+        task_name: &str,
+        command: &str,
+        layout_name: Option<&str>,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !enabled {
+            termy_toast::info("Use format name: command and pick a unique task name");
+            self.notify_overlay(cx);
+            return;
+        }
+
+        let task_name = task_name.trim();
+        if !Self::palette_task_name_is_valid(task_name) {
+            termy_toast::error("Task names cannot contain '.'");
+            self.notify_overlay(cx);
+            return;
+        }
+
+        let command = command.trim();
+
+        let task = config::TaskConfig {
+            name: task_name.to_string(),
+            command: command.to_string(),
+            layout: layout_name.map(|value| value.trim().to_string()),
+            working_dir: None,
+        };
+
+        match config::upsert_task(task.clone()) {
+            Ok(()) => {
+                self.command_palette.set_task_intent(TaskIntent::Browse);
+                self.close_command_palette(cx);
+                self.reload_config(cx);
+                match task.layout.as_deref() {
+                    Some(layout_name) => termy_toast::success(format!(
+                        "Saved task \"{}\" for layout \"{}\"",
+                        task.name, layout_name
+                    )),
+                    None => termy_toast::success(format!("Saved task \"{}\"", task.name)),
+                }
+                self.notify_overlay(cx);
+            }
+            Err(error) => {
+                termy_toast::error(error);
+                self.notify_overlay(cx);
+            }
         }
     }
 
@@ -738,6 +1185,20 @@ impl TerminalView {
             CommandPaletteNotifyEvent::InteractionOnly,
             cx,
         );
+    }
+
+    fn open_tasks_palette_from_saved_layout(&mut self, layout_name: &str, cx: &mut Context<Self>) {
+        let Some(current_layout) = self.current_named_layout.as_deref() else {
+            termy_toast::info("Load a saved layout before running layout tasks");
+            self.notify_overlay(cx);
+            return;
+        };
+        if !current_layout.eq_ignore_ascii_case(layout_name) {
+            termy_toast::info("Load that saved layout first to run its tasks");
+            self.notify_overlay(cx);
+            return;
+        }
+        self.open_tasks_palette(cx);
     }
 
     fn save_current_layout_from_palette(
@@ -920,6 +1381,10 @@ impl TerminalView {
                 termy_toast::info("Opened settings file");
                 self.notify_overlay(cx);
             }
+            CommandAction::PrettifyConfig => {
+                termy_toast::success("Prettified settings file");
+                self.notify_overlay(cx);
+            }
             CommandAction::NewTab => termy_toast::success("Opened new tab"),
             CommandAction::CloseTab => termy_toast::info("Closed active tab"),
             CommandAction::ClosePaneOrTab => termy_toast::info("Closed active pane or tab"),
@@ -931,6 +1396,7 @@ impl TerminalView {
             | CommandAction::SwitchTheme
             | CommandAction::ManageTmuxSessions
             | CommandAction::ManageSavedLayouts
+            | CommandAction::RunTask
             | CommandAction::AppInfo
             | CommandAction::RestartApp
             | CommandAction::RenameTab
@@ -975,7 +1441,8 @@ impl TerminalView {
             | CommandAction::MinimizeWindow
             | CommandAction::InstallCli
             | CommandAction::ToggleAiInput
-            | CommandAction::ToggleAgentSidebar => {}
+            | CommandAction::ToggleAgentSidebar
+            | CommandAction::ToggleVerticalTabSidebar => {}
         }
     }
 
@@ -1004,6 +1471,7 @@ impl TerminalView {
             CommandAction::SwitchTheme
                 | CommandAction::ManageTmuxSessions
                 | CommandAction::ManageSavedLayouts
+                | CommandAction::RunTask
         )
     }
 }
@@ -1020,6 +1488,7 @@ mod tests {
                 TmuxSessionIntent::AttachOrSwitch,
                 CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
+                TaskIntent::Browse,
             ),
             CommandPaletteEscapeAction::ClosePalette
         );
@@ -1029,6 +1498,7 @@ mod tests {
                 TmuxSessionIntent::AttachOrSwitch,
                 CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
+                TaskIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToCommands
         );
@@ -1038,6 +1508,7 @@ mod tests {
                 TmuxSessionIntent::AttachOrSwitch,
                 CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
+                TaskIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToCommands
         );
@@ -1047,8 +1518,19 @@ mod tests {
                 TmuxSessionIntent::RenameInput,
                 CommandPaletteCommandIntent::Browse,
                 SavedLayoutIntent::Browse,
+                TaskIntent::Browse,
             ),
             CommandPaletteEscapeAction::BackToTmuxRenameSelect
+        );
+        assert_eq!(
+            TerminalView::command_palette_escape_action(
+                CommandPaletteMode::Tasks,
+                TmuxSessionIntent::AttachOrSwitch,
+                CommandPaletteCommandIntent::Browse,
+                SavedLayoutIntent::Browse,
+                TaskIntent::CreateGlobalInput,
+            ),
+            CommandPaletteEscapeAction::BackToTaskBrowse
         );
     }
 
@@ -1083,6 +1565,9 @@ mod tests {
         ));
         assert!(TerminalView::command_palette_should_stay_open(
             CommandAction::ManageSavedLayouts
+        ));
+        assert!(TerminalView::command_palette_should_stay_open(
+            CommandAction::RunTask
         ));
         assert!(!TerminalView::command_palette_should_stay_open(
             CommandAction::NewTab
@@ -1200,5 +1685,58 @@ mod tests {
             ),
             "Command is currently unavailable"
         );
+    }
+
+    #[test]
+    fn saved_layout_tasks_item_requires_browse_mode_empty_query_and_matching_tasks() {
+        let item = TerminalView::saved_layout_tasks_item_for_state(
+            SavedLayoutIntent::Browse,
+            "",
+            Some("dashboard"),
+            true,
+        )
+        .expect("saved layout tasks item");
+        assert_eq!(item.title, "Run Tasks for \"dashboard\"");
+        assert_eq!(
+            item.kind,
+            CommandPaletteItemKind::SavedLayoutOpenTasksMode {
+                layout_name: "dashboard".to_string(),
+            }
+        );
+
+        assert_eq!(
+            TerminalView::saved_layout_tasks_item_for_state(
+                SavedLayoutIntent::Browse,
+                "dash",
+                Some("dashboard"),
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            TerminalView::saved_layout_tasks_item_for_state(
+                SavedLayoutIntent::SaveInput,
+                "",
+                Some("dashboard"),
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            TerminalView::saved_layout_tasks_item_for_state(
+                SavedLayoutIntent::Browse,
+                "",
+                Some("dashboard"),
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn palette_task_name_validation_rejects_dot_names() {
+        assert!(TerminalView::palette_task_name_is_valid("build"));
+        assert!(TerminalView::palette_task_name_is_valid(" build "));
+        assert!(!TerminalView::palette_task_name_is_valid("build.web"));
     }
 }

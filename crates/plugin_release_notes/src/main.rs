@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            HostRpcMessage::Hello(_) | HostRpcMessage::Shutdown => {}
+            HostRpcMessage::Event(_) | HostRpcMessage::Hello(_) | HostRpcMessage::Shutdown => {}
         }
         Ok(())
     })?;

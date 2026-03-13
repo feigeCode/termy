@@ -322,7 +322,8 @@ define_root_settings! {
     (TmuxShowActivePaneBorder, "tmux_show_active_pane_border", [], Terminal, "TMUX", "Show Active Pane Border", "Show active tmux pane border highlight in managed sessions", ["tmux", "pane", "border", "highlight"], RootSettingValueKind::Boolean, false),
     (WorkingDir, "working_dir", [], Advanced, "STARTUP", "Working Directory", "Initial directory for new sessions", ["working directory", "cwd", "startup", "path"], RootSettingValueKind::Text, false),
     (WorkingDirFallback, "working_dir_fallback", ["default_working_dir"], Advanced, "STARTUP", "Working Directory Fallback", "Directory used when working_dir is unset", ["working directory", "fallback", "cwd", "startup"], RootSettingValueKind::Enum, false),
-    (WarnOnQuitWithRunningProcess, "warn_on_quit_with_running_process", [], Advanced, "SAFETY", "Warn On Quit", "Warn before quitting when a tab has an active process", ["quit", "warning", "safety", "process"], RootSettingValueKind::Boolean, false),
+    (WarnOnQuit, "warn_on_quit", [], Advanced, "SAFETY", "Always Warn On Quit", "Warn every time you try to quit the app", ["quit", "warning", "safety", "always"], RootSettingValueKind::Boolean, false),
+    (WarnOnQuitWithRunningProcess, "warn_on_quit_with_running_process", [], Advanced, "SAFETY", "Warn On Quit With Running Process", "Warn before quitting when a tab has an active process", ["quit", "warning", "safety", "process"], RootSettingValueKind::Boolean, false),
     (TabTitlePriority, "tab_title_priority", [], Tabs, "TAB TITLES", "Title Priority", "Exact source priority for tab titles", ["tab", "title", "priority", "source"], RootSettingValueKind::Special, false),
     (TabTitleMode, "tab_title_mode", [], Tabs, "TAB TITLES", "Title Mode", "How tab titles are determined", ["tab", "title", "mode", "smart", "shell", "explicit", "static"], RootSettingValueKind::Enum, false),
     (TabTitleFallback, "tab_title_fallback", [], Tabs, "TAB TITLES", "Fallback Title", "Default tab title when no source is available", ["tab", "title", "fallback"], RootSettingValueKind::Text, false),
@@ -333,6 +334,9 @@ define_root_settings! {
     (TabCloseVisibility, "tab_close_visibility", [], Tabs, "TAB STRIP", "Close Button Visibility", "When tab close buttons are visible", ["tab", "close", "visibility", "hover"], RootSettingValueKind::Enum, false),
     (TabWidthMode, "tab_width_mode", [], Tabs, "TAB STRIP", "Tab Width Mode", "How tab widths react to active state", ["tab", "width", "layout", "active"], RootSettingValueKind::Enum, false),
     (TabSwitchModifierHints, "tab_switch_modifier_hints", [], Tabs, "TAB STRIP", "Show Tab Switch Hints", "Show secondary+1..9 number badges on the first nine tabs while the secondary modifier is held", ["tab", "switch", "hints", "modifier", "secondary", "shortcuts"], RootSettingValueKind::Boolean, false),
+    (VerticalTabs, "vertical_tabs", [], Tabs, "TAB STRIP", "Vertical Tabs", "Move the tab strip into a left sidebar like cmux", ["tab", "tabs", "vertical", "sidebar", "left", "cmux"], RootSettingValueKind::Boolean, false),
+    (VerticalTabsWidth, "vertical_tabs_width", [], Tabs, "TAB STRIP", "Vertical Tabs Width", "Saved width for the vertical tab sidebar in pixels", ["tab", "tabs", "vertical", "width", "sidebar"], RootSettingValueKind::Numeric, false),
+    (VerticalTabsMinimized, "vertical_tabs_minimized", [], Tabs, "TAB STRIP", "Vertical Tabs Minimized", "Start vertical tabs in the collapsed state", ["tab", "tabs", "vertical", "minimized", "collapsed", "sidebar"], RootSettingValueKind::Boolean, false),
     (ShowTermyInTitlebar, "show_termy_in_titlebar", [], Tabs, "TITLE BAR", "Show Termy In Titlebar", "Show or hide the termy branding in the titlebar", ["titlebar", "branding", "tabs"], RootSettingValueKind::Boolean, false),
     (Shell, "shell", [], Terminal, "SHELL", "Shell", "Executable used for new sessions", ["shell", "bash", "zsh", "fish"], RootSettingValueKind::Text, false),
     (Term, "term", [], Terminal, "SHELL", "TERM", "TERM value exposed to child applications", ["term", "terminal", "env"], RootSettingValueKind::Text, false),
@@ -437,6 +441,7 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
             WorkingDirFallback::Home => "home".to_string(),
             WorkingDirFallback::Process => "process".to_string(),
         }),
+        RootSettingId::WarnOnQuit => Some(config.warn_on_quit.to_string()),
         RootSettingId::WarnOnQuitWithRunningProcess => {
             Some(config.warn_on_quit_with_running_process.to_string())
         }
@@ -478,6 +483,9 @@ pub fn root_setting_default_value(config: &AppConfig, id: RootSettingId) -> Opti
             TabWidthMode::ActiveGrowSticky => "active_grow_sticky".to_string(),
         }),
         RootSettingId::TabSwitchModifierHints => Some(config.tab_switch_modifier_hints.to_string()),
+        RootSettingId::VerticalTabs => Some(config.vertical_tabs.to_string()),
+        RootSettingId::VerticalTabsWidth => Some(config.vertical_tabs_width.to_string()),
+        RootSettingId::VerticalTabsMinimized => Some(config.vertical_tabs_minimized.to_string()),
         RootSettingId::ShowTermyInTitlebar => Some(config.show_termy_in_titlebar.to_string()),
         RootSettingId::Shell => config.shell.clone(),
         RootSettingId::Term => Some(config.term.clone()),

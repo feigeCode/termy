@@ -468,6 +468,16 @@ define_commands!(
         None
     ),
     (
+        RunTask,
+        TERMINAL_CONTEXT,
+        Some(palette(
+            "Run Task",
+            "task run command layout session",
+            CommandPaletteVisibility::Always
+        )),
+        None
+    ),
+    (
         SplitPaneVertical,
         TERMINAL_CONTEXT,
         Some(palette(
@@ -717,6 +727,16 @@ define_commands!(
             MenuActionRole::Normal
         ))
     ),
+    (
+        PrettifyConfig,
+        GLOBAL_CONTEXT,
+        Some(palette(
+            "Prettify Settings File",
+            "prettify format config settings file tidy sort",
+            CommandPaletteVisibility::Always
+        )),
+        None
+    ),
     (ImportThemeStoreAuth, GLOBAL_CONTEXT, None, None),
     (
         ImportColors,
@@ -951,6 +971,22 @@ define_commands!(
             MenuActionRole::Normal
         ))
     ),
+    (
+        ToggleVerticalTabSidebar,
+        TERMINAL_CONTEXT,
+        Some(palette(
+            "Toggle Vertical Tab Sidebar",
+            "vertical tabs sidebar collapse minimize left",
+            CommandPaletteVisibility::Always
+        )),
+        Some(menu(
+            MenuRoot::View,
+            0,
+            "Vertical Tab Sidebar",
+            MenuVisibility::Always,
+            MenuActionRole::Normal
+        ))
+    ),
 );
 
 termy_command_core::termy_command_catalog!(impl_command_action_id_mapping);
@@ -976,6 +1012,7 @@ actions!(
 
 pub fn inline_input_keybindings() -> Vec<KeyBinding> {
     vec![
+        KeyBinding::new("secondary-c", Copy, INLINE_INPUT_CONTEXT),
         KeyBinding::new("secondary-v", Paste, INLINE_INPUT_CONTEXT),
         KeyBinding::new("backspace", InlineBackspace, INLINE_INPUT_CONTEXT),
         KeyBinding::new("delete", InlineDelete, INLINE_INPUT_CONTEXT),
@@ -1011,7 +1048,7 @@ mod tests {
         inline_input_keybindings,
     };
     use std::collections::HashSet;
-    use termy_command_core::{CommandCapabilities, CommandId, CommandUnavailableReason};
+    use termy_command_core::{CommandCapabilities, CommandId};
 
     #[test]
     fn command_catalog_contains_unique_actions() {
@@ -1254,6 +1291,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn inline_input_keybindings_include_copy_binding() {
+        assert_eq!(inline_input_keybindings().len(), 18);
     }
 
     #[test]

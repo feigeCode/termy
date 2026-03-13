@@ -395,10 +395,7 @@ impl SettingsWindow {
         self.render_settings_group("SCROLLING", rows)
     }
 
-    pub(super) fn render_terminal_clipboard_group(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn render_terminal_clipboard_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let copy_on_select = self.config.copy_on_select;
         let copy_on_select_toast = self.config.copy_on_select_toast;
 
@@ -1056,9 +1053,13 @@ impl SettingsWindow {
     pub(super) fn render_tabs_strip_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let close_visibility = self.editable_field_value(EditableField::TabCloseVisibility);
         let width_mode = self.editable_field_value(EditableField::TabWidthMode);
+        let vertical_tabs_width = self.editable_field_value(EditableField::VerticalTabsWidth);
         let show_switch_hints = self.config.tab_switch_modifier_hints;
+        let vertical_tabs = self.config.vertical_tabs;
+        let vertical_tabs_minimized = self.config.vertical_tabs_minimized;
         let close_visibility_meta = Self::setting_metadata_or_fallback("tab_close_visibility");
         let width_mode_meta = Self::setting_metadata_or_fallback("tab_width_mode");
+        let vertical_width_meta = Self::setting_metadata_or_fallback("vertical_tabs_width");
         let rows = vec![
             self.render_editable_row(
                 "tab_close_visibility",
@@ -1076,11 +1077,35 @@ impl SettingsWindow {
                 width_mode,
                 cx,
             ),
+            self.render_editable_row(
+                "vertical_tabs_width",
+                EditableField::VerticalTabsWidth,
+                vertical_width_meta.title,
+                vertical_width_meta.description,
+                format!("{}px", vertical_tabs_width),
+                cx,
+            ),
             self.render_root_bool_setting_row(
                 "tab_switch_modifier_hints",
                 "tab_switch_modifier_hints-toggle",
                 RootSettingId::TabSwitchModifierHints,
                 show_switch_hints,
+                "Saved",
+                cx,
+            ),
+            self.render_root_bool_setting_row(
+                "vertical_tabs",
+                "vertical_tabs-toggle",
+                RootSettingId::VerticalTabs,
+                vertical_tabs,
+                "Saved",
+                cx,
+            ),
+            self.render_root_bool_setting_row(
+                "vertical_tabs_minimized",
+                "vertical_tabs_minimized-toggle",
+                RootSettingId::VerticalTabsMinimized,
+                vertical_tabs_minimized,
                 "Saved",
                 cx,
             ),
@@ -1547,11 +1572,14 @@ impl SettingsWindow {
         let text_muted = self.text_muted();
         let commands_count = plugin.commands.len();
         let permissions_count = plugin.permissions.len();
+        let subscriptions_count = plugin.subscriptions.len();
         let capabilities_count = plugin.capabilities.len();
         let description = plugin
             .description
             .clone()
             .unwrap_or_else(|| "No description provided.".to_string());
+        let panel = plugin.panel.clone();
+        let plugin_id_for_panel_action = plugin.id.clone();
         let status = if let Some(error) = plugin.load_error.clone() {
             format!("Failed to start: {error}")
         } else if plugin.is_running {
@@ -1698,10 +1726,101 @@ impl SettingsWindow {
                     .text_color(text_muted)
                     .line_height(px(17.0))
                     .child(format!(
-                        "{} command(s), {} permission(s), {} capability(s)",
-                        commands_count, permissions_count, capabilities_count
+                        "{} command(s), {} permission(s), {} subscription(s), {} capability(s)",
+                        commands_count, permissions_count, subscriptions_count, capabilities_count
                     )),
             )
+            .when_some(panel, |s, panel| {
+                let panel_actions = panel
+                    .actions
+                    .iter()
+                    .cloned()
+                    .map(|action| {
+                        let action_enabled = plugin.is_running
+                            && action.enabled
+                            && plugin
+                                .capabilities
+                                .contains(&termy_plugin_core::PluginCapability::CommandProvider);
+                        let action_fill = if action_enabled {
+                            self.accent_with_alpha(0.18)
+                        } else {
+                            bg_card
+                        };
+                        let action_border = if action_enabled {
+                            self.accent_with_alpha(0.38)
+                        } else {
+                            self.border_color()
+                        };
+                        let action_text = if action_enabled { accent } else { text_muted };
+                        let plugin_id = plugin_id_for_panel_action.clone();
+                        let command_id = action.command_id.clone();
+
+                        div()
+                            .id(SharedString::from(format!(
+                                "plugin-panel-action-{}-{}",
+                                plugin.id, action.command_id
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(action_fill)
+                            .border_1()
+                            .border_color(action_border)
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(action_text)
+                            .when(action_enabled, |button| button.cursor_pointer())
+                            .when(action_enabled, |button| button.hover(move |s| s.bg(hover_bg)))
+                            .child(action.label)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if !action_enabled {
+                                    termy_toast::info("Plugin panel action is unavailable");
+                                    return;
+                                }
+                                match crate::plugins::invoke_plugin_command(&plugin_id, &command_id)
+                                {
+                                    Ok(()) => {
+                                        view.refresh_plugin_inventory();
+                                        termy_toast::success("Triggered plugin panel action");
+                                    }
+                                    Err(error) => termy_toast::error(error),
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>();
+
+                s.child(
+                    div()
+                        .px_3()
+                        .py_3()
+                        .bg(bg_input)
+                        .border_1()
+                        .border_color(self.accent_with_alpha(0.22))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(text_primary)
+                                .child(panel.title),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(text_secondary)
+                                .line_height(px(17.0))
+                                .child(panel.body),
+                        )
+                        .when(!panel_actions.is_empty(), |panel_card| {
+                            panel_card
+                                .child(div().flex().flex_wrap().gap_2().children(panel_actions))
+                        }),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -1883,7 +2002,8 @@ impl SettingsWindow {
             .clone()
             .unwrap_or_else(|| "Not set".to_string());
         let working_dir_fallback = self.editable_field_value(EditableField::WorkingDirFallback);
-        let warn_on_quit = self.config.warn_on_quit_with_running_process;
+        let always_warn_on_quit = self.config.warn_on_quit;
+        let warn_on_quit_with_running_process = self.config.warn_on_quit_with_running_process;
         let native_tab_persistence = self.config.native_tab_persistence;
         let native_layout_autosave = self.config.native_layout_autosave;
         let native_buffer_persistence = self.config.native_buffer_persistence;
@@ -1957,14 +2077,24 @@ impl SettingsWindow {
         ];
         let startup_group = self.render_settings_group("STARTUP", startup_rows);
 
-        let safety_rows = vec![self.render_root_bool_setting_row(
-            "warn_on_quit_with_running_process",
-            "warn_on_quit-toggle",
-            RootSettingId::WarnOnQuitWithRunningProcess,
-            warn_on_quit,
-            "Saved",
-            cx,
-        )];
+        let safety_rows = vec![
+            self.render_root_bool_setting_row(
+                "warn_on_quit",
+                "warn_on_quit-toggle",
+                RootSettingId::WarnOnQuit,
+                always_warn_on_quit,
+                "Saved",
+                cx,
+            ),
+            self.render_root_bool_setting_row(
+                "warn_on_quit_with_running_process",
+                "warn_on_quit_with_running_process-toggle",
+                RootSettingId::WarnOnQuitWithRunningProcess,
+                warn_on_quit_with_running_process,
+                "Saved",
+                cx,
+            ),
+        ];
         let safety_group = self.render_settings_group("SAFETY", safety_rows);
 
         let window_rows = vec![

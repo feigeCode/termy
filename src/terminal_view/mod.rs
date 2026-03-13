@@ -2,7 +2,7 @@ use crate::colors::TerminalColors;
 use crate::commands::{self, CommandAction};
 use crate::config::{
     self, AppConfig, CursorStyle as AppCursorStyle, PaneFocusEffect, TabCloseVisibility,
-    TabTitleConfig, TabTitleSource, TabWidthMode, TerminalScrollbarStyle,
+    TabTitleConfig, TabTitleSource, TabWidthMode, TaskConfig, TerminalScrollbarStyle,
     TerminalScrollbarVisibility,
 };
 use crate::keybindings;
@@ -212,15 +212,34 @@ struct PaneResizeDragState {
 struct AgentSidebarResizeDragState;
 
 #[derive(Clone, Copy, Debug)]
+struct VerticalTabStripResizeDragState;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingCursorMoveClick {
+    pane_id: String,
+    selection_start: SelectionPos,
+    start_cell: CellPos,
+    target: CellPos,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingCursorMovePreview {
+    pane_id: String,
+    target: CellPos,
+    style: TerminalCursorStyle,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct TerminalScrollbarHit {
     local_y: f32,
     thumb_hit: bool,
     thumb_top: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct TerminalContextMenuState {
     anchor_position: gpui::Point<Pixels>,
+    buffer_position: Option<SelectionPos>,
     can_copy: bool,
     can_paste: bool,
     can_ask_ai: bool,
@@ -730,6 +749,7 @@ struct TerminalTab {
     manual_title: Option<String>,
     explicit_title: Option<String>,
     shell_title: Option<String>,
+    current_command: Option<String>,
     pending_command_title: Option<String>,
     pending_command_token: u64,
     last_prompt_cwd: Option<String>,
@@ -769,7 +789,7 @@ impl TerminalTab {
 
 enum ExplicitTitlePayload {
     Prompt { title: String, cwd: String },
-    Command(String),
+    Command { title: String, command: String },
     Title(String),
 }
 
@@ -1053,10 +1073,15 @@ pub struct TerminalView {
     theme_id: String,
     colors: TerminalColors,
     inactive_tab_scrollback: Option<usize>,
+    tasks: Vec<TaskConfig>,
+    warn_on_quit: bool,
     warn_on_quit_with_running_process: bool,
     tab_title: TabTitleConfig,
     tab_close_visibility: TabCloseVisibility,
     tab_width_mode: TabWidthMode,
+    vertical_tabs: bool,
+    vertical_tabs_width: f32,
+    vertical_tabs_minimized: bool,
     show_termy_in_titlebar: bool,
     tab_shell_integration: TabTitleShellIntegration,
     configured_working_dir: Option<String>,
@@ -1104,6 +1129,8 @@ pub struct TerminalView {
     selection_head: Option<SelectionPos>,
     selection_dragging: bool,
     selection_moved: bool,
+    pending_cursor_move_click: Option<PendingCursorMoveClick>,
+    pending_cursor_move_preview: Option<PendingCursorMovePreview>,
     terminal_context_menu: Option<TerminalContextMenuState>,
     hovered_link: Option<HoveredLink>,
     hovered_toast: Option<u64>,
@@ -1135,6 +1162,7 @@ pub struct TerminalView {
     terminal_scrollbar_track_hold_active: bool,
     pane_resize_drag: Option<PaneResizeDragState>,
     agent_sidebar_resize_drag: Option<AgentSidebarResizeDragState>,
+    vertical_tab_strip_resize_drag: Option<VerticalTabStripResizeDragState>,
     terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache,
     /// Cached cell dimensions
     cell_size: Option<Size<Pixels>>,
@@ -1501,6 +1529,7 @@ impl TerminalView {
             manual_title: None,
             explicit_title: predicted_prompt_title,
             shell_title: None,
+            current_command: None,
             pending_command_title: None,
             pending_command_token: 0,
             last_prompt_cwd: None,
@@ -2107,10 +2136,17 @@ impl TerminalView {
             theme_id,
             colors,
             inactive_tab_scrollback: config.inactive_tab_scrollback,
+            tasks: config.tasks.clone(),
+            warn_on_quit: config.warn_on_quit,
             warn_on_quit_with_running_process: config.warn_on_quit_with_running_process,
             tab_title,
             tab_close_visibility: config.tab_close_visibility,
             tab_width_mode: config.tab_width_mode,
+            vertical_tabs: config.vertical_tabs,
+            vertical_tabs_width: config
+                .vertical_tabs_width
+                .clamp(VERTICAL_TAB_STRIP_MIN_WIDTH, VERTICAL_TAB_STRIP_MAX_WIDTH),
+            vertical_tabs_minimized: config.vertical_tabs_minimized,
             show_termy_in_titlebar: config.show_termy_in_titlebar,
             tab_shell_integration,
             configured_working_dir,
@@ -2163,6 +2199,8 @@ impl TerminalView {
             selection_head: None,
             selection_dragging: false,
             selection_moved: false,
+            pending_cursor_move_click: None,
+            pending_cursor_move_preview: None,
             terminal_context_menu: None,
             hovered_link: None,
             hovered_toast: None,
@@ -2194,6 +2232,7 @@ impl TerminalView {
             terminal_scrollbar_track_hold_active: false,
             pane_resize_drag: None,
             agent_sidebar_resize_drag: None,
+            vertical_tab_strip_resize_drag: None,
             terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache::default(),
             cell_size: None,
             search_open: false,
@@ -2329,15 +2368,26 @@ impl TerminalView {
             let binary = config.tmux_binary.trim().to_string();
             (!binary.is_empty()).then_some(binary)
         };
+        let previous_theme_id = self.theme_id.clone();
         let previous_font_family = self.font_family.clone();
         let previous_font_size = self.font_size;
         self.theme_id = config.theme.clone();
         self.colors = TerminalColors::from_theme(&config.theme, &config.colors);
         self.inactive_tab_scrollback = config.inactive_tab_scrollback;
+        self.tasks = config.tasks.clone();
+        self.warn_on_quit = config.warn_on_quit;
         self.warn_on_quit_with_running_process = config.warn_on_quit_with_running_process;
         self.tab_title = config.tab_title.clone();
         let tab_close_visibility_changed = self.tab_close_visibility != config.tab_close_visibility;
         let tab_width_mode_changed = self.tab_width_mode != config.tab_width_mode;
+        let vertical_tabs_changed = self.vertical_tabs != config.vertical_tabs;
+        let vertical_tabs_width = config
+            .vertical_tabs_width
+            .clamp(VERTICAL_TAB_STRIP_MIN_WIDTH, VERTICAL_TAB_STRIP_MAX_WIDTH);
+        let vertical_tabs_width_changed =
+            (self.vertical_tabs_width - vertical_tabs_width).abs() > f32::EPSILON;
+        let vertical_tabs_minimized_changed =
+            self.vertical_tabs_minimized != config.vertical_tabs_minimized;
         let tab_switch_modifier_hints_changed = self
             .tab_strip
             .switch_hints
@@ -2345,8 +2395,16 @@ impl TerminalView {
         let show_termy_in_titlebar_changed =
             self.show_termy_in_titlebar != config.show_termy_in_titlebar;
         let show_debug_overlay_changed = self.show_debug_overlay != config.show_debug_overlay;
+        if self.theme_id != previous_theme_id {
+            crate::plugins::emit_plugin_event(termy_plugin_core::HostEvent::ThemeChanged {
+                theme_id: self.theme_id.clone(),
+            });
+        }
         self.tab_close_visibility = config.tab_close_visibility;
         self.tab_width_mode = config.tab_width_mode;
+        self.vertical_tabs = config.vertical_tabs;
+        self.vertical_tabs_width = vertical_tabs_width;
+        self.vertical_tabs_minimized = config.vertical_tabs_minimized;
         self.show_termy_in_titlebar = config.show_termy_in_titlebar;
         self.show_debug_overlay = config.show_debug_overlay;
         self.tab_shell_integration = TabTitleShellIntegration {
@@ -2418,6 +2476,11 @@ impl TerminalView {
             }
         }
         if agent_sidebar_enabled_changed || agent_sidebar_width_changed {
+            self.clear_pane_render_caches();
+            self.clear_terminal_scrollbar_marker_cache();
+            self.cell_size = None;
+        }
+        if vertical_tabs_changed || vertical_tabs_width_changed || vertical_tabs_minimized_changed {
             self.clear_pane_render_caches();
             self.clear_terminal_scrollbar_marker_cache();
             self.cell_size = None;
@@ -2495,7 +2558,12 @@ impl TerminalView {
         for index in 0..self.tabs.len() {
             self.refresh_tab_title(index);
         }
-        if tab_close_visibility_changed || tab_width_mode_changed || show_termy_in_titlebar_changed
+        if tab_close_visibility_changed
+            || tab_width_mode_changed
+            || vertical_tabs_changed
+            || vertical_tabs_width_changed
+            || vertical_tabs_minimized_changed
+            || show_termy_in_titlebar_changed
         {
             self.mark_tab_strip_layout_dirty();
         }
@@ -2508,6 +2576,17 @@ impl TerminalView {
         }
 
         true
+    }
+
+    fn emit_active_tab_changed_plugin_event(&self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+
+        crate::plugins::emit_plugin_event(termy_plugin_core::HostEvent::ActiveTabChanged {
+            tab_index: self.active_tab,
+            tab_title: tab.title.clone(),
+        });
     }
 
     #[cfg(not(test))]

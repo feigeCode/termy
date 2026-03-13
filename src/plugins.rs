@@ -3,19 +3,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use termy_plugin_core::{
-    PluginCapability, PluginCommandContribution, PluginManifest, PluginPermission,
+    HostEvent, PluginCapability, PluginCommandContribution, PluginEventSubscription,
+    PluginManifest, PluginPanelUpdate, PluginPermission,
 };
 use termy_plugin_host::{PluginHost, default_plugins_dir, discover_plugins};
 
 static PLUGIN_HOST: OnceLock<Mutex<PluginHost>> = OnceLock::new();
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PluginInventory {
     pub(crate) root_dir: PathBuf,
     pub(crate) entries: Vec<PluginInventoryEntry>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PluginInventoryEntry {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -27,11 +28,13 @@ pub(crate) struct PluginInventoryEntry {
     pub(crate) entrypoint: PathBuf,
     pub(crate) autostart: bool,
     pub(crate) permissions: Vec<PluginPermission>,
+    pub(crate) subscriptions: Vec<PluginEventSubscription>,
     pub(crate) commands: Vec<PluginCommandContribution>,
     pub(crate) capabilities: Vec<PluginCapability>,
     pub(crate) is_running: bool,
     pub(crate) load_error: Option<String>,
     pub(crate) recent_logs: Vec<String>,
+    pub(crate) panel: Option<PluginPanelUpdate>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +101,10 @@ pub(crate) fn initialize_plugins(host_version: &str) {
         );
     }
 
+    let mut host = host;
+    host.emit_event(HostEvent::AppStarted {
+        host_version: host_version.to_string(),
+    });
     let _ = PLUGIN_HOST.set(Mutex::new(host));
 }
 
@@ -124,11 +131,13 @@ pub(crate) fn plugin_inventory() -> Result<PluginInventory, String> {
             entrypoint: plugin.resolved_entrypoint(),
             autostart: plugin.manifest.autostart,
             permissions: plugin.manifest.permissions.clone(),
+            subscriptions: plugin.manifest.subscribes.events.clone(),
             commands: plugin.manifest.contributes.commands.clone(),
             capabilities: Vec::new(),
             is_running: false,
             load_error: None,
             recent_logs: Vec::new(),
+            panel: None,
         })
         .collect::<Vec<_>>();
 
@@ -141,6 +150,7 @@ pub(crate) fn plugin_inventory() -> Result<PluginInventory, String> {
                 entry.is_running = true;
                 entry.capabilities = running.capabilities().to_vec();
                 entry.recent_logs = host.recent_logs(running.id());
+                entry.panel = host.latest_panel(running.id());
             }
         }
 
@@ -272,6 +282,17 @@ pub(crate) fn invoke_plugin_command(plugin_id: &str, command_id: &str) -> Result
     host.invoke_command(plugin_id, command_id)
 }
 
+pub(crate) fn emit_plugin_event(event: HostEvent) {
+    let Some(host) = host_lock() else {
+        return;
+    };
+    let Ok(mut host) = host.lock() else {
+        log::warn!("Plugin host lock poisoned while emitting plugin event");
+        return;
+    };
+    host.emit_event(event);
+}
+
 pub(crate) fn command_palette_entries() -> Result<Vec<PluginCommandPaletteEntry>, String> {
     let inventory = plugin_inventory()?;
     let mut entries = Vec::new();
@@ -287,12 +308,16 @@ pub(crate) fn command_palette_entries() -> Result<Vec<PluginCommandPaletteEntry>
             )
             .trim()
             .to_string();
+            let enabled = plugin.is_running
+                && plugin
+                    .capabilities
+                    .contains(&PluginCapability::CommandProvider);
             entries.push(PluginCommandPaletteEntry {
                 plugin_id: plugin.id.clone(),
                 command_id: command.id,
                 title: format!("{}: {}", plugin.name, command.title),
                 keywords,
-                enabled: plugin.is_running,
+                enabled,
             });
         }
     }

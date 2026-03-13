@@ -18,12 +18,16 @@ category: Plugins
 
 ```rust
 PluginManifest
+PluginSubscriptions
+HostEvent
 PluginContributions
 PluginCommandContribution
+PluginPanelAction
 HostHello
 HostCommandInvocation
 PluginHello
 PluginLogMessage
+PluginPanelUpdate
 PluginToastMessage
 DiscoveredPlugin
 ```
@@ -33,6 +37,7 @@ DiscoveredPlugin
 ```rust
 PluginRuntime
 PluginPermission
+PluginEventSubscription
 HostRpcMessage
 PluginRpcMessage
 PluginCapability
@@ -78,6 +83,7 @@ Optional fields include:
 - `runtime` (`executable`)
 - `autostart` (defaults to `true`)
 - `permissions`
+- `subscribes.events`
 - `contributes.commands`
 
 Validation entrypoints:
@@ -91,6 +97,7 @@ Validation entrypoints:
 
 - `filesystem_read`
 - `filesystem_write`
+- `host_events`
 - `network`
 - `shell`
 - `clipboard`
@@ -105,6 +112,7 @@ Validation entrypoints:
 
 - `hello` (`HostHello`)
 - `invoke_command` (`HostCommandInvocation`)
+- `event` (`HostEvent`)
 - `shutdown`
 - `ping`
 
@@ -115,7 +123,20 @@ Validation entrypoints:
 - `hello` (`PluginHello`)
 - `log` (`PluginLogMessage`)
 - `toast` (`PluginToastMessage`)
+- `panel` (`PluginPanelUpdate`)
 - `pong`
+
+`PluginPanelUpdate` contains:
+
+- `title`
+- `body`
+- `actions` (`Vec<PluginPanelAction>`, defaults to empty)
+
+`PluginPanelAction` contains:
+
+- `command_id`
+- `label`
+- `enabled` (defaults to `true`)
 
 ## Capabilities
 

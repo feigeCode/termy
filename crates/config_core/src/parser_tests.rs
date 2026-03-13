@@ -278,14 +278,19 @@ fn bool_root_setting_value(config: &AppConfig, setting: RootSettingId) -> Option
         RootSettingId::ShowPluginsTab => Some(config.show_plugins_tab),
         RootSettingId::ShowDebugOverlay => Some(config.show_debug_overlay),
         RootSettingId::TmuxShowActivePaneBorder => Some(config.tmux_show_active_pane_border),
+        RootSettingId::WarnOnQuit => Some(config.warn_on_quit),
         RootSettingId::WarnOnQuitWithRunningProcess => {
             Some(config.warn_on_quit_with_running_process)
         }
         RootSettingId::TabTitleShellIntegration => Some(config.tab_title.shell_integration),
         RootSettingId::TabSwitchModifierHints => Some(config.tab_switch_modifier_hints),
+        RootSettingId::VerticalTabs => Some(config.vertical_tabs),
+        RootSettingId::VerticalTabsMinimized => Some(config.vertical_tabs_minimized),
         RootSettingId::ShowTermyInTitlebar => Some(config.show_termy_in_titlebar),
         RootSettingId::CursorBlink => Some(config.cursor_blink),
         RootSettingId::BackgroundBlur => Some(config.background_blur),
+        RootSettingId::CopyOnSelect => Some(config.copy_on_select),
+        RootSettingId::CopyOnSelectToast => Some(config.copy_on_select_toast),
         RootSettingId::CommandPaletteShowKeybinds => Some(config.command_palette_show_keybinds),
         _ => None,
     }
@@ -339,6 +344,7 @@ fn numeric_keys_parse_table_driven() {
 
     let positive_float_cases = [
         ("agent_sidebar_width", 360.0, defaults.agent_sidebar_width),
+        ("vertical_tabs_width", 260.0, defaults.vertical_tabs_width),
         ("window_width", 1100.0, defaults.window_width),
         ("window_height", 700.0, defaults.window_height),
         ("font_size", 16.0, defaults.font_size),
@@ -347,6 +353,7 @@ fn numeric_keys_parse_table_driven() {
         let valid = parse(&format!("{} = {}\n", key, expected));
         let parsed = match key {
             "agent_sidebar_width" => valid.agent_sidebar_width,
+            "vertical_tabs_width" => valid.vertical_tabs_width,
             "window_width" => valid.window_width,
             "window_height" => valid.window_height,
             "font_size" => valid.font_size,
@@ -357,6 +364,7 @@ fn numeric_keys_parse_table_driven() {
         let invalid = parse(&format!("{} = -1\n", key));
         let parsed = match key {
             "agent_sidebar_width" => invalid.agent_sidebar_width,
+            "vertical_tabs_width" => invalid.vertical_tabs_width,
             "window_width" => invalid.window_width,
             "window_height" => invalid.window_height,
             "font_size" => invalid.font_size,
@@ -543,9 +551,77 @@ fn keybind_lines_are_collected_in_order_with_line_numbers() {
 fn removed_hide_titlebar_buttons_key_is_ignored_as_unknown() {
     let configured = parse(
         "hide_titlebar_buttons = true\n\
+         warn_on_quit = true\n\
          warn_on_quit_with_running_process = false\n",
     );
+    assert!(configured.warn_on_quit);
     assert!(!configured.warn_on_quit_with_running_process);
+}
+
+#[test]
+fn task_entries_parse_into_named_tasks() {
+    let config = parse(
+        "task.build.command = cargo build\n\
+         task.build.working_dir = crates/cli\n\
+         task.dev_server.layout = dashboard\n\
+         task.dev_server.command = cargo run\n",
+    );
+
+    assert_eq!(config.tasks.len(), 2);
+    assert_eq!(config.tasks[0].name, "build");
+    assert_eq!(config.tasks[0].command, "cargo build");
+    assert_eq!(config.tasks[0].working_dir.as_deref(), Some("crates/cli"));
+    assert_eq!(config.tasks[0].layout, None);
+
+    assert_eq!(config.tasks[1].name, "dev_server");
+    assert_eq!(config.tasks[1].layout.as_deref(), Some("dashboard"));
+    assert_eq!(config.tasks[1].command, "cargo run");
+}
+
+#[test]
+fn task_without_command_reports_invalid_value() {
+    let report = parse_report("task.build.layout = dev\n");
+    assert!(report.config.tasks.is_empty());
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::InvalidValue
+    );
+    assert!(
+        report.diagnostics[0]
+            .message
+            .contains("missing required field 'command'")
+    );
+}
+
+#[test]
+fn invalid_task_field_does_not_create_missing_command_diagnostic() {
+    let report = parse_report("task.build.invalid = nope\n");
+
+    assert!(report.config.tasks.is_empty());
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::InvalidValue
+    );
+    assert!(report.diagnostics[0].message.contains("Invalid task field"));
+}
+
+#[test]
+fn dotted_task_name_reports_clear_diagnostic() {
+    let report = parse_report("task.my.task.command = cargo build\n");
+
+    assert!(report.config.tasks.is_empty());
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(
+        report.diagnostics[0].kind,
+        ConfigDiagnosticKind::InvalidValue
+    );
+    assert!(
+        report.diagnostics[0]
+            .message
+            .contains("task names must not contain '.'")
+    );
 }
 
 #[test]

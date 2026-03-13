@@ -5259,6 +5259,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "plugin_example_status"
+version = "0.1.0"
+dependencies = [
+ "termy_plugin_core",
+ "termy_plugin_sdk",
+]
+
+[[package]]
 name = "plugin_release_notes"
 version = "0.1.0"
 dependencies = [
@@ -7342,7 +7350,7 @@ dependencies = [
 
 [[package]]
 name = "termy"
-version = "0.1.49"
+version = "0.1.51"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7438,7 +7446,7 @@ dependencies = [
 
 [[package]]
 name = "termy_cli"
-version = "0.1.49"
+version = "0.1.51"
 dependencies = [
  "anyhow",
  "clap",

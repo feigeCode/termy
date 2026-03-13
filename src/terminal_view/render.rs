@@ -281,6 +281,37 @@ fn cursor_state_for_pane(
     )
 }
 
+fn cursor_state_with_preview(
+    preview: Option<&PendingCursorMovePreview>,
+    pane_id: &str,
+    actual: Option<TerminalCursorState>,
+    is_active_pane: bool,
+    cols: usize,
+    rows: usize,
+) -> Option<TerminalCursorState> {
+    let Some(preview) = preview else {
+        return actual;
+    };
+    if !is_active_pane
+        || preview.pane_id != pane_id
+        || preview.target.col >= cols
+        || preview.target.row >= rows
+    {
+        return actual;
+    }
+
+    match actual {
+        Some(cursor) if cursor.col == preview.target.col && cursor.row == preview.target.row => {
+            Some(cursor)
+        }
+        _ => Some(TerminalCursorState {
+            col: preview.target.col,
+            row: preview.target.row,
+            style: preview.style,
+        }),
+    }
+}
+
 type PaneRenderRow = Arc<Vec<CellRenderInfo>>;
 type PaneRenderCells = Arc<Vec<PaneRenderRow>>;
 
@@ -1568,11 +1599,17 @@ impl TerminalView {
 
         #[cfg(target_os = "linux")]
         {
-            let state = self.terminal_context_menu?;
+            let state = self.terminal_context_menu.clone()?;
             let overlay_style = self.overlay_style();
-            let menu_width = 170.0;
+            let menu_width = 220.0;
             let row_height = 30.0;
-            let menu_height = row_height * 5.0 + 8.0;
+            let row_count =
+                5.0 + if state.buffer_position.is_some() {
+                    1.0
+                } else {
+                    0.0
+                } + 1.0;
+            let menu_height = row_height * row_count + 8.0;
             let (menu_x, menu_y) = self.clamped_terminal_context_menu_origin(
                 state.anchor_position,
                 menu_width,
@@ -1583,6 +1620,18 @@ impl TerminalView {
             let text_active = overlay_style.panel_foreground(0.95);
             let text_disabled = overlay_style.panel_foreground(0.42);
             let hover_bg = overlay_style.panel_cursor(0.22);
+            let buffer_position_item = |label: String| {
+                div()
+                    .id("terminal-context-menu-buffer-position")
+                    .h(px(row_height))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.0))
+                    .text_color(text_disabled)
+                    .child(label)
+                    .into_any_element()
+            };
 
             let command_item =
                 |id: &'static str, label: &'static str, enabled: bool, action: CommandAction| {
@@ -1679,6 +1728,30 @@ impl TerminalView {
                     .child("Search Google")
                     .into_any_element()
             };
+            let copy_buffer_position_item = |enabled: bool| {
+                let text_color = if enabled { text_active } else { text_disabled };
+                div()
+                    .id("terminal-context-menu-copy-buffer-position")
+                    .h(px(row_height))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(13.0))
+                    .text_color(text_color)
+                    .when(enabled, |s| s.cursor_pointer())
+                    .when(enabled, |s| s.hover(|style| style.bg(hover_bg)))
+                    .when(enabled, |s| {
+                        s.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _event: &MouseDownEvent, _window, cx| {
+                                view.execute_terminal_context_menu_copy_buffer_position(cx);
+                                cx.stop_propagation();
+                            }),
+                        )
+                    })
+                    .child("Copy Buffer Position")
+                    .into_any_element()
+            };
 
             Some(
                 div()
@@ -1738,6 +1811,12 @@ impl TerminalView {
                                     cx.stop_propagation();
                                 }),
                             )
+                            .when_some(state.buffer_position, |panel, position| {
+                                panel.child(buffer_position_item(
+                                    TerminalView::format_terminal_buffer_position(position),
+                                ))
+                            })
+                            .child(copy_buffer_position_item(state.buffer_position.is_some()))
                             .child(command_item(
                                 "terminal-context-menu-copy",
                                 "Copy",
@@ -2127,9 +2206,16 @@ impl Render for TerminalView {
                 };
                 // Keep cursor state out of cached cells so blink/overlay redraws don't force
                 // full cell-buffer rebuilds.
-                let pane_cursor_state = cursor_state_for_pane(
-                    terminal,
-                    pane_display_offset,
+                let pane_cursor_state = cursor_state_with_preview(
+                    self.pending_cursor_move_preview.as_ref(),
+                    pane.id.as_str(),
+                    cursor_state_for_pane(
+                        terminal,
+                        pane_display_offset,
+                        is_active_pane,
+                        cols,
+                        rows,
+                    ),
                     is_active_pane,
                     cols,
                     rows,
@@ -2339,7 +2425,11 @@ impl Render for TerminalView {
         let focus_handle = self.focus_handle.clone();
         let titlebar_height = Self::titlebar_height();
         let tabbar_bg = terminal_surface_bg;
-        let tabs_row = self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx);
+        let tabs_row = (!self.vertical_tabs)
+            .then(|| self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
+        let vertical_tab_strip = self
+            .vertical_tabs
+            .then(|| self.render_vertical_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
 
         #[cfg(target_os = "macos")]
         let banner_spacer: Option<AnyElement> = self.show_update_banner.then(|| {
@@ -2542,7 +2632,7 @@ impl Render for TerminalView {
                         .flex()
                         .items_end()
                         .mt(px(TOP_STRIP_CONTENT_OFFSET_Y))
-                        .child(tabs_row),
+                        .children(tabs_row),
                 )
                 .into_any()
         });
@@ -2587,6 +2677,7 @@ impl Render for TerminalView {
                     .key_context(key_context)
                     .on_action(cx.listener(Self::handle_toggle_command_palette_action))
                     .on_action(cx.listener(Self::handle_import_colors_action))
+                    .on_action(cx.listener(Self::handle_prettify_config_action))
                     .on_action(cx.listener(Self::handle_switch_theme_action))
                     .on_action(cx.listener(Self::handle_app_info_action))
                     .on_action(cx.listener(Self::handle_restart_app_action))
@@ -2610,6 +2701,7 @@ impl Render for TerminalView {
                     .on_action(cx.listener(Self::handle_switch_to_tab_9_action))
                     .on_action(cx.listener(Self::handle_manage_tmux_sessions_action))
                     .on_action(cx.listener(Self::handle_manage_saved_layouts_action))
+                    .on_action(cx.listener(Self::handle_run_task_action))
                     .on_action(cx.listener(Self::handle_split_pane_vertical_action))
                     .on_action(cx.listener(Self::handle_split_pane_horizontal_action))
                     .on_action(cx.listener(Self::handle_close_pane_action))
@@ -2642,6 +2734,7 @@ impl Render for TerminalView {
                     })
                     .on_action(cx.listener(Self::handle_toggle_ai_input_action))
                     .on_action(cx.listener(Self::handle_toggle_agent_sidebar_action))
+                    .on_action(cx.listener(Self::handle_toggle_vertical_tab_sidebar_action))
                     .on_action(cx.listener(Self::handle_inline_backspace_action))
                     .on_action(cx.listener(Self::handle_inline_delete_action))
                     .on_action(cx.listener(Self::handle_inline_move_left_action))
@@ -2667,6 +2760,7 @@ impl Render for TerminalView {
                             .flex()
                             .w_full()
                             .h_full()
+                            .children(vertical_tab_strip)
                             .child(
                                 div()
                                     .id("terminal-surface")
@@ -2674,6 +2768,7 @@ impl Render for TerminalView {
                                     .flex_1()
                                     .h_full()
                                     .overflow_hidden()
+                                    .cursor_text()
                                     .on_scroll_wheel(
                                         cx.listener(Self::handle_terminal_scroll_wheel),
                                     )
@@ -2868,6 +2963,48 @@ mod tests {
         assert_eq!(
             filtered_cursor_state(Some(cursor), 0, true, 10, 4),
             Some(cursor)
+        );
+    }
+
+    #[test]
+    fn cursor_state_preview_overrides_until_terminal_catches_up() {
+        let preview = PendingCursorMovePreview {
+            pane_id: "%pane".to_string(),
+            target: CellPos { col: 8, row: 1 },
+            style: TerminalCursorStyle::Line,
+        };
+        let actual = Some(TerminalCursorState {
+            col: 3,
+            row: 1,
+            style: TerminalCursorStyle::Block,
+        });
+
+        assert_eq!(
+            cursor_state_with_preview(Some(&preview), "%pane", actual, true, 10, 4),
+            Some(TerminalCursorState {
+                col: 8,
+                row: 1,
+                style: TerminalCursorStyle::Line,
+            })
+        );
+        assert_eq!(
+            cursor_state_with_preview(
+                Some(&preview),
+                "%pane",
+                Some(TerminalCursorState {
+                    col: 8,
+                    row: 1,
+                    style: TerminalCursorStyle::Block,
+                }),
+                true,
+                10,
+                4,
+            ),
+            Some(TerminalCursorState {
+                col: 8,
+                row: 1,
+                style: TerminalCursorStyle::Block,
+            })
         );
     }
 

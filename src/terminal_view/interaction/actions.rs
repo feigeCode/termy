@@ -2,11 +2,16 @@ use super::*;
 use termy_command_core::{CommandCapabilities, CommandUnavailableReason};
 
 impl TerminalView {
+    fn shortcut_action_allowed_with_active_inline_input(action: CommandAction) -> bool {
+        matches!(action, CommandAction::Copy | CommandAction::Paste)
+    }
+
     fn command_palette_mode_for_action(action: CommandAction) -> Option<CommandPaletteMode> {
         match action {
             CommandAction::SwitchTheme => Some(CommandPaletteMode::Themes),
             CommandAction::ManageTmuxSessions => Some(CommandPaletteMode::TmuxSessions),
             CommandAction::ManageSavedLayouts => Some(CommandPaletteMode::Layouts),
+            CommandAction::RunTask => Some(CommandPaletteMode::Tasks),
             _ => None,
         }
     }
@@ -78,7 +83,9 @@ impl TerminalView {
             }
         }
 
-        let shortcuts_suspended = respect_shortcut_suspend && self.command_shortcuts_suspended();
+        let shortcuts_suspended = respect_shortcut_suspend
+            && self.command_shortcuts_suspended()
+            && !Self::shortcut_action_allowed_with_active_inline_input(action);
 
         match action {
             CommandAction::ToggleCommandPalette => {
@@ -99,14 +106,14 @@ impl TerminalView {
             CommandAction::ManageSavedLayouts => {
                 self.open_saved_layouts_palette(cx);
             }
+            CommandAction::RunTask => {
+                self.open_tasks_palette(cx);
+            }
             CommandAction::Quit => {
                 self.execute_quit_command_action(action, window, cx);
             }
             CommandAction::ToggleAgentSidebar => {
                 if !self.agent_sidebar_enabled {
-                    termy_toast::info(
-                        "Enable Agent Sidebar in Settings > Experimental before toggling it",
-                    );
                     self.notify_overlay(cx);
                     return;
                 }
@@ -116,8 +123,24 @@ impl TerminalView {
                 }
                 cx.notify();
             }
+            CommandAction::ToggleVerticalTabSidebar => {
+                if !self.vertical_tabs {
+                    termy_toast::info(
+                        "Enable Vertical Tabs in Settings > Tabs before toggling the sidebar",
+                    );
+                    self.notify_overlay(cx);
+                    return;
+                }
+                if let Err(error) = self.set_vertical_tabs_minimized(!self.vertical_tabs_minimized)
+                {
+                    termy_toast::error(error);
+                    return;
+                }
+                cx.notify();
+            }
             _ if shortcuts_suspended => {}
             CommandAction::OpenConfig
+            | CommandAction::PrettifyConfig
             | CommandAction::ImportThemeStoreAuth
             | CommandAction::ImportColors
             | CommandAction::AppInfo
@@ -209,6 +232,15 @@ impl TerminalView {
         self.execute_command_action(CommandAction::ImportColors, true, window, cx);
     }
 
+    pub(in super::super) fn handle_prettify_config_action(
+        &mut self,
+        _: &commands::PrettifyConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::PrettifyConfig, true, window, cx);
+    }
+
     pub(in super::super) fn handle_switch_theme_action(
         &mut self,
         _: &commands::SwitchTheme,
@@ -263,6 +295,15 @@ impl TerminalView {
         self.execute_command_action(CommandAction::ToggleAgentSidebar, true, window, cx);
     }
 
+    pub(in super::super) fn handle_toggle_vertical_tab_sidebar_action(
+        &mut self,
+        _: &commands::ToggleVerticalTabSidebar,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::ToggleVerticalTabSidebar, true, window, cx);
+    }
+
     pub(in super::super) fn handle_new_tab_action(
         &mut self,
         _: &commands::NewTab,
@@ -270,6 +311,15 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.execute_command_action(CommandAction::NewTab, true, window, cx);
+    }
+
+    pub(in super::super) fn handle_run_task_action(
+        &mut self,
+        _: &commands::RunTask,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command_action(CommandAction::RunTask, true, window, cx);
     }
 
     pub(crate) fn open_new_tab_from_deeplink(
@@ -710,6 +760,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inline_input_shortcuts_allow_copy_and_paste() {
+        assert!(
+            TerminalView::shortcut_action_allowed_with_active_inline_input(CommandAction::Copy)
+        );
+        assert!(
+            TerminalView::shortcut_action_allowed_with_active_inline_input(CommandAction::Paste)
+        );
+        assert!(
+            !TerminalView::shortcut_action_allowed_with_active_inline_input(
+                CommandAction::OpenSearch
+            )
+        );
+    }
+
+    #[test]
     fn switch_theme_action_maps_to_theme_palette_mode() {
         assert_eq!(
             TerminalView::command_palette_mode_for_action(CommandAction::SwitchTheme),
@@ -720,7 +785,15 @@ mod tests {
             Some(CommandPaletteMode::TmuxSessions)
         );
         assert_eq!(
+            TerminalView::command_palette_mode_for_action(CommandAction::RunTask),
+            Some(CommandPaletteMode::Tasks)
+        );
+        assert_eq!(
             TerminalView::command_palette_mode_for_action(CommandAction::OpenConfig),
+            None
+        );
+        assert_eq!(
+            TerminalView::command_palette_mode_for_action(CommandAction::PrettifyConfig),
             None
         );
     }

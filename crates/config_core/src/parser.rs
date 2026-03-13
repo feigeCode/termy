@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::color_keys::{ColorEntryError, apply_color_entry};
 use crate::constants::{
@@ -9,9 +9,21 @@ use crate::diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseRepo
 use crate::schema::{RootSettingId, root_setting_from_key, root_setting_spec};
 use crate::types::{
     AiProvider, AppConfig, CursorStyle, KeybindConfigLine, PaneFocusEffect, TabCloseVisibility,
-    TabTitleMode, TabTitleSource, TabWidthMode, TerminalScrollbarStyle,
+    TabTitleMode, TabTitleSource, TabWidthMode, TaskConfig, TerminalScrollbarStyle,
     TerminalScrollbarVisibility, ThemeId, WorkingDirFallback,
 };
+
+#[derive(Default)]
+struct PendingTaskConfig {
+    first_line: usize,
+    command: Option<String>,
+    layout: Option<String>,
+    working_dir: Option<String>,
+}
+
+enum TaskKeyParseError {
+    InvalidTaskName,
+}
 
 impl AppConfig {
     pub fn from_contents(contents: &str) -> Self {
@@ -25,6 +37,7 @@ impl AppConfig {
         let mut in_colors_section = false;
         let mut in_non_root_section = false;
         let mut seen_root_keys: HashMap<RootSettingId, usize> = HashMap::new();
+        let mut task_entries: BTreeMap<String, PendingTaskConfig> = BTreeMap::new();
 
         for (line_number, line) in contents.lines().enumerate() {
             let line_number = line_number + 1;
@@ -89,6 +102,66 @@ impl AppConfig {
                     }),
                 }
                 continue;
+            }
+
+            match parse_task_key(key) {
+                Ok(Some((task_name, task_field))) => {
+                    if task_field.eq_ignore_ascii_case("command") {
+                        let task = task_entries
+                            .entry(task_name.to_string())
+                            .or_insert_with(|| PendingTaskConfig {
+                                first_line: line_number,
+                                ..PendingTaskConfig::default()
+                            });
+                        if let Some(parsed) = parse_string_field(
+                            &mut diagnostics,
+                            line_number,
+                            key,
+                            value,
+                            "a non-empty task command",
+                        ) {
+                            task.command = Some(parsed);
+                        }
+                    } else if task_field.eq_ignore_ascii_case("layout") {
+                        let task = task_entries
+                            .entry(task_name.to_string())
+                            .or_insert_with(|| PendingTaskConfig {
+                                first_line: line_number,
+                                ..PendingTaskConfig::default()
+                            });
+                        task.layout = parse_optional_string_value(value);
+                    } else if task_field.eq_ignore_ascii_case("working_dir") {
+                        let task = task_entries
+                            .entry(task_name.to_string())
+                            .or_insert_with(|| PendingTaskConfig {
+                                first_line: line_number,
+                                ..PendingTaskConfig::default()
+                            });
+                        task.working_dir = parse_optional_string_value(value);
+                    } else {
+                        diagnostics.push(ConfigDiagnostic {
+                            line_number,
+                            kind: ConfigDiagnosticKind::InvalidValue,
+                            message: format!(
+                                "Invalid task field '{}' for '{}': expected command, layout, or working_dir",
+                                task_field, key
+                            ),
+                        });
+                    }
+                    continue;
+                }
+                Err(TaskKeyParseError::InvalidTaskName) => {
+                    diagnostics.push(ConfigDiagnostic {
+                        line_number,
+                        kind: ConfigDiagnosticKind::InvalidValue,
+                        message: format!(
+                            "Invalid task key '{}': task names must not contain '.'",
+                            key
+                        ),
+                    });
+                    continue;
+                }
+                Ok(None) => {}
             }
 
             let Some(root_key) = root_setting_from_key(key) else {
@@ -245,6 +318,13 @@ impl AppConfig {
                         );
                     }
                 }
+                RootSettingId::WarnOnQuit => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.warn_on_quit = parsed;
+                    }
+                }
                 RootSettingId::WarnOnQuitWithRunningProcess => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)
@@ -361,6 +441,27 @@ impl AppConfig {
                         parse_bool_field(&mut diagnostics, line_number, key, value)
                     {
                         config.tab_switch_modifier_hints = parsed;
+                    }
+                }
+                RootSettingId::VerticalTabs => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.vertical_tabs = parsed;
+                    }
+                }
+                RootSettingId::VerticalTabsWidth => {
+                    if let Some(parsed) =
+                        parse_positive_f32_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.vertical_tabs_width = parsed;
+                    }
+                }
+                RootSettingId::VerticalTabsMinimized => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.vertical_tabs_minimized = parsed;
                     }
                 }
                 RootSettingId::ShowTermyInTitlebar => {
@@ -633,6 +734,24 @@ impl AppConfig {
             config.tab_title.priority = config.tab_title.mode.default_priority();
         }
 
+        for (task_name, task) in task_entries {
+            let Some(command) = task.command else {
+                diagnostics.push(ConfigDiagnostic {
+                    line_number: task.first_line,
+                    kind: ConfigDiagnosticKind::InvalidValue,
+                    message: format!("Task '{}' is missing required field 'command'", task_name),
+                });
+                continue;
+            };
+
+            config.tasks.push(TaskConfig {
+                name: task_name,
+                command,
+                layout: task.layout,
+                working_dir: task.working_dir,
+            });
+        }
+
         ConfigParseReport::new(config, diagnostics)
     }
 }
@@ -656,6 +775,25 @@ pub fn parse_theme_id(value: &str) -> Option<ThemeId> {
     } else {
         Some(normalized)
     }
+}
+
+fn parse_task_key(key: &str) -> Result<Option<(&str, &str)>, TaskKeyParseError> {
+    let trimmed = key.trim();
+    let Some(rest) = trimmed.strip_prefix("task.") else {
+        return Ok(None);
+    };
+    let Some((task_name, field)) = rest.rsplit_once('.') else {
+        return Ok(None);
+    };
+    let task_name = task_name.trim();
+    let field = field.trim();
+    if task_name.is_empty() || field.is_empty() {
+        return Ok(None);
+    }
+    if task_name.contains('.') {
+        return Err(TaskKeyParseError::InvalidTaskName);
+    }
+    Ok(Some((task_name, field)))
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

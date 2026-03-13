@@ -161,6 +161,13 @@ fn build_router(state: AppState) -> Router {
             axum::routing::post(auth_device_session),
         )
         .route("/auth/logout", axum::routing::post(auth_logout))
+        .route("/plugins/me", get(list_my_plugins))
+        .route("/plugins", get(list_plugins).post(create_plugin))
+        .route("/plugins/{slug}", axum::routing::patch(update_plugin))
+        .route(
+            "/plugins/{slug}/versions",
+            get(list_plugin_versions).post(publish_plugin_version),
+        )
         .route("/themes/me", get(list_my_themes))
         .route("/themes", get(list_themes).post(create_theme))
         .route("/themes/{slug}", get(get_theme).patch(update_theme))
@@ -246,6 +253,55 @@ struct ThemeVersion {
 
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
+struct PluginRegistryEntry {
+    id: Uuid,
+    name: String,
+    slug: String,
+    description: String,
+    latest_version: Option<String>,
+    repository_url: Option<String>,
+    homepage_url: Option<String>,
+    license: Option<String>,
+    author_name: Option<String>,
+    github_username_claim: String,
+    github_user_id_claim: Option<i64>,
+    is_public: bool,
+    latest_capabilities: Vec<String>,
+    latest_permissions: Vec<String>,
+    latest_subscriptions: Vec<String>,
+    latest_manifest_url: Option<String>,
+    latest_artifact_url: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct PluginRegistryVersion {
+    id: Uuid,
+    plugin_id: Uuid,
+    version: String,
+    summary: String,
+    readme: String,
+    manifest_url: Option<String>,
+    artifact_url: Option<String>,
+    checksum_sha256: Option<String>,
+    permissions: Vec<String>,
+    capabilities: Vec<String>,
+    subscriptions: Vec<String>,
+    created_by: Option<String>,
+    published_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl PluginRegistryEntry {
+    fn is_public(&self) -> bool {
+        self.is_public
+    }
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
 struct AuthUser {
     id: Uuid,
     github_user_id: i64,
@@ -315,11 +371,65 @@ struct PublishThemeVersionUpload {
     theme_json: Vec<u8>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePluginRequest {
+    name: String,
+    description: Option<String>,
+    is_public: Option<bool>,
+    version: String,
+    summary: Option<String>,
+    readme: Option<String>,
+    repository_url: Option<String>,
+    homepage_url: Option<String>,
+    license: Option<String>,
+    author_name: Option<String>,
+    manifest_url: Option<String>,
+    artifact_url: Option<String>,
+    checksum_sha256: Option<String>,
+    permissions: Option<Vec<String>>,
+    capabilities: Option<Vec<String>>,
+    subscriptions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePluginRequest {
+    name: Option<String>,
+    description: Option<String>,
+    is_public: Option<bool>,
+    repository_url: Option<String>,
+    homepage_url: Option<String>,
+    license: Option<String>,
+    author_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishPluginVersionRequest {
+    version: String,
+    summary: Option<String>,
+    readme: Option<String>,
+    manifest_url: Option<String>,
+    artifact_url: Option<String>,
+    checksum_sha256: Option<String>,
+    permissions: Option<Vec<String>>,
+    capabilities: Option<Vec<String>>,
+    subscriptions: Option<Vec<String>>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ThemeWithVersionsResponse {
     theme: Theme,
     versions: Vec<ThemeVersion>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginWithVersionsResponse {
+    plugin: PluginRegistryEntry,
+    versions: Vec<PluginRegistryVersion>,
 }
 
 #[derive(Debug, Serialize)]
@@ -548,6 +658,470 @@ async fn auth_logout(
     );
 
     Ok(response)
+}
+
+async fn list_my_plugins(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PluginRegistryEntry>>, ApiError> {
+    let auth_user = require_auth_user(&state, &headers).await?;
+
+    let plugins = sqlx::query_as::<_, PluginRegistryEntry>(
+        r#"
+        SELECT
+            plugin.id,
+            plugin.name,
+            plugin.slug,
+            plugin.description,
+            plugin.latest_version,
+            plugin.repository_url,
+            plugin.homepage_url,
+            plugin.license,
+            plugin.author_name,
+            plugin.github_username_claim,
+            plugin.github_user_id_claim,
+            plugin.is_public,
+            COALESCE(plugin_version.capabilities, ARRAY[]::TEXT[]) AS latest_capabilities,
+            COALESCE(plugin_version.permissions, ARRAY[]::TEXT[]) AS latest_permissions,
+            COALESCE(plugin_version.subscriptions, ARRAY[]::TEXT[]) AS latest_subscriptions,
+            plugin_version.manifest_url AS latest_manifest_url,
+            plugin_version.artifact_url AS latest_artifact_url,
+            plugin.created_at,
+            plugin.updated_at
+        FROM plugin
+        LEFT JOIN plugin_version
+            ON plugin_version.plugin_id = plugin.id
+           AND plugin_version.version = plugin.latest_version
+        WHERE plugin.github_user_id_claim = $1
+           OR plugin.github_username_claim ILIKE $2
+        ORDER BY plugin.updated_at DESC, plugin.created_at DESC
+        "#,
+    )
+    .bind(auth_user.github_user_id)
+    .bind(&auth_user.github_login)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(plugins))
+}
+
+async fn list_plugins(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PluginRegistryEntry>>, ApiError> {
+    let plugins = sqlx::query_as::<_, PluginRegistryEntry>(
+        r#"
+        SELECT
+            plugin.id,
+            plugin.name,
+            plugin.slug,
+            plugin.description,
+            plugin.latest_version,
+            plugin.repository_url,
+            plugin.homepage_url,
+            plugin.license,
+            plugin.author_name,
+            plugin.github_username_claim,
+            plugin.github_user_id_claim,
+            plugin.is_public,
+            COALESCE(plugin_version.capabilities, ARRAY[]::TEXT[]) AS latest_capabilities,
+            COALESCE(plugin_version.permissions, ARRAY[]::TEXT[]) AS latest_permissions,
+            COALESCE(plugin_version.subscriptions, ARRAY[]::TEXT[]) AS latest_subscriptions,
+            plugin_version.manifest_url AS latest_manifest_url,
+            plugin_version.artifact_url AS latest_artifact_url,
+            plugin.created_at,
+            plugin.updated_at
+        FROM plugin
+        LEFT JOIN plugin_version
+            ON plugin_version.plugin_id = plugin.id
+           AND plugin_version.version = plugin.latest_version
+        WHERE plugin.is_public = TRUE
+        ORDER BY plugin.updated_at DESC, plugin.created_at DESC
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(plugins))
+}
+
+async fn create_plugin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreatePluginRequest>,
+) -> Result<(StatusCode, Json<PluginRegistryEntry>), ApiError> {
+    let auth_user = require_auth_user(&state, &headers).await?;
+    let name = parse_required_field(request.name, "name")?;
+    let normalized_version = parse_semver_version(&request.version, "version")?;
+    let slug = generate_unique_plugin_slug(&state.db, &name).await?;
+
+    let mut transaction = state.db.begin().await?;
+
+    let plugin_result = sqlx::query_as::<_, PluginRegistryEntry>(
+        r#"
+        INSERT INTO plugin (
+            name,
+            slug,
+            description,
+            latest_version,
+            repository_url,
+            homepage_url,
+            license,
+            author_name,
+            github_username_claim,
+            github_user_id_claim,
+            is_public
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING
+            id,
+            name,
+            slug,
+            description,
+            latest_version,
+            repository_url,
+            homepage_url,
+            license,
+            author_name,
+            github_username_claim,
+            github_user_id_claim,
+            is_public,
+            ARRAY[]::TEXT[] AS latest_capabilities,
+            ARRAY[]::TEXT[] AS latest_permissions,
+            ARRAY[]::TEXT[] AS latest_subscriptions,
+            NULL::TEXT AS latest_manifest_url,
+            NULL::TEXT AS latest_artifact_url,
+            created_at,
+            updated_at
+        "#,
+    )
+    .bind(&name)
+    .bind(&slug)
+    .bind(request.description.unwrap_or_default())
+    .bind(&normalized_version)
+    .bind(normalize_optional_string(request.repository_url))
+    .bind(normalize_optional_string(request.homepage_url))
+    .bind(normalize_optional_string(request.license))
+    .bind(
+        normalize_optional_string(request.author_name)
+            .or_else(|| Some(auth_user.github_login.clone())),
+    )
+    .bind(auth_user.github_login.clone())
+    .bind(auth_user.github_user_id)
+    .bind(request.is_public.unwrap_or(true))
+    .fetch_one(&mut *transaction)
+    .await;
+
+    let plugin = match plugin_result {
+        Ok(plugin) => plugin,
+        Err(err) if is_unique_violation(&err) => {
+            return Err(ApiError::Conflict("plugin slug already exists".to_string()));
+        }
+        Err(err) => return Err(ApiError::from(err)),
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO plugin_version (
+            plugin_id,
+            version,
+            summary,
+            readme,
+            manifest_url,
+            artifact_url,
+            checksum_sha256,
+            permissions,
+            capabilities,
+            subscriptions,
+            created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        "#,
+    )
+    .bind(plugin.id)
+    .bind(&normalized_version)
+    .bind(request.summary.unwrap_or_default())
+    .bind(request.readme.unwrap_or_default())
+    .bind(normalize_optional_string(request.manifest_url))
+    .bind(normalize_optional_string(request.artifact_url))
+    .bind(normalize_optional_string(request.checksum_sha256))
+    .bind(normalize_string_list(request.permissions))
+    .bind(normalize_string_list(request.capabilities))
+    .bind(normalize_string_list(request.subscriptions))
+    .bind(Some(auth_user.github_login.clone()))
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+
+    let created = fetch_plugin_by_slug(&state.db, &slug).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn update_plugin(
+    Path(slug): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdatePluginRequest>,
+) -> Result<Json<PluginRegistryEntry>, ApiError> {
+    let auth_user = require_auth_user(&state, &headers).await?;
+    let current_plugin = fetch_plugin_by_slug(&state.db, &slug).await?;
+    ensure_plugin_owner(&current_plugin, &auth_user)?;
+
+    let next_name = request
+        .name
+        .map(|value| parse_required_field(value, "name"))
+        .transpose()?
+        .unwrap_or_else(|| current_plugin.name.clone());
+
+    let updated = sqlx::query_as::<_, PluginRegistryEntry>(
+        r#"
+        UPDATE plugin
+        SET
+            name = $1,
+            description = $2,
+            is_public = $3,
+            repository_url = $4,
+            homepage_url = $5,
+            license = $6,
+            author_name = $7,
+            updated_at = NOW()
+        WHERE id = $8
+        RETURNING
+            id,
+            name,
+            slug,
+            description,
+            latest_version,
+            repository_url,
+            homepage_url,
+            license,
+            author_name,
+            github_username_claim,
+            github_user_id_claim,
+            is_public,
+            ARRAY[]::TEXT[] AS latest_capabilities,
+            ARRAY[]::TEXT[] AS latest_permissions,
+            ARRAY[]::TEXT[] AS latest_subscriptions,
+            NULL::TEXT AS latest_manifest_url,
+            NULL::TEXT AS latest_artifact_url,
+            created_at,
+            updated_at
+        "#,
+    )
+    .bind(next_name)
+    .bind(
+        request
+            .description
+            .unwrap_or_else(|| current_plugin.description.clone()),
+    )
+    .bind(request.is_public.unwrap_or(current_plugin.is_public()))
+    .bind(
+        request
+            .repository_url
+            .or(current_plugin.repository_url.clone()),
+    )
+    .bind(request.homepage_url.or(current_plugin.homepage_url.clone()))
+    .bind(request.license.or(current_plugin.license.clone()))
+    .bind(request.author_name.or(current_plugin.author_name.clone()))
+    .bind(current_plugin.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let refreshed = fetch_plugin_by_slug(&state.db, &updated.slug).await?;
+    Ok(Json(refreshed))
+}
+
+async fn list_plugin_versions(
+    Path(slug): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<PluginWithVersionsResponse>, ApiError> {
+    let plugin = fetch_plugin_by_slug(&state.db, &slug).await?;
+    ensure_can_read_plugin(&plugin, &state, &headers).await?;
+
+    let versions = sqlx::query_as::<_, PluginRegistryVersion>(
+        r#"
+        SELECT
+            id,
+            plugin_id,
+            version,
+            summary,
+            readme,
+            manifest_url,
+            artifact_url,
+            checksum_sha256,
+            permissions,
+            capabilities,
+            subscriptions,
+            created_by,
+            published_at,
+            created_at
+        FROM plugin_version
+        WHERE plugin_id = $1
+        ORDER BY published_at DESC, created_at DESC
+        "#,
+    )
+    .bind(plugin.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(PluginWithVersionsResponse { plugin, versions }))
+}
+
+async fn publish_plugin_version(
+    Path(slug): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPluginVersionRequest>,
+) -> Result<(StatusCode, Json<PluginWithVersionsResponse>), ApiError> {
+    let auth_user = require_auth_user(&state, &headers).await?;
+    let plugin = fetch_plugin_by_slug(&state.db, &slug).await?;
+    ensure_plugin_owner(&plugin, &auth_user)?;
+
+    let normalized_version = parse_semver_version(&request.version, "version")?;
+    if let Some(current_latest) = &plugin.latest_version
+        && let Ok(current_latest_version) = Version::parse(current_latest)
+    {
+        let next = Version::parse(&normalized_version).map_err(|err| {
+            ApiError::BadRequest(format!(
+                "version must be a valid semantic version (e.g. 1.2.3): {err}"
+            ))
+        })?;
+        if next <= current_latest_version {
+            return Err(ApiError::BadRequest(format!(
+                "version must be greater than current latest version ({current_latest})"
+            )));
+        }
+    }
+
+    let existing_version = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT id FROM plugin_version WHERE plugin_id = $1 AND version = $2",
+    )
+    .bind(plugin.id)
+    .bind(&normalized_version)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+    if existing_version.is_some() {
+        return Err(ApiError::Conflict(
+            "this version already exists for the plugin".to_string(),
+        ));
+    }
+
+    let mut transaction = state.db.begin().await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO plugin_version (
+            plugin_id,
+            version,
+            summary,
+            readme,
+            manifest_url,
+            artifact_url,
+            checksum_sha256,
+            permissions,
+            capabilities,
+            subscriptions,
+            created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        "#,
+    )
+    .bind(plugin.id)
+    .bind(&normalized_version)
+    .bind(request.summary.unwrap_or_default())
+    .bind(request.readme.unwrap_or_default())
+    .bind(normalize_optional_string(request.manifest_url))
+    .bind(normalize_optional_string(request.artifact_url))
+    .bind(normalize_optional_string(request.checksum_sha256))
+    .bind(normalize_string_list(request.permissions))
+    .bind(normalize_string_list(request.capabilities))
+    .bind(normalize_string_list(request.subscriptions))
+    .bind(Some(auth_user.github_login.clone()))
+    .execute(&mut *transaction)
+    .await?;
+
+    sqlx::query("UPDATE plugin SET latest_version = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&normalized_version)
+        .bind(plugin.id)
+        .execute(&mut *transaction)
+        .await?;
+
+    transaction.commit().await?;
+
+    let refreshed = fetch_plugin_by_slug(&state.db, &slug).await?;
+    let versions = sqlx::query_as::<_, PluginRegistryVersion>(
+        r#"
+        SELECT
+            id,
+            plugin_id,
+            version,
+            summary,
+            readme,
+            manifest_url,
+            artifact_url,
+            checksum_sha256,
+            permissions,
+            capabilities,
+            subscriptions,
+            created_by,
+            published_at,
+            created_at
+        FROM plugin_version
+        WHERE plugin_id = $1
+        ORDER BY published_at DESC, created_at DESC
+        "#,
+    )
+    .bind(refreshed.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(PluginWithVersionsResponse {
+            plugin: refreshed,
+            versions,
+        }),
+    ))
+}
+
+async fn fetch_plugin_by_slug(pool: &PgPool, slug: &str) -> Result<PluginRegistryEntry, ApiError> {
+    let plugin = sqlx::query_as::<_, PluginRegistryEntry>(
+        r#"
+        SELECT
+            plugin.id,
+            plugin.name,
+            plugin.slug,
+            plugin.description,
+            plugin.latest_version,
+            plugin.repository_url,
+            plugin.homepage_url,
+            plugin.license,
+            plugin.author_name,
+            plugin.github_username_claim,
+            plugin.github_user_id_claim,
+            plugin.is_public,
+            COALESCE(plugin_version.capabilities, ARRAY[]::TEXT[]) AS latest_capabilities,
+            COALESCE(plugin_version.permissions, ARRAY[]::TEXT[]) AS latest_permissions,
+            COALESCE(plugin_version.subscriptions, ARRAY[]::TEXT[]) AS latest_subscriptions,
+            plugin_version.manifest_url AS latest_manifest_url,
+            plugin_version.artifact_url AS latest_artifact_url,
+            plugin.created_at,
+            plugin.updated_at
+        FROM plugin
+        LEFT JOIN plugin_version
+            ON plugin_version.plugin_id = plugin.id
+           AND plugin_version.version = plugin.latest_version
+        WHERE plugin.slug = $1
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("plugin not found".to_string()))?;
+
+    Ok(plugin)
 }
 
 async fn list_themes(State(state): State<AppState>) -> Result<Json<Vec<Theme>>, ApiError> {
@@ -1229,6 +1803,19 @@ async fn ensure_can_read_theme(
     ensure_theme_owner(theme, &user)
 }
 
+async fn ensure_can_read_plugin(
+    plugin: &PluginRegistryEntry,
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    if plugin.is_public() {
+        return Ok(());
+    }
+
+    let user = require_auth_user(state, headers).await?;
+    ensure_plugin_owner(plugin, &user)
+}
+
 fn ensure_theme_owner(theme: &Theme, user: &AuthUser) -> Result<(), ApiError> {
     let owner_matches = if let Some(github_user_id_claim) = theme.github_user_id_claim {
         github_user_id_claim == user.github_user_id
@@ -1245,6 +1832,24 @@ fn ensure_theme_owner(theme: &Theme, user: &AuthUser) -> Result<(), ApiError> {
     }
 }
 
+fn ensure_plugin_owner(plugin: &PluginRegistryEntry, user: &AuthUser) -> Result<(), ApiError> {
+    let owner_matches = if let Some(github_user_id_claim) = plugin.github_user_id_claim {
+        github_user_id_claim == user.github_user_id
+    } else {
+        plugin
+            .github_username_claim
+            .eq_ignore_ascii_case(&user.github_login)
+    };
+
+    if owner_matches {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden(
+            "you do not own this plugin".to_string(),
+        ))
+    }
+}
+
 fn parse_required_field(value: String, field_name: &str) -> Result<String, ApiError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1253,6 +1858,26 @@ fn parse_required_field(value: String, field_name: &str) -> Result<String, ApiEr
         )));
     }
     Ok(trimmed.to_string())
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn normalize_string_list(values: Option<Vec<String>>) -> Vec<String> {
+    values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn parse_bool_field(value: &str, field_name: &str) -> Result<bool, ApiError> {
@@ -1357,6 +1982,46 @@ async fn generate_unique_slug(pool: &PgPool, theme_name: &str) -> Result<String,
 
     Err(ApiError::Conflict(
         "could not derive a unique slug from theme name".to_string(),
+    ))
+}
+
+async fn generate_unique_plugin_slug(pool: &PgPool, plugin_name: &str) -> Result<String, ApiError> {
+    let base = slugify_name(plugin_name).ok_or_else(|| {
+        ApiError::BadRequest(
+            "name must contain at least one ASCII letter or number to derive a slug".to_string(),
+        )
+    })?;
+
+    for suffix_number in 0..10_000_u32 {
+        let candidate = if suffix_number == 0 {
+            base.clone()
+        } else {
+            let suffix = format!("-{}", suffix_number + 1);
+            let max_base_len = 64usize.saturating_sub(suffix.len());
+            let trimmed_base = base
+                .trim_end_matches('-')
+                .chars()
+                .take(max_base_len)
+                .collect::<String>();
+            format!("{trimmed_base}{suffix}")
+        };
+
+        validate_slug(&candidate)?;
+
+        let exists = sqlx::query_scalar::<_, Option<Uuid>>("SELECT id FROM plugin WHERE slug = $1")
+            .bind(&candidate)
+            .fetch_optional(pool)
+            .await?
+            .flatten()
+            .is_some();
+
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+
+    Err(ApiError::Conflict(
+        "could not derive a unique slug from plugin name".to_string(),
     ))
 }
 

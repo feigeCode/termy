@@ -17,6 +17,10 @@ native_buffer_persistence = false
 agent_sidebar_enabled = false
 # Saved width for the experimental agent sidebar in pixels
 agent_sidebar_width = 320
+# Show the Plugins section in Settings
+show_plugins_tab = false
+# Show FPS, CPU, and memory in the terminal corner
+show_debug_overlay = false
 # tmux executable path or binary name
 tmux_binary = tmux
 # Show active tmux pane border highlight in managed sessions
@@ -25,6 +29,8 @@ tmux_show_active_pane_border = false
 # working_dir = none
 # Directory used when working_dir is unset
 # working_dir_fallback = home
+# Warn every time you try to quit the app
+warn_on_quit = false
 # Warn before quitting when a tab has an active process
 warn_on_quit_with_running_process = true
 # Exact source priority for tab titles
@@ -47,6 +53,12 @@ tab_close_visibility = active_hover
 tab_width_mode = active_grow_sticky
 # Show secondary+1..9 number badges on the first nine tabs while the secondary modifier is held
 tab_switch_modifier_hints = true
+# Move the tab strip into a left sidebar like cmux
+vertical_tabs = false
+# Saved width for the vertical tab sidebar in pixels
+vertical_tabs_width = 220
+# Start vertical tabs in the collapsed state
+vertical_tabs_minimized = false
 # Show or hide the termy branding in the titlebar
 show_termy_in_titlebar = true
 # Executable used for new sessions
@@ -89,6 +101,10 @@ scrollback_history = 2000
 pane_focus_effect = soft_spotlight
 # Strength of active pane emphasis (0.0 to 2.0)
 pane_focus_strength = 0.6
+# Automatically copy selected text to clipboard
+copy_on_select = false
+# Show a toast notification when text is copied on select
+copy_on_select_toast = true
 # Show shortcut badges in command palette rows
 command_palette_show_keybinds = true
 # Provider used for AI input and model listing
@@ -101,12 +117,23 @@ gemini_api_key = none
 openai_model = none
 
 # Keybindings (repeatable)
-# tmux-only keybind actions require an active tmux session
 # keybind = cmd-p=toggle_command_palette
 # keybind = cmd-c=copy
 # keybind = cmd-c=unbind
 # keybind = clear
 # keybind = secondary-alt-shift-left=resize_pane_left
+
+# Tasks (repeatable)
+# Tasks use the pattern task.<name>.<field>
+# Supported fields:
+# - task.<name>.command (required): shell command to run in a new tab
+# - task.<name>.layout (optional): only show the task when that saved layout is active
+# - task.<name>.working_dir (optional): working directory for the launched tab
+# Example:
+# task.build.command = cargo build
+# task.build.working_dir = crates/cli
+# task.dev_server.layout = dashboard
+# task.dev_server.command = cargo run
 
 # Color overrides
 [colors]

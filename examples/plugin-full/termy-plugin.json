@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "example.full",
+  "name": "Full Example Plugin",
+  "version": "0.1.0",
+  "description": "Reference plugin demonstrating commands, host events, panel actions, and toast notifications.",
+  "runtime": "executable",
+  "entrypoint": "./plugin-full",
+  "autostart": true,
+  "permissions": ["notifications", "ui_panels", "host_events"],
+  "subscribes": {
+    "events": ["app_started", "theme_changed", "active_tab_changed"]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "example.full.refresh",
+        "title": "Refresh Full Example Panel",
+        "description": "Refreshes the full example plugin panel"
+      },
+      {
+        "id": "example.full.toast",
+        "title": "Send Full Example Toast",
+        "description": "Shows a toast from the full example plugin"
+      }
+    ]
+  }
+}

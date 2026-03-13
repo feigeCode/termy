@@ -2,8 +2,6 @@ use super::super::types::{TmuxControlError, TmuxNotification};
 use flume::{Sender, TrySendError};
 use std::collections::VecDeque;
 
-use super::channel::NOTIFICATION_QUEUE_BOUND;
-
 pub(crate) const NOTIFICATION_COALESCER_OUTPUT_BYTES_BOUND: usize = 512 * 1024;
 
 #[derive(Debug)]
@@ -70,6 +68,17 @@ impl NotificationCoalescer {
     fn handle_output_backpressure(&mut self, dropped_bytes: usize) {
         self.queue_refresh_if_missing();
         self.queue_backpressure_warning_if_missing(dropped_bytes);
+    }
+
+    fn collapse_for_notification_backpressure(&mut self) {
+        // The app-side notification channel overflowed, which means the UI
+        // consumer is behind. Drop stale pending notifications and force one
+        // refresh so the next successful delivery can resynchronize state.
+        self.queued.clear();
+        self.has_refresh_queued = false;
+        self.has_warning_queued = false;
+        self.queued_output_bytes = 0;
+        self.queue_refresh_if_missing();
     }
 
     pub(crate) fn push(
@@ -184,19 +193,33 @@ impl NotificationCoalescer {
     }
 }
 
-pub(crate) fn try_send_notification(
+fn try_send_notification(
+    notifications_tx: &Sender<TmuxNotification>,
+    notification: TmuxNotification,
+) -> std::result::Result<(), TrySendNotificationError> {
+    match notifications_tx.try_send(notification) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(notification)) => Err(TrySendNotificationError::Full(notification)),
+        Err(TrySendError::Disconnected(_)) => {
+            Err(TrySendNotificationError::Disconnected(TmuxControlError::channel(
+                "tmux notification channel is closed",
+            )))
+        }
+    }
+}
+
+enum TrySendNotificationError {
+    Full(TmuxNotification),
+    Disconnected(TmuxControlError),
+}
+
+fn send_notification_blocking(
     notifications_tx: &Sender<TmuxNotification>,
     notification: TmuxNotification,
 ) -> std::result::Result<(), TmuxControlError> {
-    match notifications_tx.try_send(notification) {
-        Ok(()) => Ok(()),
-        Err(TrySendError::Full(_)) => Err(TmuxControlError::channel(format!(
-            "tmux notification queue is full (capacity {NOTIFICATION_QUEUE_BOUND})"
-        ))),
-        Err(TrySendError::Disconnected(_)) => Err(TmuxControlError::channel(
-            "tmux notification channel is closed",
-        )),
-    }
+    notifications_tx
+        .send(notification)
+        .map_err(|_| TmuxControlError::channel("tmux notification channel is closed"))
 }
 
 pub(crate) fn signal_event_wakeup(event_wakeup_tx: Option<&Sender<()>>) {
@@ -216,8 +239,30 @@ pub(crate) fn flush_notification_coalescer(
 ) -> std::result::Result<(), TmuxControlError> {
     let mut sent_notifications = false;
     while let Some(notification) = coalescer.pop_next() {
-        try_send_notification(notifications_tx, notification)?;
-        sent_notifications = true;
+        match try_send_notification(notifications_tx, notification) {
+            Ok(()) => {
+                sent_notifications = true;
+            }
+            Err(TrySendNotificationError::Full(notification)) => {
+                let recovery_notification = match notification {
+                    // Exit is terminal. Preserve it even when the UI queue is
+                    // saturated so shutdown cannot be downgraded into refresh.
+                    TmuxNotification::Exit(reason) => TmuxNotification::Exit(reason),
+                    notification => {
+                        coalescer.collapse_for_notification_backpressure();
+                        coalescer.pop_next().unwrap_or(notification)
+                    }
+                };
+                signal_event_wakeup(event_wakeup_tx);
+                // Once the UI drains one stale queued notification, force the
+                // recovery signal through immediately so the worker cannot
+                // strand shutdown or refresh state locally.
+                send_notification_blocking(notifications_tx, recovery_notification)?;
+                sent_notifications = true;
+                break;
+            }
+            Err(TrySendNotificationError::Disconnected(error)) => return Err(error),
+        }
     }
     if sent_notifications {
         signal_event_wakeup(event_wakeup_tx);
@@ -378,5 +423,64 @@ mod tests {
             .expect("flush should succeed");
 
         assert!(event_wakeup_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn notification_flush_queue_overflow_collapses_to_refresh_instead_of_failing() {
+        let mut c = NotificationCoalescer::default();
+        c.push(TmuxNotification::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"bench".to_vec(),
+        })
+        .expect("output");
+
+        let (notifications_tx, notifications_rx) = flume::bounded(1);
+        notifications_tx
+            .send(TmuxNotification::NeedsRefresh)
+            .expect("seed full queue");
+
+        let drain_thread = std::thread::spawn(move || {
+            assert!(matches!(
+                notifications_rx.recv(),
+                Ok(TmuxNotification::NeedsRefresh)
+            ));
+            assert!(matches!(
+                notifications_rx.recv(),
+                Ok(TmuxNotification::NeedsRefresh)
+            ));
+        });
+
+        flush_notification_coalescer(&mut c, &notifications_tx, None)
+            .expect("queue overflow should degrade instead of failing");
+        drain_thread.join().expect("receiver thread should complete");
+        assert!(c.drain().is_empty(), "recovery path should collapse to one refresh");
+    }
+
+    #[test]
+    fn notification_flush_queue_overflow_preserves_exit_notification() {
+        let mut c = NotificationCoalescer::default();
+        c.push(TmuxNotification::Exit(Some("tmux exited".to_string())))
+            .expect("exit");
+
+        let (notifications_tx, notifications_rx) = flume::bounded(1);
+        notifications_tx
+            .send(TmuxNotification::NeedsRefresh)
+            .expect("seed full queue");
+
+        let drain_thread = std::thread::spawn(move || {
+            assert!(matches!(
+                notifications_rx.recv(),
+                Ok(TmuxNotification::NeedsRefresh)
+            ));
+            assert!(matches!(
+                notifications_rx.recv(),
+                Ok(TmuxNotification::Exit(Some(reason))) if reason == "tmux exited"
+            ));
+        });
+
+        flush_notification_coalescer(&mut c, &notifications_tx, None)
+            .expect("queue overflow should preserve exit");
+        drain_thread.join().expect("receiver thread should complete");
+        assert!(c.drain().is_empty(), "exit recovery should not leave stale backlog");
     }
 }

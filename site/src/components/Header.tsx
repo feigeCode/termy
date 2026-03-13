@@ -6,6 +6,7 @@ import {
   Heart,
   Menu,
   Moon,
+  Package,
   Palette,
   Sparkles,
   Sun,
@@ -47,6 +48,7 @@ const navLinks: NavLink[] = [
   { label: "Features", href: "/#features" },
   { label: "Download", href: "/#download" },
   { label: "Themes", to: "/themes" },
+  { label: "Plugins", to: "/plugins" },
   { label: "Releases", to: "/releases" },
   { label: "Contributors", to: "/contributors" },
   { label: "Docs", to: "/docs" },
@@ -232,6 +234,12 @@ export function Header(): JSX.Element {
                         icon={Palette}
                         label="Themes"
                         description="Browse community themes"
+                      />
+                      <DropdownLink
+                        to="/plugins"
+                        icon={Package}
+                        label="Plugins"
+                        description="Explore the emerging plugin registry"
                       />
                       <DropdownLink
                         to="/contributors"

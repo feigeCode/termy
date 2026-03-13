@@ -20,6 +20,7 @@ macro_rules! termy_command_catalog {
             (SwitchToTab9, "switch_to_tab_9"),
             (ManageTmuxSessions, "manage_tmux_sessions"),
             (ManageSavedLayouts, "manage_saved_layouts"),
+            (RunTask, "run_task"),
             (SplitPaneVertical, "split_pane_vertical"),
             (SplitPaneHorizontal, "split_pane_horizontal"),
             (ClosePane, "close_pane"),
@@ -39,6 +40,7 @@ macro_rules! termy_command_catalog {
             (AppInfo, "app_info"),
             (RestartApp, "restart_app"),
             (OpenConfig, "open_config"),
+            (PrettifyConfig, "prettify_config"),
             (OpenSettings, "open_settings"),
             (ImportThemeStoreAuth, "import_theme_store_auth"),
             (ImportColors, "import_colors"),
@@ -60,6 +62,7 @@ macro_rules! termy_command_catalog {
             (InstallCli, "install_cli"),
             (ToggleAiInput, "toggle_ai_input"),
             (ToggleAgentSidebar, "toggle_agent_sidebar"),
+            (ToggleVerticalTabSidebar, "toggle_vertical_tab_sidebar"),
         }
     };
 }

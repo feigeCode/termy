@@ -14,7 +14,10 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    LazyLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant};
 use termy_command_core::CommandId;
 use termy_config_core::{
@@ -43,6 +46,7 @@ const SETTINGS_CONTROL_HEIGHT: f32 = 36.0;
 const NUMERIC_STEP_BUTTON_SIZE: f32 = 26.0;
 const SETTINGS_INPUT_TEXT_SIZE: f32 = 13.0;
 const SETTINGS_CONFIG_WATCH_INTERVAL_MS: u64 = 750;
+const SETTINGS_PLUGIN_POLL_INTERVAL_MS: u64 = 900;
 const SETTINGS_SEARCH_NAV_THROTTLE_MS: u64 = 70;
 const SETTINGS_SCROLL_ANIMATION_DURATION_MS: u64 = 170;
 const SETTINGS_SCROLL_ANIMATION_TICK_MS: u64 = 16;
@@ -267,6 +271,30 @@ impl SettingsWindow {
                 let result = cx.update(|cx| {
                     this.update(cx, |view, cx| {
                         if view.reload_config_if_changed(cx) {
+                            cx.notify();
+                        }
+                    })
+                });
+                if result.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                smol::Timer::after(Duration::from_millis(SETTINGS_PLUGIN_POLL_INTERVAL_MS)).await;
+                let result = cx.update(|cx| {
+                    this.update(cx, |view, cx| {
+                        let (directory, entries, error) = Self::load_plugin_inventory();
+                        if view.plugin_directory != directory
+                            || view.plugin_inventory != entries
+                            || view.plugin_inventory_error != error
+                        {
+                            view.plugin_directory = directory;
+                            view.plugin_inventory = entries;
+                            view.plugin_inventory_error = error;
                             cx.notify();
                         }
                     })
@@ -685,9 +713,9 @@ impl SettingsWindow {
         );
         if synced_preview != previous_preview {
             self.preview_background_opacity = synced_preview;
-            if previous_preview.is_some_and(|preview| {
-                preview.owner_id == self.background_opacity_preview_owner_id
-            }) && self.background_opacity_drag_state.is_none()
+            if previous_preview
+                .is_some_and(|preview| preview.owner_id == self.background_opacity_preview_owner_id)
+                && self.background_opacity_drag_state.is_none()
             {
                 config::publish_background_opacity_preview(None);
             }

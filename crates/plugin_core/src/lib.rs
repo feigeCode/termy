@@ -28,6 +28,8 @@ pub struct PluginManifest {
     #[serde(default)]
     pub permissions: Vec<PluginPermission>,
     #[serde(default)]
+    pub subscribes: PluginSubscriptions,
+    #[serde(default)]
     pub contributes: PluginContributions,
 }
 
@@ -76,6 +78,7 @@ pub enum PluginRuntime {
 pub enum PluginPermission {
     FilesystemRead,
     FilesystemWrite,
+    HostEvents,
     Network,
     Shell,
     Clipboard,
@@ -83,6 +86,20 @@ pub enum PluginPermission {
     TerminalRead,
     TerminalWrite,
     UiPanels,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginSubscriptions {
+    #[serde(default)]
+    pub events: Vec<PluginEventSubscription>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginEventSubscription {
+    AppStarted,
+    ThemeChanged,
+    ActiveTabChanged,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +121,7 @@ pub struct PluginCommandContribution {
 pub enum HostRpcMessage {
     Hello(HostHello),
     InvokeCommand(HostCommandInvocation),
+    Event(HostEvent),
     Shutdown,
     Ping,
 }
@@ -122,11 +140,30 @@ pub struct HostCommandInvocation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum HostEvent {
+    AppStarted { host_version: String },
+    ThemeChanged { theme_id: String },
+    ActiveTabChanged { tab_index: usize, tab_title: String },
+}
+
+impl HostEvent {
+    pub fn subscription(&self) -> PluginEventSubscription {
+        match self {
+            Self::AppStarted { .. } => PluginEventSubscription::AppStarted,
+            Self::ThemeChanged { .. } => PluginEventSubscription::ThemeChanged,
+            Self::ActiveTabChanged { .. } => PluginEventSubscription::ActiveTabChanged,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PluginRpcMessage {
     Hello(PluginHello),
     Log(PluginLogMessage),
     Toast(PluginToastMessage),
+    Panel(PluginPanelUpdate),
     Pong,
 }
 
@@ -179,6 +216,26 @@ pub enum PluginToastLevel {
     Success,
     Warning,
     Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginPanelUpdate {
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub actions: Vec<PluginPanelAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginPanelAction {
+    pub command_id: String,
+    pub label: String,
+    #[serde(default = "default_panel_action_enabled")]
+    pub enabled: bool,
+}
+
+fn default_panel_action_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +292,33 @@ mod tests {
         assert_eq!(manifest.runtime, PluginRuntime::Executable);
         assert!(manifest.autostart);
         assert_eq!(manifest.permissions, vec![PluginPermission::Network]);
+        assert!(manifest.subscribes.events.is_empty());
         assert_eq!(manifest.contributes.commands.len(), 1);
+    }
+
+    #[test]
+    fn parses_manifest_event_subscriptions() {
+        let manifest = PluginManifest::from_json_str(
+            r#"{
+                "schema_version": 1,
+                "id": "example.events",
+                "name": "Events Plugin",
+                "version": "0.1.0",
+                "entrypoint": "./plugin.sh",
+                "subscribes": {
+                    "events": ["app_started", "theme_changed"]
+                }
+            }"#,
+        )
+        .expect("manifest should parse");
+
+        assert_eq!(
+            manifest.subscribes.events,
+            vec![
+                PluginEventSubscription::AppStarted,
+                PluginEventSubscription::ThemeChanged,
+            ]
+        );
     }
 
     #[test]
@@ -279,5 +362,57 @@ mod tests {
             discovered.resolved_entrypoint(),
             PathBuf::from("/tmp/plugins/hello/bin/plugin")
         );
+    }
+
+    #[test]
+    fn host_event_maps_to_subscription() {
+        assert_eq!(
+            HostEvent::AppStarted {
+                host_version: "0.1.51".to_string()
+            }
+            .subscription(),
+            PluginEventSubscription::AppStarted
+        );
+        assert_eq!(
+            HostEvent::ThemeChanged {
+                theme_id: "nord".to_string()
+            }
+            .subscription(),
+            PluginEventSubscription::ThemeChanged
+        );
+        assert_eq!(
+            HostEvent::ActiveTabChanged {
+                tab_index: 2,
+                tab_title: "server".to_string()
+            }
+            .subscription(),
+            PluginEventSubscription::ActiveTabChanged
+        );
+    }
+
+    #[test]
+    fn panel_update_defaults_actions_to_empty() {
+        let panel: PluginPanelUpdate = serde_json::from_str(
+            r#"{
+                "title": "Status",
+                "body": "Everything is healthy"
+            }"#,
+        )
+        .expect("panel should parse");
+
+        assert!(panel.actions.is_empty());
+    }
+
+    #[test]
+    fn panel_action_enabled_defaults_to_true() {
+        let action: PluginPanelAction = serde_json::from_str(
+            r#"{
+                "command_id": "example.status.refresh",
+                "label": "Refresh"
+            }"#,
+        )
+        .expect("action should parse");
+
+        assert!(action.enabled);
     }
 }

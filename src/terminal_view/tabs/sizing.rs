@@ -1,11 +1,14 @@
 use super::*;
+use crate::terminal_view::tab_strip::state::TabStripOrientation;
 
 impl TerminalView {
     pub(crate) fn sync_tab_strip_for_active_tab(&mut self) {
-        self.sync_tab_display_widths_for_viewport_if_needed(
-            self.tab_strip.layout_last_synced_viewport_width,
-        );
-        self.scroll_active_tab_into_view();
+        if self.tab_strip_orientation() == TabStripOrientation::Horizontal {
+            self.sync_tab_display_widths_for_viewport_if_needed(
+                self.tab_strip.horizontal_layout_last_synced_viewport_width,
+            );
+        }
+        self.scroll_active_tab_into_view(self.tab_strip_orientation());
     }
 
     pub(crate) fn tab_strip_fixed_content_width(&self) -> f32 {
@@ -20,7 +23,7 @@ impl TerminalView {
 
     pub(crate) fn tab_strip_scroll_max_x(&self) -> f32 {
         self.tab_strip_expected_max_scroll_for_viewport(
-            self.tab_strip.layout_last_synced_viewport_width,
+            self.tab_strip.horizontal_layout_last_synced_viewport_width,
         )
     }
 
@@ -42,41 +45,69 @@ impl TerminalView {
         target_scroll
     }
 
-    pub(crate) fn scroll_active_tab_into_view(&self) {
+    pub(crate) fn scroll_active_tab_into_view(&self, orientation: TabStripOrientation) {
         if self.active_tab >= self.tabs.len() {
             return;
         }
 
-        let viewport_width = self.tab_strip.layout_last_synced_viewport_width.max(0.0);
-        if viewport_width <= f32::EPSILON {
-            return;
-        }
+        match orientation {
+            TabStripOrientation::Horizontal => {
+                let viewport_width = self.tab_strip.horizontal_layout_last_synced_viewport_width
+                    .max(0.0);
+                if viewport_width <= f32::EPSILON {
+                    return;
+                }
 
-        let max_scroll = self.tab_strip_scroll_max_x();
-        let mut tab_left = TAB_HORIZONTAL_PADDING;
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let tab_right = tab_left + tab.display_width;
-            if index == self.active_tab {
-                let offset = self.tab_strip.scroll_handle.offset();
-                let current_scroll = -Into::<f32>::into(offset.x);
+                let max_scroll = self.tab_strip_scroll_max_x();
+                let mut tab_left = TAB_HORIZONTAL_PADDING;
+                for (index, tab) in self.tabs.iter().enumerate() {
+                    let tab_right = tab_left + tab.display_width;
+                    if index == self.active_tab {
+                        let offset = self.tab_strip.horizontal_scroll_handle.offset();
+                        let current_scroll = -Into::<f32>::into(offset.x);
+                        let target_scroll = Self::target_scroll_for_active_tab_bounds(
+                            current_scroll,
+                            viewport_width,
+                            tab_left,
+                            tab_right,
+                        );
+
+                        let clamped_scroll = target_scroll.clamp(0.0, max_scroll);
+                        let next_offset_x = -clamped_scroll;
+                        let current_offset_x: f32 = offset.x.into();
+                        if (next_offset_x - current_offset_x).abs() > f32::EPSILON {
+                            self.tab_strip
+                                .horizontal_scroll_handle
+                                .set_offset(point(px(next_offset_x), offset.y));
+                        }
+                        return;
+                    }
+                    tab_left = tab_right + TAB_ITEM_GAP;
+                }
+            }
+            TabStripOrientation::Vertical => {
+                let row_extent = TAB_ITEM_HEIGHT + TAB_ITEM_GAP;
+                let content_height = self.tabs.len() as f32 * row_extent;
+                let offset = self.tab_strip.vertical_scroll_handle.offset();
+                let max_scroll = (content_height - self.effective_vertical_tabs_list_height()).max(0.0);
+                let tab_top = self.active_tab as f32 * row_extent;
+                let tab_bottom = tab_top + TAB_ITEM_HEIGHT;
+                let current_scroll = -Into::<f32>::into(offset.y);
                 let target_scroll = Self::target_scroll_for_active_tab_bounds(
                     current_scroll,
-                    viewport_width,
-                    tab_left,
-                    tab_right,
+                    self.effective_vertical_tabs_list_height(),
+                    tab_top,
+                    tab_bottom,
                 );
-
                 let clamped_scroll = target_scroll.clamp(0.0, max_scroll);
-                let next_offset_x = -clamped_scroll;
-                let current_offset_x: f32 = offset.x.into();
-                if (next_offset_x - current_offset_x).abs() > f32::EPSILON {
+                let next_offset_y = -clamped_scroll;
+                let current_offset_y: f32 = offset.y.into();
+                if (next_offset_y - current_offset_y).abs() > f32::EPSILON {
                     self.tab_strip
-                        .scroll_handle
-                        .set_offset(point(px(next_offset_x), offset.y));
+                        .vertical_scroll_handle
+                        .set_offset(point(offset.x, px(next_offset_y)));
                 }
-                return;
             }
-            tab_left = tab_right + TAB_ITEM_GAP;
         }
     }
 
@@ -97,7 +128,7 @@ impl TerminalView {
     }
 
     pub(crate) fn tab_strip_overflow_state(&self) -> TabStripOverflowState {
-        let offset = self.tab_strip.scroll_handle.offset();
+        let offset = self.tab_strip.horizontal_scroll_handle.offset();
         let scroll_x = -Into::<f32>::into(offset.x);
         let max_scroll = self.tab_strip_scroll_max_x();
         Self::tab_strip_overflow_state_for_scroll(scroll_x, max_scroll)
@@ -124,7 +155,7 @@ impl TerminalView {
 
     pub(crate) fn scroll_tab_strip_by(&mut self, delta_x: f32) -> bool {
         let max_scroll = self.tab_strip_scroll_max_x();
-        let offset = self.tab_strip.scroll_handle.offset();
+        let offset = self.tab_strip.horizontal_scroll_handle.offset();
         let current_offset_x: f32 = offset.x.into();
         let Some(next_offset_x) =
             Self::tab_strip_offset_x_for_delta(current_offset_x, delta_x, max_scroll)
@@ -133,7 +164,7 @@ impl TerminalView {
         };
 
         self.tab_strip
-            .scroll_handle
+            .horizontal_scroll_handle
             .set_offset(point(px(next_offset_x), offset.y));
         true
     }
@@ -309,7 +340,8 @@ impl TerminalView {
     }
 
     pub(crate) fn mark_tab_strip_layout_dirty(&mut self) {
-        self.tab_strip.layout_revision = self.tab_strip.layout_revision.wrapping_add(1);
+        self.tab_strip.horizontal_layout_revision =
+            self.tab_strip.horizontal_layout_revision.wrapping_add(1);
     }
 
     pub(crate) fn sync_tab_display_widths_for_viewport_if_needed(
@@ -322,17 +354,19 @@ impl TerminalView {
             0.0
         };
         let viewport_unchanged =
-            (self.tab_strip.layout_last_synced_viewport_width - clamped_viewport).abs()
+            (self.tab_strip.horizontal_layout_last_synced_viewport_width - clamped_viewport).abs()
                 <= f32::EPSILON;
         let revision_unchanged =
-            self.tab_strip.layout_last_synced_revision == self.tab_strip.layout_revision;
+            self.tab_strip.horizontal_layout_last_synced_revision
+                == self.tab_strip.horizontal_layout_revision;
         if viewport_unchanged && revision_unchanged {
             return false;
         }
 
         let changed = self.sync_tab_display_widths_for_viewport(clamped_viewport);
-        self.tab_strip.layout_last_synced_viewport_width = clamped_viewport;
-        self.tab_strip.layout_last_synced_revision = self.tab_strip.layout_revision;
+        self.tab_strip.horizontal_layout_last_synced_viewport_width = clamped_viewport;
+        self.tab_strip.horizontal_layout_last_synced_revision =
+            self.tab_strip.horizontal_layout_revision;
         changed
     }
 

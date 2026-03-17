@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::terminal_view::tab_strip::state::TabStripOrientation;
 
 impl TerminalView {
     pub(crate) fn tab_strip_scroll_delta_from_pixels(delta_x: f32, delta_y: f32) -> f32 {
@@ -37,14 +38,35 @@ impl TerminalView {
 
     pub(crate) fn on_tab_mouse_down(
         &mut self,
+        orientation: TabStripOrientation,
         tab_index: usize,
         click_count: usize,
         cx: &mut Context<Self>,
     ) {
         self.switch_tab(tab_index, cx);
-        self.begin_tab_drag(tab_index);
+        self.begin_tab_drag(tab_index, orientation);
         if click_count == 2 {
             self.begin_rename_tab(tab_index, cx);
+        }
+    }
+
+    pub(crate) fn tab_strip_drag_preview_from_window_position(
+        &self,
+        orientation: TabStripOrientation,
+        window: &Window,
+        position: gpui::Point<Pixels>,
+    ) -> (f32, f32) {
+        match orientation {
+            TabStripOrientation::Horizontal => {
+                self.tab_strip_pointer_x_from_window_x(window, position.x)
+            }
+            TabStripOrientation::Vertical => {
+                let pointer_y = (Into::<f32>::into(position.y)
+                    - self.chrome_height()
+                    - self.vertical_tab_strip_controls_height())
+                .clamp(0.0, self.effective_vertical_tabs_list_height());
+                (pointer_y, self.effective_vertical_tabs_list_height())
+            }
         }
     }
 
@@ -65,6 +87,7 @@ impl TerminalView {
 
     pub(crate) fn on_tab_mouse_move(
         &mut self,
+        orientation: TabStripOrientation,
         tab_index: usize,
         event: &MouseMoveEvent,
         window: &Window,
@@ -81,9 +104,18 @@ impl TerminalView {
         }
 
         let drag_changed = if event.dragging() {
-            let (pointer_x, viewport_width) =
-                self.tab_strip_pointer_x_from_window_x(window, event.position.x);
-            self.update_tab_drag_preview(pointer_x, viewport_width, cx)
+            let (pointer_primary_axis, viewport_extent) =
+                self.tab_strip_drag_preview_from_window_position(
+                    orientation,
+                    window,
+                    event.position,
+                );
+            self.update_tab_drag_preview(
+                orientation,
+                pointer_primary_axis,
+                viewport_extent,
+                cx,
+            )
         } else {
             false
         };
@@ -94,15 +126,25 @@ impl TerminalView {
 
     pub(crate) fn on_tabs_content_mouse_move(
         &mut self,
+        orientation: TabStripOrientation,
         event: &MouseMoveEvent,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         let hovered_changed = self.clear_tab_hover_state();
         let drag_changed = if event.dragging() {
-            let (pointer_x, viewport_width) =
-                self.tab_strip_pointer_x_from_window_x(window, event.position.x);
-            self.update_tab_drag_preview(pointer_x, viewport_width, cx)
+            let (pointer_primary_axis, viewport_extent) =
+                self.tab_strip_drag_preview_from_window_position(
+                    orientation,
+                    window,
+                    event.position,
+                );
+            self.update_tab_drag_preview(
+                orientation,
+                pointer_primary_axis,
+                viewport_extent,
+                cx,
+            )
         } else {
             if self.tab_strip.drag.is_some() {
                 self.commit_tab_drag(cx);
@@ -129,9 +171,19 @@ impl TerminalView {
             return;
         }
 
-        let (pointer_x, viewport_width) =
-            self.tab_strip_pointer_x_from_window_x(window, event.position.x);
-        if !self.update_tab_drag_preview(pointer_x, viewport_width, cx) && hovered_changed {
+        let (pointer_primary_axis, viewport_extent) = self
+            .tab_strip_drag_preview_from_window_position(
+                TabStripOrientation::Horizontal,
+                window,
+                event.position,
+            );
+        if !self.update_tab_drag_preview(
+            TabStripOrientation::Horizontal,
+            pointer_primary_axis,
+            viewport_extent,
+            cx,
+        ) && hovered_changed
+        {
             cx.notify();
         }
     }
@@ -244,9 +296,19 @@ impl TerminalView {
             changed = true;
         }
         if event.dragging() {
-            let (pointer_x, viewport_width) =
-                self.tab_strip_pointer_x_from_window_x(window, event.position.x);
-            if !self.update_tab_drag_preview(pointer_x, viewport_width, cx) && changed {
+            let (pointer_primary_axis, viewport_extent) =
+                self.tab_strip_drag_preview_from_window_position(
+                    TabStripOrientation::Horizontal,
+                    window,
+                    event.position,
+                );
+            if !self.update_tab_drag_preview(
+                TabStripOrientation::Horizontal,
+                pointer_primary_axis,
+                viewport_extent,
+                cx,
+            ) && changed
+            {
                 cx.notify();
             }
             return;

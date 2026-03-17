@@ -8,9 +8,15 @@ use super::layout::TabStripLayoutSnapshot;
 const TAB_TITLE_WIDTH_CACHE_MAX_ENTRIES: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabStripOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabDropMarkerSide {
-    Left,
-    Right,
+    Leading,
+    Trailing,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,21 +81,23 @@ impl TabTitleWidthCache {
 pub(crate) struct TabDragState {
     pub(crate) source_index: usize,
     pub(crate) drop_slot: Option<usize>,
+    pub(crate) orientation: TabStripOrientation,
 }
 
 pub(crate) struct TabStripState {
-    pub(crate) scroll_handle: ScrollHandle,
+    pub(crate) horizontal_scroll_handle: ScrollHandle,
+    pub(crate) vertical_scroll_handle: ScrollHandle,
     pub(crate) switch_hints: TabSwitchHintState,
     pub(crate) hovered_tab: Option<usize>,
     pub(crate) hovered_tab_close: Option<usize>,
     pub(crate) drag: Option<TabDragState>,
-    pub(crate) drag_pointer_x: Option<f32>,
-    pub(crate) drag_viewport_width: f32,
+    pub(crate) drag_pointer_primary_axis: Option<f32>,
+    pub(crate) drag_viewport_extent: f32,
     pub(crate) drag_autoscroll_animating: bool,
-    pub(crate) layout_revision: u64,
-    pub(crate) layout_last_synced_revision: u64,
-    pub(crate) layout_last_synced_viewport_width: f32,
-    pub(crate) layout_snapshot: Option<TabStripLayoutSnapshot>,
+    pub(crate) horizontal_layout_revision: u64,
+    pub(crate) horizontal_layout_last_synced_revision: u64,
+    pub(crate) horizontal_layout_last_synced_viewport_width: f32,
+    pub(crate) horizontal_layout_snapshot: Option<TabStripLayoutSnapshot>,
     pub(crate) title_width_cache: TabTitleWidthCache,
     pub(crate) titlebar_move_armed: bool,
 }
@@ -97,18 +105,19 @@ pub(crate) struct TabStripState {
 impl TabStripState {
     pub(crate) fn new(show_tab_switch_modifier_hints: bool) -> Self {
         Self {
-            scroll_handle: ScrollHandle::new(),
+            horizontal_scroll_handle: ScrollHandle::new(),
+            vertical_scroll_handle: ScrollHandle::new(),
             switch_hints: TabSwitchHintState::new(show_tab_switch_modifier_hints),
             hovered_tab: None,
             hovered_tab_close: None,
             drag: None,
-            drag_pointer_x: None,
-            drag_viewport_width: 0.0,
+            drag_pointer_primary_axis: None,
+            drag_viewport_extent: 0.0,
             drag_autoscroll_animating: false,
-            layout_revision: 0,
-            layout_last_synced_revision: 0,
-            layout_last_synced_viewport_width: f32::NAN,
-            layout_snapshot: None,
+            horizontal_layout_revision: 0,
+            horizontal_layout_last_synced_revision: 0,
+            horizontal_layout_last_synced_viewport_width: f32::NAN,
+            horizontal_layout_snapshot: None,
             title_width_cache: TabTitleWidthCache::default(),
             titlebar_move_armed: false,
         }

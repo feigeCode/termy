@@ -197,7 +197,7 @@ impl TerminalView {
     }
 
     pub(crate) fn tab_strip_layout_snapshot(&self) -> Option<TabStripLayoutSnapshot> {
-        self.tab_strip.layout_snapshot
+        self.tab_strip.horizontal_layout_snapshot
     }
 
     pub(crate) fn tab_strip_layout_snapshot_or_window(
@@ -209,7 +209,7 @@ impl TerminalView {
     }
 
     pub(crate) fn set_tab_strip_layout_snapshot(&mut self, snapshot: TabStripLayoutSnapshot) {
-        self.tab_strip.layout_snapshot = Some(snapshot);
+        self.tab_strip.horizontal_layout_snapshot = Some(snapshot);
     }
 
     #[cfg(test)]

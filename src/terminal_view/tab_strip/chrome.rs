@@ -21,6 +21,19 @@ pub(super) struct TabStrokeRects {
     pub(super) right_boundary: Option<StrokeRect>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct VerticalTabStrokeRects {
+    pub(super) left: StrokeRect,
+    pub(super) top_boundary: Option<StrokeRect>,
+    pub(super) bottom_boundary: Option<StrokeRect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(super) struct VerticalTailChrome {
+    pub(super) draw_left_edge: bool,
+    pub(super) draw_content_divider: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TabChromeInput {
     pub(super) active_index: Option<usize>,
@@ -39,6 +52,24 @@ pub(super) struct TabChromeLayout {
     pub(super) content_width: f32,
     pub(super) tab_top_y: f32,
     pub(super) baseline_y: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct VerticalTabChromeInput {
+    pub(super) active_index: Option<usize>,
+    pub(super) strip_width: f32,
+    pub(super) control_rail_height: f32,
+    pub(super) tab_item_gap: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct VerticalTabChromeLayout {
+    pub(super) tab_strokes: Vec<VerticalTabStrokeRects>,
+    pub(super) control_seam: Option<StrokeRect>,
+    pub(super) content_divider_strokes: Vec<StrokeRect>,
+    pub(super) tail: VerticalTailChrome,
+    pub(super) content_height: f32,
+    pub(super) divider_x: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +106,10 @@ fn approximately_equal_px(lhs: f32, rhs: f32) -> bool {
 
 fn inclusive_height(start_y: f32, end_y: f32) -> f32 {
     (end_y - start_y + TAB_STROKE_THICKNESS).max(0.0)
+}
+
+fn inclusive_width(start_x: f32, end_x: f32) -> f32 {
+    (end_x - start_x + TAB_STROKE_THICKNESS).max(0.0)
 }
 
 pub(super) fn resolve_tab_stroke_color(
@@ -294,6 +329,237 @@ pub(super) fn compute_tab_chrome_layout(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VerticalTabSpan {
+    top: f32,
+    bottom_exclusive: f32,
+}
+
+impl VerticalTabSpan {
+    fn height(self) -> f32 {
+        self.bottom_exclusive - self.top
+    }
+
+    fn bottom_edge(self) -> f32 {
+        self.bottom_exclusive - TAB_STROKE_THICKNESS
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HorizontalBoundaryOwnerSide {
+    Top,
+    Bottom,
+}
+
+pub(super) fn compute_vertical_tab_chrome_layout(
+    tab_heights: impl IntoIterator<Item = f32>,
+    input: VerticalTabChromeInput,
+) -> VerticalTabChromeLayout {
+    let strip_width = snap_px(input.strip_width.max(TAB_STROKE_THICKNESS));
+    let divider_x = snap_px((strip_width - TAB_STROKE_THICKNESS).max(0.0));
+    let boundary_start_x = TAB_STROKE_THICKNESS;
+    let full_boundary_width = inclusive_width(boundary_start_x, divider_x);
+    let short_boundary_width = inclusive_width(boundary_start_x, divider_x - TAB_STROKE_THICKNESS);
+    let tab_item_gap = snap_px(input.tab_item_gap.max(0.0));
+    let control_seam = (input.control_rail_height > 0.0).then(|| {
+        StrokeRect::new(
+            0.0,
+            snap_px(input.control_rail_height - TAB_STROKE_THICKNESS),
+            strip_width,
+            TAB_STROKE_THICKNESS,
+        )
+    });
+
+    let iter = tab_heights.into_iter();
+    let (lower_bound, _) = iter.size_hint();
+    let mut spans = Vec::with_capacity(lower_bound);
+    let mut tab_strokes = Vec::with_capacity(lower_bound);
+
+    let mut cursor_y = 0.0;
+    for raw_height in iter {
+        debug_assert!(raw_height.is_finite(), "tab height must be finite");
+        let height = snap_px(raw_height.max(TAB_STROKE_THICKNESS));
+        let span = VerticalTabSpan {
+            top: cursor_y,
+            bottom_exclusive: cursor_y + height,
+        };
+        spans.push(span);
+        tab_strokes.push(VerticalTabStrokeRects {
+            left: StrokeRect::new(0.0, 0.0, TAB_STROKE_THICKNESS, span.height()),
+            top_boundary: None,
+            bottom_boundary: None,
+        });
+        cursor_y = span.bottom_exclusive + tab_item_gap;
+    }
+
+    let content_height = spans
+        .last()
+        .map_or(0.0, |span| snap_px(span.bottom_exclusive));
+
+    let active_span = input
+        .active_index
+        .and_then(|active_index| spans.get(active_index).copied());
+    if input.active_index.is_some() {
+        debug_assert!(
+            active_span.is_some(),
+            "active tab index is out of bounds for vertical chrome layout"
+        );
+    }
+
+    let active_top_boundary_y = active_span.map(|span| span.top);
+    let active_bottom_boundary_y = active_span.map(VerticalTabSpan::bottom_edge);
+    let boundary_width_for_y = |y: f32| {
+        let touches_active = active_top_boundary_y
+            .is_some_and(|active_top| approximately_equal_px(active_top, y))
+            || active_bottom_boundary_y
+                .is_some_and(|active_bottom| approximately_equal_px(active_bottom, y));
+        if touches_active {
+            full_boundary_width
+        } else {
+            short_boundary_width
+        }
+    };
+
+    let assign_boundary = |tab_strokes: &mut [VerticalTabStrokeRects],
+                           spans: &[VerticalTabSpan],
+                           tab_index: usize,
+                           side: HorizontalBoundaryOwnerSide,
+                           global_rect: StrokeRect| {
+        let tab_span = spans[tab_index];
+        let local_y = match side {
+            HorizontalBoundaryOwnerSide::Top => 0.0,
+            HorizontalBoundaryOwnerSide::Bottom => tab_span.height() - TAB_STROKE_THICKNESS,
+        };
+        let local_rect = StrokeRect::new(
+            TAB_STROKE_THICKNESS,
+            local_y,
+            global_rect.w,
+            TAB_STROKE_THICKNESS,
+        );
+        match side {
+            HorizontalBoundaryOwnerSide::Top => tab_strokes[tab_index].top_boundary = Some(local_rect),
+            HorizontalBoundaryOwnerSide::Bottom => {
+                tab_strokes[tab_index].bottom_boundary = Some(local_rect)
+            }
+        }
+    };
+
+    if control_seam.is_none() {
+        if let Some(first_span) = spans.first().copied() {
+            let top_boundary_y = first_span.top;
+            let top_boundary_rect = StrokeRect::new(
+                boundary_start_x,
+                top_boundary_y,
+                boundary_width_for_y(top_boundary_y),
+                TAB_STROKE_THICKNESS,
+            );
+            assign_boundary(
+                &mut tab_strokes,
+                &spans,
+                0,
+                HorizontalBoundaryOwnerSide::Top,
+                top_boundary_rect,
+            );
+        }
+    }
+
+    for divider_index in 0..spans.len().saturating_sub(1) {
+        let owner = if input.active_index == Some(divider_index + 1) {
+            (
+                divider_index + 1,
+                HorizontalBoundaryOwnerSide::Top,
+                spans[divider_index + 1].top,
+            )
+        } else {
+            (
+                divider_index,
+                HorizontalBoundaryOwnerSide::Bottom,
+                spans[divider_index].bottom_edge(),
+            )
+        };
+
+        let divider_rect = StrokeRect::new(
+            boundary_start_x,
+            owner.2,
+            boundary_width_for_y(owner.2),
+            TAB_STROKE_THICKNESS,
+        );
+        assign_boundary(&mut tab_strokes, &spans, owner.0, owner.1, divider_rect);
+    }
+
+    if let Some((last_index, last_span)) = spans
+        .len()
+        .checked_sub(1)
+        .and_then(|index| spans.get(index).copied().map(|span| (index, span)))
+    {
+        let bottom_boundary_y = last_span.bottom_edge();
+        let bottom_boundary_rect = StrokeRect::new(
+            boundary_start_x,
+            bottom_boundary_y,
+            boundary_width_for_y(bottom_boundary_y),
+            TAB_STROKE_THICKNESS,
+        );
+        assign_boundary(
+            &mut tab_strokes,
+            &spans,
+            last_index,
+            HorizontalBoundaryOwnerSide::Bottom,
+            bottom_boundary_rect,
+        );
+    }
+
+    let mut content_divider_strokes = Vec::with_capacity(2);
+    match active_span {
+        Some(active_span) => {
+            let top_height = active_span.top.clamp(0.0, content_height);
+            if top_height > 0.0 {
+                content_divider_strokes.push(StrokeRect::new(
+                    divider_x,
+                    0.0,
+                    TAB_STROKE_THICKNESS,
+                    top_height,
+                ));
+            }
+
+            let bottom_start_y =
+                (active_span.bottom_edge() + TAB_STROKE_THICKNESS).clamp(0.0, content_height);
+            let bottom_height = (content_height - bottom_start_y).max(0.0);
+            if bottom_height > 0.0 {
+                content_divider_strokes.push(StrokeRect::new(
+                    divider_x,
+                    bottom_start_y,
+                    TAB_STROKE_THICKNESS,
+                    bottom_height,
+                ));
+            }
+        }
+        None => {
+            if content_height > 0.0 {
+                content_divider_strokes.push(StrokeRect::new(
+                    divider_x,
+                    0.0,
+                    TAB_STROKE_THICKNESS,
+                    content_height,
+                ));
+            }
+        }
+    }
+
+    let tail = VerticalTailChrome {
+        draw_left_edge: strip_width > 0.0,
+        draw_content_divider: strip_width > 0.0,
+    };
+
+    VerticalTabChromeLayout {
+        tab_strokes,
+        control_seam,
+        content_divider_strokes,
+        tail,
+        content_height,
+        divider_x,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +585,104 @@ mod tests {
             .copied()
             .chain(layout.boundary_strokes.iter().copied())
             .chain(layout.baseline_strokes.iter().copied())
+    }
+
+    fn vertical_layout_for(
+        heights: &[f32],
+        active_index: Option<usize>,
+        strip_width: f32,
+    ) -> VerticalTabChromeLayout {
+        compute_vertical_tab_chrome_layout(
+            heights.iter().copied(),
+            VerticalTabChromeInput {
+                active_index,
+                strip_width,
+                control_rail_height: TABBAR_HEIGHT,
+                tab_item_gap: TAB_ITEM_GAP,
+            },
+        )
+    }
+
+    fn vertical_coverage_map(
+        layout: &VerticalTabChromeLayout,
+        heights: &[f32],
+        tail_height: f32,
+    ) -> HashMap<(i32, i32), usize> {
+        let mut coverage = HashMap::new();
+
+        let mut push_rect = |rect: StrokeRect| {
+            let x_start = rect.x as i32;
+            let y_start = rect.y as i32;
+            let x_end = (rect.x + rect.w) as i32;
+            let y_end = (rect.y + rect.h) as i32;
+            for x in x_start..x_end {
+                for y in y_start..y_end {
+                    *coverage.entry((x, y)).or_insert(0) += 1;
+                }
+            }
+        };
+
+        if let Some(control_seam) = layout.control_seam {
+            push_rect(control_seam);
+        }
+
+        let list_origin_y = layout.control_seam.map_or(0.0, |stroke| stroke.y + stroke.h);
+
+        for stroke in &layout.content_divider_strokes {
+            push_rect(StrokeRect::new(
+                stroke.x,
+                list_origin_y + stroke.y,
+                stroke.w,
+                stroke.h,
+            ));
+        }
+
+        let mut cursor_y = 0.0;
+        for (index, height) in heights.iter().copied().enumerate() {
+            let strokes = layout.tab_strokes[index];
+            push_rect(StrokeRect::new(
+                strokes.left.x,
+                list_origin_y + cursor_y + strokes.left.y,
+                strokes.left.w,
+                strokes.left.h,
+            ));
+            if let Some(top) = strokes.top_boundary {
+                push_rect(StrokeRect::new(
+                    top.x,
+                    list_origin_y + cursor_y + top.y,
+                    top.w,
+                    top.h,
+                ));
+            }
+            if let Some(bottom) = strokes.bottom_boundary {
+                push_rect(StrokeRect::new(
+                    bottom.x,
+                    list_origin_y + cursor_y + bottom.y,
+                    bottom.w,
+                    bottom.h,
+                ));
+            }
+            cursor_y += height + TAB_ITEM_GAP;
+        }
+
+        if layout.tail.draw_left_edge && tail_height > 0.0 {
+            push_rect(StrokeRect::new(
+                0.0,
+                list_origin_y + layout.content_height,
+                TAB_STROKE_THICKNESS,
+                tail_height,
+            ));
+        }
+        if layout.tail.draw_content_divider && tail_height > 0.0 {
+            push_rect(StrokeRect::new(
+                layout.divider_x,
+                list_origin_y + layout.content_height,
+                TAB_STROKE_THICKNESS,
+                tail_height,
+            ));
+        }
+
+        coverage
     }
 
     fn coverage_map(layout: &TabChromeLayout) -> HashMap<(i32, i32), usize> {
@@ -476,5 +840,165 @@ mod tests {
             assert!(stroke.w >= 0.0);
             assert!(stroke.x + stroke.w <= layout.content_width);
         }
+    }
+
+    #[test]
+    fn vertical_active_middle_suppresses_content_divider_only_across_active_span() {
+        let layout = vertical_layout_for(&[32.0, 32.0, 32.0], Some(1), 180.0);
+        let divider_pixels: HashSet<i32> = layout
+            .content_divider_strokes
+            .iter()
+            .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
+            .collect();
+
+        for y in 0..layout.content_height as i32 {
+            if (32..64).contains(&y) {
+                assert!(
+                    !divider_pixels.contains(&y),
+                    "active span unexpectedly contains divider pixel at y={y}"
+                );
+            } else {
+                assert!(
+                    divider_pixels.contains(&y),
+                    "missing divider pixel outside active span at y={y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_active_first_suppresses_divider_for_first_tab_only() {
+        let layout = vertical_layout_for(&[32.0, 32.0], Some(0), 180.0);
+        let divider_pixels: HashSet<i32> = layout
+            .content_divider_strokes
+            .iter()
+            .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
+            .collect();
+
+        for y in 0..layout.content_height as i32 {
+            if y < 32 {
+                assert!(
+                    !divider_pixels.contains(&y),
+                    "active first tab unexpectedly contains divider pixel at y={y}"
+                );
+            } else {
+                assert!(
+                    divider_pixels.contains(&y),
+                    "missing divider pixel below active first tab at y={y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_active_last_suppresses_divider_for_last_tab_only() {
+        let layout = vertical_layout_for(&[32.0, 32.0], Some(1), 180.0);
+        let divider_pixels: HashSet<i32> = layout
+            .content_divider_strokes
+            .iter()
+            .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
+            .collect();
+
+        for y in 0..layout.content_height as i32 {
+            if y < 32 {
+                assert!(
+                    divider_pixels.contains(&y),
+                    "missing divider pixel above active last tab at y={y}"
+                );
+            } else {
+                assert!(
+                    !divider_pixels.contains(&y),
+                    "active last tab unexpectedly contains divider pixel at y={y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_boundaries_shorten_when_not_adjacent_to_active_tab() {
+        let layout = vertical_layout_for(&[32.0, 32.0, 32.0], Some(1), 180.0);
+        let full_width = layout.divider_x;
+        let short_width = full_width - TAB_STROKE_THICKNESS;
+
+        assert!(layout.control_seam.is_some());
+        assert!(
+            layout.tab_strokes[0].top_boundary.is_none(),
+            "control seam should own the list top boundary"
+        );
+        assert!(
+            layout.tab_strokes[0].bottom_boundary.is_none(),
+            "active-adjacent separator should be owned by the active tab's top boundary"
+        );
+        assert_eq!(
+            layout.tab_strokes[1]
+                .top_boundary
+                .expect("active tab should own incoming boundary")
+                .w,
+            full_width
+        );
+        assert_eq!(
+            layout.tab_strokes[1]
+                .bottom_boundary
+                .expect("active tab should own outgoing boundary")
+                .w,
+            full_width
+        );
+        assert_eq!(
+            layout.tab_strokes[2]
+                .bottom_boundary
+                .expect("last tab should own bottom boundary")
+                .w,
+            short_width
+        );
+    }
+
+    #[test]
+    fn vertical_divider_rectangles_are_bounded_by_content_height() {
+        let layout = vertical_layout_for(&[32.0, 48.0, 32.0], Some(1), 180.0);
+        for stroke in &layout.content_divider_strokes {
+            assert!(stroke.y >= 0.0);
+            assert!(stroke.h >= 0.0);
+            assert!(stroke.y + stroke.h <= layout.content_height);
+        }
+    }
+
+    #[test]
+    fn vertical_chrome_has_no_pixel_overlap_through_content_and_tail() {
+        let heights = [32.0, 32.0, 32.0];
+        let layout = vertical_layout_for(&heights, Some(1), 180.0);
+        let coverage = vertical_coverage_map(&layout, &heights, 48.0);
+
+        assert!(coverage.values().all(|count| *count == 1));
+    }
+
+    #[test]
+    fn vertical_no_active_keeps_continuous_divider_and_single_top_owner() {
+        let layout = vertical_layout_for(&[32.0, 32.0], None, 180.0);
+        let divider_pixels: HashSet<i32> = layout
+            .content_divider_strokes
+            .iter()
+            .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
+            .collect();
+
+        for y in 0..layout.content_height as i32 {
+            assert!(divider_pixels.contains(&y), "missing divider pixel at y={y}");
+        }
+        assert!(layout.control_seam.is_some());
+        assert!(layout.tab_strokes[0].top_boundary.is_none());
+    }
+
+    #[test]
+    fn vertical_tail_continues_sidebar_edges_below_last_tab() {
+        let layout = vertical_layout_for(&[32.0], Some(0), 180.0);
+
+        assert!(layout.tail.draw_left_edge);
+        assert!(layout.tail.draw_content_divider);
+        assert_eq!(
+            layout.tab_strokes[0]
+                .bottom_boundary
+                .expect("single tab should own bottom boundary")
+                .y,
+            31.0
+        );
     }
 }

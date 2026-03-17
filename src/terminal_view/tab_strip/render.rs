@@ -2,7 +2,7 @@ use super::super::*;
 use super::chrome;
 use super::hints::TabSwitchHintState;
 use super::layout::TabStripGeometry;
-use super::state::{TabDropMarkerSide, TabStripOverflowState};
+use super::state::{TabDropMarkerSide, TabStripOrientation, TabStripOverflowState};
 use gpui::{Hsla, TextRun};
 
 #[derive(Clone, Copy)]
@@ -168,6 +168,23 @@ mod tests {
         assert!(!collisions.left);
         assert!(!collisions.right);
     }
+
+    #[test]
+    fn compact_vertical_tab_label_prefers_shortcuts_then_initial() {
+        assert_eq!(
+            TerminalView::compact_vertical_tab_label(0, "~/projects/termy"),
+            "1"
+        );
+        assert_eq!(
+            TerminalView::compact_vertical_tab_label(8, "~/projects/termy"),
+            "9"
+        );
+        assert_eq!(
+            TerminalView::compact_vertical_tab_label(9, "~/projects/termy"),
+            "~"
+        );
+        assert_eq!(TerminalView::compact_vertical_tab_label(10, ""), "•");
+    }
 }
 
 struct TabStripRenderState {
@@ -184,9 +201,11 @@ struct DividerCollisionState {
 }
 
 struct TabItemRenderInput {
+    orientation: TabStripOrientation,
     index: usize,
-    tab_width: f32,
-    tab_strokes: chrome::TabStrokeRects,
+    tab_primary_extent: f32,
+    tab_cross_extent: f32,
+    tab_strokes: TabItemStrokeRects,
     label: String,
     switch_hint_label: Option<String>,
     is_active: bool,
@@ -194,9 +213,26 @@ struct TabItemRenderInput {
     is_renaming: bool,
     show_tab_close: bool,
     close_slot_width: f32,
+    text_padding_x: f32,
+    label_centered: bool,
+    trailing_divider_cover: Option<gpui::Rgba>,
     drop_marker_side: Option<TabDropMarkerSide>,
     /// 0.0..=1.0 progress for new-tab open animation, None when not animating
     open_anim_progress: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct TabItemStrokeRects {
+    top: Option<chrome::StrokeRect>,
+    bottom: Option<chrome::StrokeRect>,
+    left: Option<chrome::StrokeRect>,
+    right: Option<chrome::StrokeRect>,
+}
+
+#[derive(Clone, Copy)]
+enum TabStripControlAction {
+    NewTab,
+    ToggleVerticalSidebar,
 }
 
 impl TerminalView {
@@ -411,6 +447,14 @@ impl TerminalView {
         }
     }
 
+    fn compact_vertical_tab_label(index: usize, title: &str) -> String {
+        if index < 9 {
+            return (index + 1).to_string();
+        }
+
+        title.chars().next().unwrap_or('•').to_string()
+    }
+
     fn build_tab_strip_render_state(
         &mut self,
         window: &Window,
@@ -433,7 +477,7 @@ impl TerminalView {
             // Width updates can move the active tab offscreen (especially after
             // tmux snapshot/title sync). Snap once here to keep parity with
             // non-tmux active-tab visibility without overriding manual scrolling.
-            self.scroll_active_tab_into_view();
+            self.scroll_active_tab_into_view(TabStripOrientation::Horizontal);
         }
         let content_width = self
             .tab_strip_fixed_content_width()
@@ -623,50 +667,87 @@ impl TerminalView {
         elements
     }
 
-    fn render_tab_item(
-        &mut self,
-        input: TabItemRenderInput,
-        font_family: &SharedString,
-        colors: &TerminalColors,
-        palette: &TabStripPalette,
-        cx: &mut Context<Self>,
+    fn render_stroke_segments(
+        strokes: &[chrome::StrokeRect],
+        tab_stroke_color: gpui::Rgba,
+    ) -> Vec<AnyElement> {
+        strokes
+            .iter()
+            .copied()
+            .map(|segment| Self::render_tab_stroke(segment, tab_stroke_color))
+            .collect()
+    }
+
+    fn render_vertical_tail(
+        layout: &chrome::VerticalTabChromeLayout,
+        tab_stroke_color: gpui::Rgba,
     ) -> AnyElement {
-        let switch_tab_index = input.index;
-        let hover_tab_index = input.index;
-        let close_tab_index = input.index;
+        let mut tail = div()
+            .id("vertical-tabs-lane-tail")
+            .relative()
+            .flex_1()
+            .min_h(px(0.0));
 
-        let anim = input.open_anim_progress.unwrap_or(1.0);
-
-        let mut rename_text_color = if input.is_active {
-            palette.active_tab_text
-        } else {
-            palette.inactive_tab_text
-        };
-        rename_text_color.a *= anim;
-        let mut rename_selection_color = colors.cursor;
-        rename_selection_color.a = if input.is_active { 0.34 } else { 0.24 };
-        rename_selection_color.a *= anim;
-
-        let mut tab_bg = if input.is_active {
-            palette.active_tab_bg
-        } else if input.is_hovered {
-            palette.hovered_tab_bg
-        } else {
-            palette.inactive_tab_bg
-        };
-        tab_bg.a *= anim;
-
-        let mut close_text_color = if input.is_active {
-            palette.active_tab_text
-        } else {
-            palette.inactive_tab_text
-        };
-        close_text_color.a *= anim;
-        if !input.show_tab_close {
-            close_text_color.a = 0.0;
+        if layout.tail.draw_left_edge {
+            tail = tail.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(TAB_STROKE_THICKNESS))
+                    .bg(tab_stroke_color),
+            );
         }
 
-        let close_button = div()
+        if layout.tail.draw_content_divider {
+            tail = tail.child(
+                div()
+                    .absolute()
+                    .left(px(layout.divider_x))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(TAB_STROKE_THICKNESS))
+                    .bg(tab_stroke_color),
+            );
+        }
+
+        tail.into_any_element()
+    }
+
+    fn render_tab_accessory(
+        &self,
+        input: &TabItemRenderInput,
+        palette: &TabStripPalette,
+        close_text_color: gpui::Rgba,
+        hover_tab_index: usize,
+        close_tab_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some(label) = input.switch_hint_label.as_ref() {
+            let mut accessory = div()
+                .flex_none()
+                .w(px(input.close_slot_width))
+                .h(px(TAB_CLOSE_HITBOX))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(palette.switch_hint_bg)
+                .text_color(palette.switch_hint_text)
+                .text_size(px(TAB_SWITCH_HINT_TEXT_SIZE))
+                .font_weight(FontWeight::MEDIUM);
+
+            if input.orientation == TabStripOrientation::Horizontal {
+                accessory = accessory.border_l_1().border_color(palette.switch_hint_border);
+            } else {
+                accessory = accessory.border_1().border_color(palette.switch_hint_border);
+            }
+
+            return accessory.child(label.clone()).into_any_element();
+        }
+
+        div()
+            .flex_none()
             .w(px(input.close_slot_width))
             .h(px(TAB_CLOSE_HITBOX))
             .flex()
@@ -703,83 +784,139 @@ impl TerminalView {
                     .bg(palette.close_button_hover_bg)
                     .text_color(palette.close_button_hover_text)
             })
-            .cursor_pointer();
+            .cursor_pointer()
+            .into_any_element()
+    }
 
-        let accessory_slot = if let Some(label) = input.switch_hint_label {
-            div()
-                .flex_none()
-                .w(px(input.close_slot_width))
-                .h(px(TAB_CLOSE_HITBOX))
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_l_1()
-                .border_color(palette.switch_hint_border)
-                .bg(palette.switch_hint_bg)
-                .text_color(palette.switch_hint_text)
-                .text_size(px(TAB_SWITCH_HINT_TEXT_SIZE))
-                .font_weight(FontWeight::MEDIUM)
-                .child(label)
+    fn render_tab_item(
+        &mut self,
+        input: TabItemRenderInput,
+        font_family: &SharedString,
+        colors: &TerminalColors,
+        palette: &TabStripPalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let orientation = input.orientation;
+        let switch_tab_index = input.index;
+        let hover_tab_index = input.index;
+        let close_tab_index = input.index;
+
+        let anim = input.open_anim_progress.unwrap_or(1.0);
+
+        let mut rename_text_color = if input.is_active {
+            palette.active_tab_text
         } else {
-            close_button
+            palette.inactive_tab_text
         };
+        rename_text_color.a *= anim;
+        let mut rename_selection_color = colors.cursor;
+        rename_selection_color.a = if input.is_active { 0.34 } else { 0.24 };
+        rename_selection_color.a *= anim;
 
-        let tab_shell = div()
+        let mut tab_bg = if input.is_active {
+            palette.active_tab_bg
+        } else if input.is_hovered {
+            palette.hovered_tab_bg
+        } else {
+            palette.inactive_tab_bg
+        };
+        tab_bg.a *= anim;
+
+        let mut close_text_color = if input.is_active {
+            palette.active_tab_text
+        } else {
+            palette.inactive_tab_text
+        };
+        close_text_color.a *= anim;
+        if !input.show_tab_close {
+            close_text_color.a = 0.0;
+        }
+
+        let accessory_slot = self.render_tab_accessory(
+            &input,
+            palette,
+            close_text_color,
+            hover_tab_index,
+            close_tab_index,
+            cx,
+        );
+
+        let justify_label_center = input.label_centered;
+        let trailing_divider_cover = input.trailing_divider_cover;
+        let mut tab_shell = div()
             .flex_none()
             .relative()
-            .overflow_x_hidden()
+            .overflow_hidden()
             .bg(tab_bg)
-            .w(px(input.tab_width))
-            .h(px(TAB_ITEM_HEIGHT))
-            .px(px(TAB_TEXT_PADDING_X))
+            .w(px(input.tab_primary_extent))
+            .h(px(input.tab_cross_extent))
+            .px(px(input.text_padding_x))
             .flex()
             .items_center()
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                    this.on_tab_mouse_down(switch_tab_index, event.click_count, cx);
+                    this.on_tab_mouse_down(orientation, switch_tab_index, event.click_count, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_mouse_move(
                 cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                    this.on_tab_mouse_move(hover_tab_index, event, window, cx);
+                    this.on_tab_mouse_move(orientation, hover_tab_index, event, window, cx);
                     cx.stop_propagation();
                 }),
-            )
-            .child(Self::render_tab_stroke(
-                input.tab_strokes.top,
-                palette.tab_stroke_color,
-            ))
-            .children(
-                input
-                    .tab_strokes
-                    .left_boundary
-                    .map(|stroke| Self::render_tab_stroke(stroke, palette.tab_stroke_color)),
-            )
-            .children(
-                input
-                    .tab_strokes
-                    .right_boundary
-                    .map(|stroke| Self::render_tab_stroke(stroke, palette.tab_stroke_color)),
             );
 
-        let drop_marker = input.drop_marker_side.map(|side| {
-            let marker_x = match side {
-                TabDropMarkerSide::Left => 0.0,
-                TabDropMarkerSide::Right => input.tab_width - TAB_DROP_MARKER_WIDTH,
-            }
-            .max(0.0);
-            let marker_height = (TAB_ITEM_HEIGHT - (TAB_DROP_MARKER_INSET_Y * 2.0)).max(0.0);
+        for stroke in [
+            input.tab_strokes.top,
+            input.tab_strokes.bottom,
+            input.tab_strokes.left,
+            input.tab_strokes.right,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            tab_shell = tab_shell.child(Self::render_tab_stroke(stroke, palette.tab_stroke_color));
+        }
 
-            div()
-                .absolute()
-                .left(px(marker_x))
-                .top(px(TAB_DROP_MARKER_INSET_Y))
-                .w(px(TAB_DROP_MARKER_WIDTH))
-                .h(px(marker_height))
-                .bg(palette.tab_drop_marker_color)
+        let drop_marker = input.drop_marker_side.map(|side| match orientation {
+            TabStripOrientation::Horizontal => {
+                let marker_x = match side {
+                    TabDropMarkerSide::Leading => 0.0,
+                    TabDropMarkerSide::Trailing => {
+                        input.tab_primary_extent - TAB_DROP_MARKER_WIDTH
+                    }
+                }
+                .max(0.0);
+                let marker_height =
+                    (input.tab_cross_extent - (TAB_DROP_MARKER_INSET_Y * 2.0)).max(0.0);
+
+                div()
+                    .absolute()
+                    .left(px(marker_x))
+                    .top(px(TAB_DROP_MARKER_INSET_Y))
+                    .w(px(TAB_DROP_MARKER_WIDTH))
+                    .h(px(marker_height))
+                    .bg(palette.tab_drop_marker_color)
+            }
+            TabStripOrientation::Vertical => {
+                let marker_y = match side {
+                    TabDropMarkerSide::Leading => 0.0,
+                    TabDropMarkerSide::Trailing => {
+                        input.tab_cross_extent - TAB_DROP_MARKER_WIDTH
+                    }
+                }
+                .max(0.0);
+
+                div()
+                    .absolute()
+                    .left(px(TAB_DROP_MARKER_INSET_Y))
+                    .top(px(marker_y))
+                    .w(px((input.tab_primary_extent - (TAB_DROP_MARKER_INSET_Y * 2.0)).max(0.0)))
+                    .h(px(TAB_DROP_MARKER_WIDTH))
+                    .bg(palette.tab_drop_marker_color)
+            }
         });
 
         tab_shell
@@ -803,7 +940,7 @@ impl TerminalView {
                             cx,
                         )
                     } else {
-                        let title_text = div()
+                        let mut title_text = div()
                             .size_full()
                             .flex()
                             .items_center()
@@ -813,10 +950,22 @@ impl TerminalView {
                             .text_color(rename_text_color)
                             .text_size(px(12.0))
                             .text_ellipsis();
+                        if justify_label_center {
+                            title_text = title_text.justify_center();
+                        }
                         title_text.child(input.label).into_any_element()
                     }),
             )
-            .child(accessory_slot)
+            .children((input.close_slot_width > 0.0).then_some(accessory_slot))
+            .children(trailing_divider_cover.map(|cover_color| {
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(TAB_STROKE_THICKNESS))
+                    .bg(cover_color)
+            }))
             .children(drop_marker)
             .into_any_element()
     }
@@ -845,7 +994,12 @@ impl TerminalView {
             .items_end()
             .gap(px(TAB_ITEM_GAP))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                this.on_tabs_content_mouse_move(event, window, cx);
+                this.on_tabs_content_mouse_move(
+                    TabStripOrientation::Horizontal,
+                    event,
+                    window,
+                    cx,
+                );
             }));
 
         tabs_scroll_content = tabs_scroll_content.child(
@@ -905,9 +1059,16 @@ impl TerminalView {
 
             let tab_item = self.render_tab_item(
                 TabItemRenderInput {
+                    orientation: TabStripOrientation::Horizontal,
                     index,
-                    tab_width,
-                    tab_strokes: state.chrome_layout.tab_strokes[index],
+                    tab_primary_extent: tab_width,
+                    tab_cross_extent: TAB_ITEM_HEIGHT,
+                    tab_strokes: TabItemStrokeRects {
+                        top: Some(state.chrome_layout.tab_strokes[index].top),
+                        bottom: None,
+                        left: state.chrome_layout.tab_strokes[index].left_boundary,
+                        right: state.chrome_layout.tab_strokes[index].right_boundary,
+                    },
                     label,
                     switch_hint_label,
                     is_active,
@@ -915,6 +1076,9 @@ impl TerminalView {
                     is_renaming,
                     show_tab_close,
                     close_slot_width,
+                    text_padding_x: TAB_TEXT_PADDING_X,
+                    label_centered: false,
+                    trailing_divider_cover: None,
                     drop_marker_side: self.tab_drop_marker_side(index),
                     open_anim_progress: anim_progress,
                 },
@@ -937,8 +1101,11 @@ impl TerminalView {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_tabbar_new_tab_button(
+    fn render_tab_strip_control_button(
         &self,
+        id: &'static str,
+        icon: &'static str,
+        action: TabStripControlAction,
         bg: gpui::Rgba,
         hover_bg: gpui::Rgba,
         border: gpui::Rgba,
@@ -946,21 +1113,18 @@ impl TerminalView {
         text: gpui::Rgba,
         hover_text: gpui::Rgba,
         button_size: f32,
+        icon_size: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if button_size <= 0.0 {
-            return div()
-                .id("tabbar-new-tab")
-                .w(px(0.0))
-                .h(px(0.0))
-                .into_any_element();
+            return div().id(id).w(px(0.0)).h(px(0.0)).into_any_element();
         }
 
         let corner_radius = TABBAR_NEW_TAB_BUTTON_RADIUS.min(button_size * 0.5);
-        let icon_size = TABBAR_NEW_TAB_ICON_SIZE.min(button_size);
+        let icon_size = icon_size.min(button_size);
 
         div()
-            .id("tabbar-new-tab")
+            .id(id)
             .w(px(button_size))
             .h(px(button_size))
             .rounded(px(corner_radius))
@@ -971,9 +1135,22 @@ impl TerminalView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
-                    this.disarm_titlebar_window_move();
-                    this.add_tab(cx);
+                cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                    match action {
+                        TabStripControlAction::NewTab => {
+                            this.disarm_titlebar_window_move();
+                            this.add_tab(cx);
+                        }
+                        TabStripControlAction::ToggleVerticalSidebar => {
+                            if let Err(error) =
+                                this.set_vertical_tabs_minimized(!this.vertical_tabs_minimized)
+                            {
+                                termy_toast::error(error);
+                            } else {
+                                cx.notify();
+                            }
+                        }
+                    }
                     cx.stop_propagation();
                 }),
             )
@@ -992,7 +1169,7 @@ impl TerminalView {
                     .text_size(px(icon_size))
                     .font_weight(FontWeight::MEDIUM)
                     .mt(px(TABBAR_NEW_TAB_ICON_BASELINE_NUDGE_Y))
-                    .child("+"),
+                    .child(icon),
             )
             .into_any_element()
     }
@@ -1025,7 +1202,10 @@ impl TerminalView {
                     .absolute()
                     .left(px(tabbar_new_tab_left))
                     .top(px(tabbar_new_tab_top))
-                    .child(self.render_tabbar_new_tab_button(
+                    .child(self.render_tab_strip_control_button(
+                        "tabbar-new-tab",
+                        "+",
+                        TabStripControlAction::NewTab,
                         palette.tabbar_new_tab_bg,
                         palette.tabbar_new_tab_hover_bg,
                         palette.tabbar_new_tab_border,
@@ -1033,6 +1213,7 @@ impl TerminalView {
                         palette.tabbar_new_tab_text,
                         palette.tabbar_new_tab_hover_text,
                         tabbar_new_tab_size,
+                        TABBAR_NEW_TAB_ICON_SIZE,
                         cx,
                     )),
             )
@@ -1055,80 +1236,79 @@ impl TerminalView {
 
         let palette = self.resolve_tab_strip_palette(colors, tabbar_bg);
         let now = Instant::now();
+        let new_tab_anim = self.new_tab_animation_progress(now);
         let compact = self.vertical_tabs_minimized;
         let strip_width = self.effective_vertical_tab_strip_width();
-        let content_padding = if compact {
-            6.0
-        } else {
-            VERTICAL_TAB_STRIP_PADDING
-        };
-        let inner_width = (strip_width - (content_padding * 2.0)).max(0.0);
-
-        let new_tab_button = self.render_tabbar_new_tab_button(
+        let controls_height = self.vertical_tab_strip_controls_height();
+        let active_tab_index = (self.active_tab < self.tabs.len()).then_some(self.active_tab);
+        let tab_heights: Vec<f32> = (0..self.tabs.len())
+            .map(|index| {
+                let anim_progress = new_tab_anim
+                    .filter(|(anim_index, _)| *anim_index == index)
+                    .map(|(_, progress)| progress)
+                    .unwrap_or(1.0);
+                TAB_ITEM_HEIGHT * anim_progress
+            })
+            .collect();
+        let chrome_layout = chrome::compute_vertical_tab_chrome_layout(
+            tab_heights.iter().copied(),
+            chrome::VerticalTabChromeInput {
+                active_index: active_tab_index,
+                strip_width,
+                control_rail_height: controls_height,
+                tab_item_gap: TAB_ITEM_GAP,
+            },
+        );
+        debug_assert_eq!(chrome_layout.tab_strokes.len(), self.tabs.len());
+        let control_button_size = if compact { 18.0 } else { TABBAR_NEW_TAB_BUTTON_SIZE };
+        let control_icon_size = if compact { 11.0 } else { TABBAR_NEW_TAB_ICON_SIZE };
+        let new_tab_button = self.render_tab_strip_control_button(
+            "vertical-tabs-new-tab",
+            "+",
+            TabStripControlAction::NewTab,
             palette.tabbar_new_tab_bg,
             palette.tabbar_new_tab_hover_bg,
             palette.tabbar_new_tab_border,
             palette.tabbar_new_tab_hover_border,
             palette.tabbar_new_tab_text,
             palette.tabbar_new_tab_hover_text,
-            0.0,
+            control_button_size,
+            control_icon_size,
             cx,
         );
         let collapse_icon = if compact { "›" } else { "‹" };
-        let collapse_button = div()
-            .id("vertical-tabs-collapse")
-            .w(px(TABBAR_NEW_TAB_BUTTON_SIZE))
-            .h(px(TABBAR_NEW_TAB_BUTTON_SIZE))
-            .rounded(px(TABBAR_NEW_TAB_BUTTON_RADIUS))
-            .bg(palette.tabbar_new_tab_bg)
-            .border_1()
-            .border_color(palette.tabbar_new_tab_border)
-            .text_color(palette.tabbar_new_tab_text)
-            .text_size(px(14.0))
-            .cursor_pointer()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
-                    if let Err(error) =
-                        this.set_vertical_tabs_minimized(!this.vertical_tabs_minimized)
-                    {
-                        termy_toast::error(error);
-                    } else {
-                        cx.notify();
-                    }
-                    cx.stop_propagation();
-                }),
-            )
-            .hover(move |style| {
-                style
-                    .bg(palette.tabbar_new_tab_hover_bg)
-                    .border_color(palette.tabbar_new_tab_hover_border)
-                    .text_color(palette.tabbar_new_tab_hover_text)
-            })
-            .child(
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(collapse_icon),
-            );
+        let collapse_button = self.render_tab_strip_control_button(
+            "vertical-tabs-collapse",
+            collapse_icon,
+            TabStripControlAction::ToggleVerticalSidebar,
+            palette.tabbar_new_tab_bg,
+            palette.tabbar_new_tab_hover_bg,
+            palette.tabbar_new_tab_border,
+            palette.tabbar_new_tab_hover_border,
+            palette.tabbar_new_tab_text,
+            palette.tabbar_new_tab_hover_text,
+            control_button_size,
+            if compact { 12.0 } else { 14.0 },
+            cx,
+        );
 
         let mut list = div()
             .id("vertical-tabs-list")
+            .relative()
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .p(px(content_padding))
-            .on_mouse_move(cx.listener(|this, _event: &MouseMoveEvent, _window, cx| {
-                if this.clear_tab_hover_state() {
-                    cx.notify();
-                }
+            .gap(px(TAB_ITEM_GAP))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.on_tabs_content_mouse_move(TabStripOrientation::Vertical, event, window, cx);
             }));
 
         for index in 0..self.tabs.len() {
             let tab_title = self.tabs[index].title.clone();
+            let anim_progress = new_tab_anim
+                .filter(|(anim_index, _)| *anim_index == index)
+                .map(|(_, progress)| progress);
+            let tab_height = tab_heights[index];
             let is_active = index == self.active_tab;
             let is_hovered = self.tab_strip.hovered_tab == Some(index);
             let is_renaming = self.renaming_tab == Some(index);
@@ -1149,20 +1329,16 @@ impl TerminalView {
                 index,
             );
             let show_tab_close = !compact && show_close_button && switch_hint_label.is_none();
-            let accessory_width = if !compact && (show_tab_close || switch_hint_label.is_some()) {
+            let close_slot_width = if !compact && (show_tab_close || switch_hint_label.is_some()) {
                 TAB_CLOSE_SLOT_WIDTH
             } else {
                 0.0
             };
             let label = if compact {
-                if index < 9 {
-                    (index + 1).to_string()
-                } else {
-                    tab_title.chars().next().unwrap_or('•').to_string()
-                }
+                Self::compact_vertical_tab_label(index, &tab_title)
             } else {
                 let available_text_px =
-                    Self::tab_title_text_area_width(inner_width, accessory_width);
+                    Self::tab_title_text_area_width(strip_width, close_slot_width);
                 Self::format_tab_label_for_render_measured(
                     &tab_title,
                     available_text_px,
@@ -1176,182 +1352,62 @@ impl TerminalView {
                     },
                 )
             };
-            let tab_bg = if is_active {
-                palette.active_tab_bg
-            } else if is_hovered {
-                palette.hovered_tab_bg
-            } else {
-                palette.inactive_tab_bg
-            };
-            let text_color = if is_active {
-                palette.active_tab_text
-            } else {
-                palette.inactive_tab_text
-            };
-            let mut border_color = palette.tab_stroke_color;
-            border_color.a = if is_active { 0.8 } else { 0.18 };
-            let mut rename_selection_color = colors.cursor;
-            rename_selection_color.a = if is_active { 0.34 } else { 0.24 };
-            let hover_tab_index = index;
-            let switch_tab_index = index;
-            let close_tab_index = index;
-
-            let accessory = if compact {
-                div().into_any_element()
-            } else if let Some(label) = switch_hint_label {
-                div()
-                    .flex_none()
-                    .w(px(TAB_CLOSE_SLOT_WIDTH))
-                    .h(px(TAB_CLOSE_HITBOX))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(5.0))
-                    .border_1()
-                    .border_color(palette.switch_hint_border)
-                    .bg(palette.switch_hint_bg)
-                    .text_color(palette.switch_hint_text)
-                    .text_size(px(TAB_SWITCH_HINT_TEXT_SIZE))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label)
-                    .into_any_element()
-            } else {
-                let mut close_text_color = text_color;
-                if !show_tab_close {
-                    close_text_color.a = 0.0;
-                }
-                div()
-                    .flex_none()
-                    .w(px(accessory_width))
-                    .h(px(TAB_CLOSE_HITBOX))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(5.0))
-                    .text_color(close_text_color)
-                    .text_size(px(12.0))
-                    .child("×")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                            let is_active = close_tab_index == this.active_tab;
-                            if Self::tab_shows_close(
-                                this.tab_close_visibility,
-                                is_active,
-                                this.tab_strip.hovered_tab,
-                                this.tab_strip.hovered_tab_close,
-                                close_tab_index,
-                            ) {
-                                this.request_tab_close_by_index(close_tab_index, window, cx);
-                                cx.stop_propagation();
-                            }
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(
-                        move |this, _event: &MouseMoveEvent, _window, cx| {
-                            this.on_tab_close_mouse_move(hover_tab_index, cx);
-                            cx.stop_propagation();
-                        },
-                    ))
-                    .hover(move |style| {
-                        style
-                            .bg(palette.close_button_hover_bg)
-                            .text_color(palette.close_button_hover_text)
-                    })
-                    .cursor_pointer()
-                    .into_any_element()
-            };
-
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("vertical-tab-{index}")))
-                    .w_full()
-                    .h(px(TAB_ITEM_HEIGHT))
-                    .px(px(if compact { 0.0 } else { TAB_TEXT_PADDING_X }))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(if compact { 0.0 } else { 8.0 }))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(border_color)
-                    .bg(tab_bg)
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                            this.switch_tab(switch_tab_index, cx);
-                            if event.click_count == 2 && !this.vertical_tabs_minimized {
-                                this.begin_rename_tab(switch_tab_index, cx);
-                            }
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(
-                        move |this, _event: &MouseMoveEvent, _window, cx| {
-                            let mut changed = false;
-                            if this.tab_strip.hovered_tab != Some(hover_tab_index) {
-                                this.tab_strip.hovered_tab = Some(hover_tab_index);
-                                changed = true;
-                            }
-                            if this.tab_strip.hovered_tab_close.take().is_some() {
-                                changed = true;
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                            cx.stop_propagation();
-                        },
-                    ))
-                    .child(div().flex_1().min_w(px(0.0)).h_full().relative().child(
-                        if is_renaming {
-                            self.render_inline_input_layer(
-                                Font {
-                                    family: font_family.clone(),
-                                    weight: FontWeight::NORMAL,
-                                    ..Default::default()
-                                },
-                                px(12.0),
-                                text_color.into(),
-                                rename_selection_color.into(),
-                                InlineInputAlignment::Left,
-                                cx,
-                            )
-                        } else {
-                            div()
-                                .size_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .overflow_x_hidden()
-                                .whitespace_nowrap()
-                                .font_family(font_family.clone())
-                                .text_color(text_color)
-                                .text_size(px(12.0))
-                                .text_ellipsis()
-                                .child(label)
-                                .into_any_element()
-                        },
-                    ))
-                    .child(accessory),
-            );
+            list = list.child(self.render_tab_item(
+                TabItemRenderInput {
+                    orientation: TabStripOrientation::Vertical,
+                    index,
+                    tab_primary_extent: strip_width,
+                    tab_cross_extent: tab_height,
+                    tab_strokes: TabItemStrokeRects {
+                        top: chrome_layout.tab_strokes[index].top_boundary,
+                        bottom: chrome_layout.tab_strokes[index].bottom_boundary,
+                        left: Some(chrome_layout.tab_strokes[index].left),
+                        right: None,
+                    },
+                    label,
+                    switch_hint_label,
+                    is_active,
+                    is_hovered,
+                    is_renaming,
+                    show_tab_close,
+                    close_slot_width,
+                    text_padding_x: if compact { 0.0 } else { TAB_TEXT_PADDING_X },
+                    label_centered: compact,
+                    trailing_divider_cover: None,
+                    drop_marker_side: self.tab_drop_marker_side(index),
+                    open_anim_progress: anim_progress,
+                },
+                font_family,
+                colors,
+                &palette,
+                cx,
+            ));
         }
 
-        let footer_controls = div()
+        // Paint the shared divider after the tab rows so the chrome owns the
+        // visible seam instead of letting row backgrounds define that edge.
+        for element in
+            Self::render_stroke_segments(&chrome_layout.content_divider_strokes, palette.tab_stroke_color)
+        {
+            list = list.child(element);
+        }
+
+        let controls = div()
+            .id("vertical-tabs-control-rail")
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(if compact { 4.0 } else { 6.0 }))
+            .px(px(VERTICAL_TAB_STRIP_PADDING))
+            .h(px(controls_height))
+            .relative()
             .child(collapse_button)
             .child(new_tab_button);
-
-        let mut footer = div().flex_none().w_full().p(px(content_padding)).flex();
-        if compact {
-            footer = footer.items_center().justify_center();
+        let controls = if compact {
+            controls.justify_center()
         } else {
-            footer = footer.items_center().justify_end();
-        }
-        let footer = footer.child(footer_controls);
+            controls.justify_between()
+        };
 
         div()
             .id("vertical-tab-strip")
@@ -1359,9 +1415,6 @@ impl TerminalView {
             .flex_none()
             .w(px(strip_width))
             .h_full()
-            .border_r_1()
-            .border_color(palette.tab_stroke_color)
-            .bg(tabbar_bg)
             .children((!compact).then(|| {
                 div()
                     .id("vertical-tabs-resize-handle")
@@ -1387,15 +1440,31 @@ impl TerminalView {
                     .flex()
                     .flex_col()
                     .child(
+                        controls.children(chrome_layout.control_seam.map(|stroke| {
+                            Self::render_tab_stroke(stroke, palette.tab_stroke_color)
+                        })),
+                    )
+                    .child(
                         div()
                             .id("vertical-tabs-scroll-viewport")
                             .flex_1()
                             .min_h(px(0.0))
                             .overflow_y_scroll()
-                            .track_scroll(&self.tab_strip.scroll_handle)
-                            .child(list),
-                    )
-                    .child(footer),
+                            .track_scroll(&self.tab_strip.vertical_scroll_handle)
+                            .child(
+                                div()
+                                    .id("vertical-tabs-scroll-content")
+                                    .w_full()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .child(list)
+                                    .child(Self::render_vertical_tail(
+                                        &chrome_layout,
+                                        palette.tab_stroke_color,
+                                    )),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -1443,7 +1512,7 @@ impl TerminalView {
             colors,
             cx,
         );
-        let scroll_offset_x: f32 = self.tab_strip.scroll_handle.offset().x.into();
+        let scroll_offset_x: f32 = self.tab_strip.horizontal_scroll_handle.offset().x.into();
         let divider_collisions = Self::edge_divider_collision_state(
             &state.chrome_layout,
             scroll_offset_x,
@@ -1487,7 +1556,7 @@ impl TerminalView {
                             .right_0()
                             .bottom_0()
                             .overflow_x_scroll()
-                            .track_scroll(&self.tab_strip.scroll_handle)
+                            .track_scroll(&self.tab_strip.horizontal_scroll_handle)
                             .child(tabs_scroll_content),
                     )
                     .children(show_left_inset_divider.then(|| {

@@ -1,6 +1,15 @@
 use super::*;
+use crate::terminal_view::tab_strip::state::TabStripOrientation;
 
 impl TerminalView {
+    pub(in super::super) fn tab_strip_orientation(&self) -> TabStripOrientation {
+        if self.vertical_tabs {
+            TabStripOrientation::Vertical
+        } else {
+            TabStripOrientation::Horizontal
+        }
+    }
+
     pub(in super::super) fn effective_vertical_tab_strip_width(&self) -> f32 {
         if !self.vertical_tabs {
             return 0.0;
@@ -16,6 +25,18 @@ impl TerminalView {
 
     fn tab_strip_sidebar_width(&self) -> f32 {
         self.effective_vertical_tab_strip_width()
+    }
+
+    pub(in super::super) fn vertical_tab_strip_controls_height(&self) -> f32 {
+        TABBAR_HEIGHT
+    }
+
+    pub(in super::super) fn effective_vertical_tabs_list_height(&self) -> f32 {
+        let control_rail_height = self.vertical_tab_strip_controls_height();
+        let list_height = self.last_viewport_size_px.map_or(0.0, |(_, height)| height as f32)
+            - self.chrome_height()
+            - control_rail_height;
+        list_height.max(0.0)
     }
 
     pub(in super::super) fn native_pane_min_extent_for_axis(axis: PaneResizeAxis) -> u16 {

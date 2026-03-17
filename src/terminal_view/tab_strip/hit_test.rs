@@ -33,7 +33,7 @@ impl TerminalView {
         window: &Window,
     ) -> bool {
         let geometry = self.tab_strip_geometry(window);
-        let scroll_offset_x: f32 = self.tab_strip.scroll_handle.offset().x.into();
+        let scroll_offset_x: f32 = self.tab_strip.horizontal_scroll_handle.offset().x.into();
         Self::unified_titlebar_tab_interactive_hit_test_for_geometry(
             x,
             y,

@@ -186,6 +186,10 @@ impl BenchmarkSession {
         Ok(())
     }
 
+    pub fn exit_on_complete(&self) -> bool {
+        self.config.exit_on_complete
+    }
+
     fn push_sample(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.sample_started_at);
         let elapsed_secs = elapsed.as_secs_f32();

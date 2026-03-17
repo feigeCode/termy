@@ -475,10 +475,10 @@ struct IdleBurstLatencySummary {
 
 #[derive(Clone, Debug, Serialize)]
 struct EchoTrainLatencySummary {
-    echo_first_frame_ms_p50: f32,
-    echo_first_frame_ms_p95: f32,
-    echo_first_frame_ms_p99: f32,
-    echo_first_frame_ms_max: f32,
+    echo_first_frame_ms_p50: Option<f32>,
+    echo_first_frame_ms_p95: Option<f32>,
+    echo_first_frame_ms_p99: Option<f32>,
+    echo_first_frame_ms_max: Option<f32>,
     echo_missed_count: u64,
     echo_sample_count: u64,
 }
@@ -753,14 +753,16 @@ fn summarize_echo_train_latency(
     let mut sorted = latencies_ns;
     sorted.sort_unstable();
     Ok(EchoTrainLatencySummary {
-        echo_first_frame_ms_p50: percentile_nanos_to_millis(&sorted, 50, 100),
-        echo_first_frame_ms_p95: percentile_nanos_to_millis(&sorted, 95, 100),
-        echo_first_frame_ms_p99: percentile_nanos_to_millis(&sorted, 99, 100),
+        echo_first_frame_ms_p50: (!sorted.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted, 50, 100)),
+        echo_first_frame_ms_p95: (!sorted.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted, 95, 100)),
+        echo_first_frame_ms_p99: (!sorted.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted, 99, 100)),
         echo_first_frame_ms_max: sorted
             .last()
             .copied()
-            .map(nanos_to_millis)
-            .unwrap_or(0.0),
+            .map(nanos_to_millis),
         echo_missed_count: missed_count,
         echo_sample_count: sorted.len() as u64,
     })
@@ -973,24 +975,24 @@ impl ScenarioComparison {
                     .micro_latency
                     .echo_train
                     .as_ref()
-                    .map(|summary| summary.echo_first_frame_ms_p95),
+                    .and_then(|summary| summary.echo_first_frame_ms_p95),
                 baseline
                     .micro_latency
                     .echo_train
                     .as_ref()
-                    .map(|summary| summary.echo_first_frame_ms_p95),
+                    .and_then(|summary| summary.echo_first_frame_ms_p95),
             ),
             echo_first_frame_ms_max: option_f32_delta(
                 candidate
                     .micro_latency
                     .echo_train
                     .as_ref()
-                    .map(|summary| summary.echo_first_frame_ms_max),
+                    .and_then(|summary| summary.echo_first_frame_ms_max),
                 baseline
                     .micro_latency
                     .echo_train
                     .as_ref()
-                    .map(|summary| summary.echo_first_frame_ms_max),
+                    .and_then(|summary| summary.echo_first_frame_ms_max),
             ),
             echo_missed_count: option_i64_delta(
                 candidate
@@ -1179,27 +1181,33 @@ fn render_report(summary: &ComparisonSummary) -> String {
             report.push_str("| Echo-train metric | Baseline | Candidate | Delta |\n");
             report.push_str("| --- | ---: | ---: | ---: |\n");
             report.push_str(&format!(
-                "| First frame p50 ms | {:.2} | {:.2} | {:.2} |\n",
-                baseline.echo_first_frame_ms_p50,
-                candidate.echo_first_frame_ms_p50,
-                candidate.echo_first_frame_ms_p50 - baseline.echo_first_frame_ms_p50,
+                "| First frame p50 ms | {} | {} | {} |\n",
+                format_option_f32(baseline.echo_first_frame_ms_p50),
+                format_option_f32(candidate.echo_first_frame_ms_p50),
+                format_option_f32(option_f32_delta(
+                    candidate.echo_first_frame_ms_p50,
+                    baseline.echo_first_frame_ms_p50
+                )),
             ));
             report.push_str(&format!(
-                "| First frame p95 ms | {:.2} | {:.2} | {} |\n",
-                baseline.echo_first_frame_ms_p95,
-                candidate.echo_first_frame_ms_p95,
+                "| First frame p95 ms | {} | {} | {} |\n",
+                format_option_f32(baseline.echo_first_frame_ms_p95),
+                format_option_f32(candidate.echo_first_frame_ms_p95),
                 format_option_f32(scenario.deltas.echo_first_frame_ms_p95),
             ));
             report.push_str(&format!(
-                "| First frame p99 ms | {:.2} | {:.2} | {:.2} |\n",
-                baseline.echo_first_frame_ms_p99,
-                candidate.echo_first_frame_ms_p99,
-                candidate.echo_first_frame_ms_p99 - baseline.echo_first_frame_ms_p99,
+                "| First frame p99 ms | {} | {} | {} |\n",
+                format_option_f32(baseline.echo_first_frame_ms_p99),
+                format_option_f32(candidate.echo_first_frame_ms_p99),
+                format_option_f32(option_f32_delta(
+                    candidate.echo_first_frame_ms_p99,
+                    baseline.echo_first_frame_ms_p99
+                )),
             ));
             report.push_str(&format!(
-                "| First frame max ms | {:.2} | {:.2} | {} |\n",
-                baseline.echo_first_frame_ms_max,
-                candidate.echo_first_frame_ms_max,
+                "| First frame max ms | {} | {} | {} |\n",
+                format_option_f32(baseline.echo_first_frame_ms_max),
+                format_option_f32(candidate.echo_first_frame_ms_max),
                 format_option_f32(scenario.deltas.echo_first_frame_ms_max),
             ));
             report.push_str(&format!(
@@ -1406,7 +1414,7 @@ mod tests {
         let summary = summarize_echo_train_latency(&markers, &frames).unwrap();
         assert_eq!(summary.echo_missed_count, 0);
         assert_eq!(summary.echo_sample_count, 2);
-        assert!((summary.echo_first_frame_ms_max - 0.00006).abs() < f32::EPSILON);
+        assert!((summary.echo_first_frame_ms_max.unwrap() - 0.00006).abs() < f32::EPSILON);
     }
 
     #[test]

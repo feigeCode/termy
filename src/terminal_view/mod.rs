@@ -130,6 +130,7 @@ const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
 const WINDOW_RESIZE_INDICATOR_MS: u64 = 850;
 const ALT_SCREEN_POLL_FRAME_MS: u64 = 33;
 const CHILD_WORKING_DIR_CACHE_TTL: Duration = Duration::from_millis(CHILD_WORKING_DIR_CACHE_TTL_MS);
+const BENCHMARK_EXIT_GRACE_DURATION: Duration = Duration::from_millis(250);
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
 const OVERLAY_PANEL_BORDER_ALPHA: f32 = 0.24;
 const OVERLAY_PRIMARY_TEXT_ALPHA: f32 = 0.95;
@@ -1174,6 +1175,7 @@ pub struct TerminalView {
     resize_indicator_animation_scheduled: bool,
     alt_screen_refresh_scheduled: bool,
     benchmark_session: Option<BenchmarkSession>,
+    benchmark_exit_scheduled: bool,
     show_debug_overlay: bool,
     debug_overlay_stats: DebugOverlayStats,
     install_cli_available: bool,
@@ -1828,6 +1830,32 @@ impl TerminalView {
         }
     }
 
+    fn benchmark_exit_on_complete(&self) -> bool {
+        self.benchmark_session
+            .as_ref()
+            .is_some_and(BenchmarkSession::exit_on_complete)
+    }
+
+    fn schedule_benchmark_exit(&mut self, cx: &mut Context<Self>) {
+        if self.benchmark_exit_scheduled {
+            return;
+        }
+
+        self.benchmark_exit_scheduled = true;
+        self.allow_quit_without_prompt = true;
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            smol::Timer::after(BENCHMARK_EXIT_GRACE_DURATION).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.finish_benchmark_session();
+                    cx.quit();
+                })
+            });
+        })
+        .detach();
+    }
+
     fn record_debug_overlay_frame(&mut self) {
         if !self.show_debug_overlay {
             return;
@@ -2365,6 +2393,7 @@ impl TerminalView {
             resize_indicator_animation_scheduled: false,
             alt_screen_refresh_scheduled: false,
             benchmark_session: benchmark_config.map(BenchmarkSession::new),
+            benchmark_exit_scheduled: false,
             show_debug_overlay: config.show_debug_overlay,
             debug_overlay_stats: DebugOverlayStats::new(),
             install_cli_available: Self::install_cli_available_from_system(),
@@ -2891,9 +2920,14 @@ impl TerminalView {
         if should_quit {
             // Shell `exit` in the last native pane should close the app immediately.
             self.sync_persisted_native_workspace();
-            self.finish_benchmark_session();
-            self.allow_quit_without_prompt = true;
-            cx.quit();
+            if self.benchmark_exit_on_complete() {
+                self.schedule_benchmark_exit(cx);
+                should_redraw = true;
+            } else {
+                self.finish_benchmark_session();
+                self.allow_quit_without_prompt = true;
+                cx.quit();
+            }
         }
 
         if should_redraw {

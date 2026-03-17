@@ -36,7 +36,7 @@ use termy_terminal_ui::{
     CellRenderInfo, PaneTerminal, TabTitleShellIntegration, Terminal as NativeTerminal,
     TerminalCursorState, TerminalCursorStyle, TerminalDamageSnapshot, TerminalDirtySpan,
     TerminalEvent, TerminalGrid, TerminalGridPaintCacheHandle, TerminalGridPaintDamage,
-    TerminalGridRows, TerminalMouseMode, TerminalOptions, TerminalQueryColors,
+    TerminalGridRows, TerminalMouseMode, TerminalOptions, TerminalQueryColors, TerminalReplyHost,
     TerminalRuntimeConfig, TerminalSize, TmuxLaunchTarget,
     WorkingDirFallback as RuntimeWorkingDirFallback, find_link_in_line, keystroke_to_input,
 };
@@ -339,12 +339,12 @@ impl Terminal {
         }
     }
 
-    fn process_events(&self) -> Vec<TerminalEvent> {
+    fn process_events(&self, host: &mut impl TerminalReplyHost) -> Vec<TerminalEvent> {
         match self {
             Self::Tmux(_) => Vec::new(),
             Self::Native(terminal) => terminal
                 .lock()
-                .map(|terminal| terminal.process_events())
+                .map(|terminal| terminal.process_events(host))
                 .unwrap_or_default(),
         }
     }
@@ -2739,7 +2739,13 @@ impl TerminalView {
             for pane_index in 0..self.tabs[index].panes.len() {
                 let pane_id = self.tabs[index].panes[pane_index].id.clone();
                 let pane_is_active = pane_id == active_pane_id;
-                let events = self.tabs[index].panes[pane_index].terminal.process_events();
+                let events = self.tabs[index].panes[pane_index]
+                    .terminal
+                    .process_events(&mut |_target| {
+                        // GPUI exposes a unified clipboard API here, so both OSC 52 clipboard
+                        // targets read from the same host clipboard source.
+                        cx.read_from_clipboard().and_then(|item| item.text())
+                    });
 
                 for event in events {
                     match event {

@@ -60,6 +60,7 @@ impl Default for WorkingDirFallback {
 
 const DEFAULT_SCROLLBACK_HISTORY: usize = 2000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalCursorState {
     pub col: usize,
     pub row: usize,
@@ -1623,6 +1624,7 @@ mod tests {
         assert!(!env.contains_key("COLORTERM"));
     }
 
+    #[test]
     fn explicit_shell_path_wins() {
         assert_eq!(resolve_shell_path(Some("/bin/custom")), "/bin/custom");
     }

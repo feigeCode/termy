@@ -1249,7 +1249,7 @@ impl TerminalView {
             ansi: colors.ansi.map(Self::ansi_rgb_from_rgba),
             foreground: Self::ansi_rgb_from_rgba(colors.foreground),
             background: Self::ansi_rgb_from_rgba(colors.background),
-            cursor: Some(Self::ansi_rgb_from_rgba(colors.cursor)),
+            cursor: None,
         }
     }
 
@@ -3226,13 +3226,10 @@ mod tests {
     }
 
     #[test]
-    fn terminal_query_colors_preserves_cursor_color() {
+    fn terminal_query_colors_omits_cursor_without_explicit_override() {
         let colors = TerminalColors::default();
         let query_colors = TerminalView::terminal_query_colors(&colors);
 
-        assert_eq!(
-            query_colors.cursor,
-            Some(TerminalView::ansi_rgb_from_rgba(colors.cursor))
-        );
+        assert_eq!(query_colors.cursor, None);
     }
 }

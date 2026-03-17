@@ -36,9 +36,9 @@ use termy_terminal_ui::{
     CellRenderInfo, PaneTerminal, TabTitleShellIntegration, Terminal as NativeTerminal,
     TerminalCursorState, TerminalCursorStyle, TerminalDamageSnapshot, TerminalDirtySpan,
     TerminalEvent, TerminalGrid, TerminalGridPaintCacheHandle, TerminalGridPaintDamage,
-    TerminalGridRows, TerminalMouseMode, TerminalOptions, TerminalRuntimeConfig, TerminalSize,
-    TmuxLaunchTarget, WorkingDirFallback as RuntimeWorkingDirFallback, find_link_in_line,
-    keystroke_to_input,
+    TerminalGridRows, TerminalMouseMode, TerminalOptions, TerminalQueryColors,
+    TerminalRuntimeConfig, TerminalSize, TmuxLaunchTarget,
+    WorkingDirFallback as RuntimeWorkingDirFallback, find_link_in_line, keystroke_to_input,
 };
 #[cfg(debug_assertions)]
 use termy_terminal_ui::{
@@ -447,6 +447,14 @@ impl Terminal {
                     terminal.set_term_options(options);
                 }
             }
+        }
+    }
+
+    fn set_query_colors(&self, query_colors: TerminalQueryColors) {
+        if let Self::Native(terminal) = self
+            && let Ok(mut terminal) = terminal.lock()
+        {
+            terminal.set_query_colors(query_colors);
         }
     }
 
@@ -1213,7 +1221,10 @@ impl TerminalView {
         changed
     }
 
-    fn runtime_config_from_app_config(config: &AppConfig) -> TerminalRuntimeConfig {
+    fn runtime_config_from_app_config(
+        config: &AppConfig,
+        colors: &TerminalColors,
+    ) -> TerminalRuntimeConfig {
         let working_dir_fallback = match config.working_dir_fallback {
             config::WorkingDirFallback::Home => RuntimeWorkingDirFallback::Home,
             config::WorkingDirFallback::Process => RuntimeWorkingDirFallback::Process,
@@ -1223,12 +1234,31 @@ impl TerminalView {
             shell: config.shell.clone(),
             term: config.term.clone(),
             colorterm: config.colorterm.clone(),
+            query_colors: Self::terminal_query_colors(colors),
             working_dir_fallback,
             scrollback_history: config.scrollback_history,
             default_cursor_style: match config.cursor_style {
                 AppCursorStyle::Line => TerminalCursorStyle::Line,
                 AppCursorStyle::Block => TerminalCursorStyle::Block,
             },
+        }
+    }
+
+    fn terminal_query_colors(colors: &TerminalColors) -> TerminalQueryColors {
+        TerminalQueryColors {
+            ansi: colors.ansi.map(Self::ansi_rgb_from_rgba),
+            foreground: Self::ansi_rgb_from_rgba(colors.foreground),
+            background: Self::ansi_rgb_from_rgba(colors.background),
+            cursor: None,
+        }
+    }
+
+    fn ansi_rgb_from_rgba(color: gpui::Rgba) -> alacritty_terminal::vte::ansi::Rgb {
+        let to_u8 = |component: f32| (component.clamp(0.0, 1.0) * 255.0).round() as u8;
+        alacritty_terminal::vte::ansi::Rgb {
+            r: to_u8(color.r),
+            g: to_u8(color.g),
+            b: to_u8(color.b),
         }
     }
 
@@ -2141,7 +2171,7 @@ impl TerminalView {
             enabled: tab_title.shell_integration,
             explicit_prefix: tab_title.explicit_prefix.clone(),
         };
-        let terminal_runtime = Self::runtime_config_from_app_config(&config);
+        let terminal_runtime = Self::runtime_config_from_app_config(&config, &colors);
         let predicted_prompt_cwd = Self::predicted_prompt_cwd(
             configured_working_dir.as_deref(),
             terminal_runtime.working_dir_fallback,
@@ -2464,7 +2494,7 @@ impl TerminalView {
         self.native_buffer_persistence = config.native_buffer_persistence;
         self.tmux_show_active_pane_border = config.tmux_show_active_pane_border;
         self.configured_working_dir = config.working_dir.clone();
-        self.terminal_runtime = Self::runtime_config_from_app_config(&config);
+        self.terminal_runtime = Self::runtime_config_from_app_config(&config, &self.colors);
         if native_tab_persistence_changed
             || native_layout_autosave_changed
             || native_buffer_persistence_changed
@@ -2561,6 +2591,8 @@ impl TerminalView {
             };
             for pane in &tab.panes {
                 pane.terminal.set_term_options(options);
+                pane.terminal
+                    .set_query_colors(self.terminal_runtime.query_colors);
             }
         }
 
@@ -3191,5 +3223,13 @@ mod tests {
         assert!(!TerminalView::uses_native_split_content_padding(false, 1));
         assert!(TerminalView::uses_native_split_content_padding(false, 2));
         assert!(!TerminalView::uses_native_split_content_padding(true, 2));
+    }
+
+    #[test]
+    fn terminal_query_colors_omits_cursor_without_explicit_override() {
+        let colors = TerminalColors::default();
+        let query_colors = TerminalView::terminal_query_colors(&colors);
+
+        assert_eq!(query_colors.cursor, None);
     }
 }

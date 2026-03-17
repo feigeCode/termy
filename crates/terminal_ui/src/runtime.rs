@@ -11,7 +11,7 @@ use alacritty_terminal::{
     sync::FairMutex,
     term::{Config as TermConfig, LineDamageBounds, Term, TermDamage, TermMode},
     tty::{self, Options as PtyOptions, Shell},
-    vte::ansi::{self, CursorShape, CursorStyle as AlacrittyCursorStyle},
+    vte::ansi::{self, CursorShape, CursorStyle as AlacrittyCursorStyle, NamedColor, Rgb as AnsiRgb},
 };
 use flume::{Receiver, Sender, unbounded};
 use gpui::{Keystroke, Modifiers, Pixels, px};
@@ -60,6 +60,164 @@ impl Default for WorkingDirFallback {
 const DEFAULT_SCROLLBACK_HISTORY: usize = 2000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalQueryColors {
+    pub ansi: [AnsiRgb; 16],
+    pub foreground: AnsiRgb,
+    pub background: AnsiRgb,
+    pub cursor: Option<AnsiRgb>,
+}
+
+impl Default for TerminalQueryColors {
+    fn default() -> Self {
+        Self {
+            ansi: [
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0x00,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0xcd,
+                    g: 0x00,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0xcd,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0xcd,
+                    g: 0xcd,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0x00,
+                    b: 0xee,
+                },
+                AnsiRgb {
+                    r: 0xcd,
+                    g: 0x00,
+                    b: 0xcd,
+                },
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0xcd,
+                    b: 0xcd,
+                },
+                AnsiRgb {
+                    r: 0xe5,
+                    g: 0xe5,
+                    b: 0xe5,
+                },
+                AnsiRgb {
+                    r: 0x7f,
+                    g: 0x7f,
+                    b: 0x7f,
+                },
+                AnsiRgb {
+                    r: 0xff,
+                    g: 0x00,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0xff,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0xff,
+                    g: 0xff,
+                    b: 0x00,
+                },
+                AnsiRgb {
+                    r: 0x5c,
+                    g: 0x5c,
+                    b: 0xff,
+                },
+                AnsiRgb {
+                    r: 0xff,
+                    g: 0x00,
+                    b: 0xff,
+                },
+                AnsiRgb {
+                    r: 0x00,
+                    g: 0xff,
+                    b: 0xff,
+                },
+                AnsiRgb {
+                    r: 0xff,
+                    g: 0xff,
+                    b: 0xff,
+                },
+            ],
+            foreground: AnsiRgb {
+                r: 0xe5,
+                g: 0xe5,
+                b: 0xe5,
+            },
+            background: AnsiRgb {
+                r: 0x1e,
+                g: 0x1e,
+                b: 0x1e,
+            },
+            cursor: None,
+        }
+    }
+}
+
+impl TerminalQueryColors {
+    fn indexed_color(&self, idx: u8) -> AnsiRgb {
+        match idx {
+            0..=15 => self.ansi[idx as usize],
+            16..=231 => {
+                let idx = idx - 16;
+                let r = (idx / 36) % 6;
+                let g = (idx / 6) % 6;
+                let b = idx % 6;
+                let to_component = |value: u8| if value == 0 { 0 } else { 55 + (value * 40) };
+                AnsiRgb {
+                    r: to_component(r),
+                    g: to_component(g),
+                    b: to_component(b),
+                }
+            }
+            232..=255 => {
+                let gray = 8 + ((idx - 232) * 10);
+                AnsiRgb {
+                    r: gray,
+                    g: gray,
+                    b: gray,
+                }
+            }
+        }
+    }
+
+    fn color(&self, index: usize) -> Option<AnsiRgb> {
+        match index {
+            0..=255 => Some(self.indexed_color(index as u8)),
+            value if value == NamedColor::Foreground as usize => Some(self.foreground),
+            value if value == NamedColor::Background as usize => Some(self.background),
+            // Upstream Alacritty only answers OSC 12 when the cursor color was explicitly
+            // overridden by the terminal state. The configured theme cursor color does not count.
+            value if value == NamedColor::Cursor as usize => self.cursor,
+            value if value == NamedColor::BrightForeground as usize => Some(self.foreground),
+            value if value == NamedColor::DimForeground as usize => Some(self.foreground),
+            value if value == NamedColor::DimBlack as usize => Some(self.ansi[0]),
+            value if value == NamedColor::DimRed as usize => Some(self.ansi[1]),
+            value if value == NamedColor::DimGreen as usize => Some(self.ansi[2]),
+            value if value == NamedColor::DimYellow as usize => Some(self.ansi[3]),
+            value if value == NamedColor::DimBlue as usize => Some(self.ansi[4]),
+            value if value == NamedColor::DimMagenta as usize => Some(self.ansi[5]),
+            value if value == NamedColor::DimCyan as usize => Some(self.ansi[6]),
+            value if value == NamedColor::DimWhite as usize => Some(self.ansi[7]),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalCursorState {
     pub col: usize,
     pub row: usize,
@@ -86,6 +244,7 @@ pub struct TerminalRuntimeConfig {
     pub shell: Option<String>,
     pub term: String,
     pub colorterm: Option<String>,
+    pub query_colors: TerminalQueryColors,
     pub working_dir_fallback: WorkingDirFallback,
     pub scrollback_history: usize,
     pub default_cursor_style: TerminalCursorStyle,
@@ -97,6 +256,7 @@ impl Default for TerminalRuntimeConfig {
             shell: None,
             term: DEFAULT_TERM.to_string(),
             colorterm: Some(DEFAULT_COLORTERM.to_string()),
+            query_colors: TerminalQueryColors::default(),
             working_dir_fallback: WorkingDirFallback::default(),
             scrollback_history: DEFAULT_SCROLLBACK_HISTORY,
             default_cursor_style: TerminalCursorStyle::Block,
@@ -638,6 +798,8 @@ pub struct Terminal {
     events_rx: Receiver<AlacEvent>,
     /// Current terminal size
     size: TerminalSize,
+    /// Colors returned to child processes that probe terminal palette state.
+    query_colors: TerminalQueryColors,
     /// Shell process id backing this PTY.
     child_pid: Option<u32>,
     /// Tracks whether a wakeup event is already queued.
@@ -713,6 +875,7 @@ impl Terminal {
             pty_tx,
             events_rx,
             size,
+            query_colors: runtime_config.query_colors,
             child_pid,
             wakeup_queued,
         })
@@ -770,6 +933,11 @@ impl Terminal {
     pub fn process_events(&self) -> Vec<TerminalEvent> {
         let mut events = Vec::new();
         while let Ok(event) = self.events_rx.try_recv() {
+            if let Some(response) =
+                terminal_query_response_bytes(&event, self.size, &self.query_colors)
+            {
+                self.write(&response);
+            }
             match event {
                 AlacEvent::Wakeup => {
                     self.wakeup_queued.store(false, Ordering::Release);
@@ -786,6 +954,10 @@ impl Terminal {
             }
         }
         events
+    }
+
+    pub fn set_query_colors(&mut self, query_colors: TerminalQueryColors) {
+        self.query_colors = query_colors;
     }
 
     /// Access the terminal for reading cell content
@@ -876,6 +1048,21 @@ impl Terminal {
     pub fn alternate_screen_mode(&self) -> bool {
         let term = self.term.lock();
         term.mode().contains(TermMode::ALT_SCREEN)
+    }
+}
+
+fn terminal_query_response_bytes(
+    event: &AlacEvent,
+    size: TerminalSize,
+    query_colors: &TerminalQueryColors,
+) -> Option<Vec<u8>> {
+    match event {
+        AlacEvent::PtyWrite(text) => Some(text.as_bytes().to_vec()),
+        AlacEvent::ColorRequest(index, formatter) => query_colors
+            .color(*index)
+            .map(|color| formatter(color).into_bytes()),
+        AlacEvent::TextAreaSizeRequest(formatter) => Some(formatter(size.into()).into_bytes()),
+        _ => None,
     }
 }
 
@@ -1045,19 +1232,22 @@ mod tests {
     #[cfg(target_os = "windows")]
     use super::quote_shell_program_if_needed;
     use super::{
-        DEFAULT_TERM, TerminalCursorState, TerminalDamageSnapshot, TerminalRuntimeConfig,
-        TerminalSize, cursor_position_from_term, cursor_state_from_term, keystroke_to_input,
-        pty_env_overrides, resolve_shell_path, take_term_damage_snapshot,
+        DEFAULT_TERM, TerminalCursorState, TerminalDamageSnapshot, TerminalQueryColors,
+        TerminalRuntimeConfig, TerminalSize, cursor_position_from_term, cursor_state_from_term,
+        keystroke_to_input, pty_env_overrides, resolve_shell_path, take_term_damage_snapshot,
+        terminal_query_response_bytes,
         termmode_to_terminal_mouse_mode,
     };
     use crate::grid::TerminalCursorStyle;
     use alacritty_terminal::{
+        event::Event as AlacEvent,
         event::VoidListener,
         grid::{Dimensions, Scroll},
         term::{Config as TermConfig, LineDamageBounds, Term},
-        vte::ansi::{self, CursorShape},
+        vte::ansi::{self, CursorShape, NamedColor, Rgb as AnsiRgb},
     };
     use gpui::{Keystroke, Modifiers, px};
+    use std::sync::Arc;
 
     fn test_terminal_size() -> TerminalSize {
         TerminalSize {
@@ -1459,6 +1649,100 @@ mod tests {
         };
         let env = pty_env_overrides(None, &config);
         assert!(!env.contains_key("COLORTERM"));
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_replays_pty_write_events() {
+        let response = terminal_query_response_bytes(
+            &AlacEvent::PtyWrite("\x1b[?6c".to_string()),
+            test_terminal_size(),
+            &TerminalQueryColors::default(),
+        );
+
+        assert_eq!(response, Some(b"\x1b[?6c".to_vec()));
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_formats_text_area_size_queries() {
+        let response = terminal_query_response_bytes(
+            &AlacEvent::TextAreaSizeRequest(Arc::new(|window_size| {
+                format!("\x1b[4;{};{}t", window_size.num_lines, window_size.num_cols)
+            })),
+            test_terminal_size(),
+            &TerminalQueryColors::default(),
+        );
+
+        assert_eq!(response, Some(b"\x1b[4;4;32t".to_vec()));
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_formats_color_queries_from_runtime_palette() {
+        let mut query_colors = TerminalQueryColors::default();
+        query_colors.foreground = AnsiRgb {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+
+        let response = terminal_query_response_bytes(
+            &AlacEvent::ColorRequest(
+                NamedColor::Foreground as usize,
+                Arc::new(|color| format!("\x1b]10;rgb:{:02x}/{:02x}/{:02x}\x1b\\", color.r, color.g, color.b)),
+            ),
+            test_terminal_size(),
+            &query_colors,
+        );
+
+        assert_eq!(response, Some(b"\x1b]10;rgb:12/34/56\x1b\\".to_vec()));
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_ignores_default_cursor_color_queries() {
+        let response = terminal_query_response_bytes(
+            &AlacEvent::ColorRequest(
+                NamedColor::Cursor as usize,
+                Arc::new(|color| format!("\x1b]12;rgb:{:02x}/{:02x}/{:02x}\x1b\\", color.r, color.g, color.b)),
+            ),
+            test_terminal_size(),
+            &TerminalQueryColors::default(),
+        );
+
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_formats_explicit_cursor_color_queries() {
+        let mut query_colors = TerminalQueryColors::default();
+        query_colors.cursor = Some(AnsiRgb {
+            r: 0xab,
+            g: 0xcd,
+            b: 0xef,
+        });
+
+        let response = terminal_query_response_bytes(
+            &AlacEvent::ColorRequest(
+                NamedColor::Cursor as usize,
+                Arc::new(|color| format!("\x1b]12;rgb:{:02x}/{:02x}/{:02x}\x1b\\", color.r, color.g, color.b)),
+            ),
+            test_terminal_size(),
+            &query_colors,
+        );
+
+        assert_eq!(response, Some(b"\x1b]12;rgb:ab/cd/ef\x1b\\".to_vec()));
+    }
+
+    #[test]
+    fn terminal_query_response_bytes_ignores_unknown_color_queries() {
+        let response = terminal_query_response_bytes(
+            &AlacEvent::ColorRequest(
+                usize::MAX,
+                Arc::new(|color| format!("\x1b]4;999;rgb:{:02x}/{:02x}/{:02x}\x1b\\", color.r, color.g, color.b)),
+            ),
+            test_terminal_size(),
+            &TerminalQueryColors::default(),
+        );
+
+        assert_eq!(response, None);
     }
 
     #[test]

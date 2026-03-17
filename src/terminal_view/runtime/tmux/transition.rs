@@ -30,6 +30,7 @@ impl TerminalView {
             Some(self.event_wakeup_tx.clone()),
             Some(&self.tab_shell_integration),
             Some(&self.terminal_runtime),
+            None,
         )?;
         let predicted_prompt_cwd = Self::predicted_prompt_cwd(
             self.configured_working_dir.as_deref(),

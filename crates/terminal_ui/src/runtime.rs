@@ -5,6 +5,7 @@ use crate::mouse_protocol::TerminalMouseMode;
 #[cfg(not(target_os = "windows"))]
 use crate::path_env::normalized_path_env;
 use crate::protocol::{TerminalQueryColors, TerminalReplyHost, reply_bytes_for_event};
+use crate::render_metrics::increment_runtime_wakeup_count;
 use alacritty_terminal::{
     event::{Event as AlacEvent, EventListener, WindowSize},
     event_loop::{EventLoop, Msg, Notifier},
@@ -271,6 +272,32 @@ fn resolve_shell_path(configured_shell: Option<&str>) -> String {
     }
 }
 
+fn startup_shell(runtime_config: &TerminalRuntimeConfig, startup_command: Option<&str>) -> Shell {
+    if let Some(command) = startup_command.map(str::trim).filter(|command| !command.is_empty()) {
+        #[cfg(unix)]
+        {
+            return Shell::new("/bin/sh".to_string(), vec!["-c".to_string(), command.to_string()]);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return Shell::new(
+                "cmd.exe".to_string(),
+                vec!["/C".to_string(), command.to_string()],
+            );
+        }
+    }
+
+    let shell_path = resolve_shell_path(runtime_config.shell.as_deref());
+
+    #[cfg(target_os = "windows")]
+    let shell_program = quote_shell_program_if_needed(&shell_path);
+    #[cfg(not(target_os = "windows"))]
+    let shell_program = shell_path.clone();
+
+    Shell::new(shell_program, login_shell_args(&shell_path))
+}
+
 fn user_home_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -518,20 +545,14 @@ pub(crate) fn take_term_damage_snapshot<T: EventListener>(
 pub struct JsonEventListener {
     events_tx: Sender<AlacEvent>,
     wake_tx: Option<Sender<()>>,
-    wakeup_queued: Arc<AtomicBool>,
     replay_suppressed: Arc<AtomicBool>,
 }
 
 impl JsonEventListener {
-    fn new(
-        events_tx: Sender<AlacEvent>,
-        wake_tx: Option<Sender<()>>,
-        wakeup_queued: Arc<AtomicBool>,
-    ) -> Self {
+    fn new(events_tx: Sender<AlacEvent>, wake_tx: Option<Sender<()>>) -> Self {
         Self {
             events_tx,
             wake_tx,
-            wakeup_queued,
             replay_suppressed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -544,24 +565,13 @@ impl JsonEventListener {
 impl EventListener for JsonEventListener {
     fn send_event(&self, event: AlacEvent) {
         if self.replay_suppressed.load(Ordering::Acquire) {
-            if matches!(event, AlacEvent::Wakeup) {
-                return;
-            }
             return;
         }
-        match event {
-            // Coalesce wakeups to keep event queue bounded under heavy output.
-            AlacEvent::Wakeup => {
-                if !self.wakeup_queued.swap(true, Ordering::AcqRel) {
-                    let _ = self.events_tx.send(AlacEvent::Wakeup);
-                }
-            }
-            _ => {
-                let _ = self.events_tx.send(event);
-            }
+        if matches!(event, AlacEvent::Wakeup) {
+            increment_runtime_wakeup_count();
         }
+        let _ = self.events_tx.send(event);
         if let Some(wake_tx) = &self.wake_tx {
-            // Wakeups are coalesced by using a bounded channel in the view.
             let _ = wake_tx.try_send(());
         }
     }
@@ -645,8 +655,6 @@ pub struct Terminal {
     query_colors: TerminalQueryColors,
     /// Shell process id backing this PTY.
     child_pid: Option<u32>,
-    /// Tracks whether a wakeup event is already queued.
-    wakeup_queued: Arc<AtomicBool>,
 }
 
 impl Terminal {
@@ -657,25 +665,12 @@ impl Terminal {
         event_wakeup_tx: Option<Sender<()>>,
         tab_title_shell_integration: Option<&TabTitleShellIntegration>,
         runtime_config: Option<&TerminalRuntimeConfig>,
+        startup_command: Option<&str>,
     ) -> anyhow::Result<Self> {
         // Create event channels
         let (events_tx, events_rx) = unbounded();
-        let wakeup_queued = Arc::new(AtomicBool::new(false));
         let runtime_config = runtime_config.cloned().unwrap_or_default();
-
-        // Get shell from config/env or default to an OS-appropriate shell.
-        let shell_path = resolve_shell_path(runtime_config.shell.as_deref());
-
-        // On Windows, CreateProcessW parses lpCommandLine by splitting on spaces, so a shell
-        // path that contains spaces (e.g. "C:\Program Files\PowerShell\7\pwsh.exe") must be
-        // wrapped in double-quotes.  We quote here rather than relying on escape_args because
-        // escape_args only applies to the argument list, not to the program name itself.
-        #[cfg(target_os = "windows")]
-        let shell_program = quote_shell_program_if_needed(&shell_path);
-        #[cfg(not(target_os = "windows"))]
-        let shell_program = shell_path.clone();
-
-        let shell = Shell::new(shell_program, login_shell_args(&shell_path));
+        let shell = startup_shell(&runtime_config, startup_command);
 
         // Get working directory
         let working_directory = resolve_working_directory(configured_working_dir).or_else(|| {
@@ -696,8 +691,7 @@ impl Terminal {
         let term_config = runtime_config.term_options().term_config();
 
         // Create the terminal emulator
-        let listener =
-            JsonEventListener::new(events_tx.clone(), event_wakeup_tx, wakeup_queued.clone());
+        let listener = JsonEventListener::new(events_tx.clone(), event_wakeup_tx);
         let term = Term::new(term_config, &size, listener.clone());
         let term = Arc::new(FairMutex::new(term));
 
@@ -720,7 +714,6 @@ impl Terminal {
             size,
             query_colors: runtime_config.query_colors,
             child_pid,
-            wakeup_queued,
         })
     }
 
@@ -779,7 +772,6 @@ impl Terminal {
             self.size,
             &self.term,
             self.query_colors,
-            &self.wakeup_queued,
             host,
             |response| self.write(response),
         )
@@ -885,7 +877,6 @@ fn drain_runtime_events<T: EventListener>(
     size: TerminalSize,
     term: &FairMutex<Term<T>>,
     query_colors: TerminalQueryColors,
-    wakeup_queued: &AtomicBool,
     host: &mut impl TerminalReplyHost,
     mut write_reply: impl FnMut(&[u8]),
 ) -> Vec<TerminalEvent> {
@@ -905,7 +896,7 @@ fn drain_runtime_events<T: EventListener>(
             write_reply(&response);
         }
 
-        if let Some(event) = terminal_event_from_alacritty(event, wakeup_queued) {
+        if let Some(event) = terminal_event_from_alacritty(event) {
             events.push(event);
         }
     }
@@ -913,15 +904,9 @@ fn drain_runtime_events<T: EventListener>(
     events
 }
 
-fn terminal_event_from_alacritty(
-    event: AlacEvent,
-    wakeup_queued: &AtomicBool,
-) -> Option<TerminalEvent> {
+fn terminal_event_from_alacritty(event: AlacEvent) -> Option<TerminalEvent> {
     match event {
-        AlacEvent::Wakeup => {
-            wakeup_queued.store(false, Ordering::Release);
-            Some(TerminalEvent::Wakeup)
-        }
+        AlacEvent::Wakeup => Some(TerminalEvent::Wakeup),
         AlacEvent::Title(title) => Some(TerminalEvent::Title(title)),
         AlacEvent::ResetTitle => Some(TerminalEvent::ResetTitle),
         AlacEvent::Bell => Some(TerminalEvent::Bell),
@@ -1113,10 +1098,7 @@ mod tests {
     };
     use flume::unbounded;
     use gpui::{Keystroke, Modifiers, px};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+    use std::sync::Arc;
 
     fn test_terminal_size() -> TerminalSize {
         TerminalSize {
@@ -1248,7 +1230,6 @@ mod tests {
         drop(events_tx);
 
         let term = FairMutex::new(term_after_bytes(b"\x1b]10;#123456\x07"));
-        let wakeup_queued = AtomicBool::new(true);
         let mut reply_host = RecordingReplyHost {
             clipboard_text: Some("payload".to_string()),
             requested_targets: Vec::new(),
@@ -1260,7 +1241,6 @@ mod tests {
             test_terminal_size(),
             &term,
             TerminalQueryColors::default(),
-            &wakeup_queued,
             &mut reply_host,
             |response| replies.push(String::from_utf8(response.to_vec()).unwrap()),
         );
@@ -1278,7 +1258,6 @@ mod tests {
             reply_host.requested_targets,
             vec![TerminalClipboardTarget::Selection]
         );
-        assert!(!wakeup_queued.load(Ordering::Acquire));
         assert!(
             matches!(
                 events.as_slice(),

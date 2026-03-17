@@ -464,6 +464,7 @@ impl TerminalView {
                 Some(self.event_wakeup_tx.clone()),
                 Some(&self.tab_shell_integration),
                 Some(&self.terminal_runtime),
+                None,
             )
             .map_err(|error| format!("Failed to restore saved tab: {}", error))?;
             let tab_id = self.allocate_tab_id();
@@ -497,6 +498,7 @@ impl TerminalView {
                     Some(self.event_wakeup_tx.clone()),
                     Some(&self.tab_shell_integration),
                     Some(&self.terminal_runtime),
+                    None,
                 )
                 .map_err(|error| format!("Failed to restore saved pane: {}", error))?;
                 if self.native_buffer_persistence

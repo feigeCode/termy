@@ -262,6 +262,7 @@ impl TerminalView {
                     Some(self.event_wakeup_tx.clone()),
                     Some(&self.tab_shell_integration),
                     Some(&self.terminal_runtime),
+                    None,
                 ) {
                     Ok(terminal) => terminal,
                     Err(error) => {
@@ -761,6 +762,7 @@ impl TerminalView {
             Some(self.event_wakeup_tx.clone()),
             Some(&self.tab_shell_integration),
             Some(&self.terminal_runtime),
+            None,
         )
         .map_err(|error| format!("Failed to split pane: {error}"))
     }

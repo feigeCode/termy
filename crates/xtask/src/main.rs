@@ -6,6 +6,8 @@ use termy_config_core::{
     root_setting_default_value, root_setting_specs,
 };
 
+mod benchmark;
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("{}", error);
@@ -17,9 +19,13 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else {
         bail!(
-            "usage: cargo run -p xtask -- <generate-keybindings-doc|generate-config-doc> [--check]"
+            "usage: cargo run -p xtask -- <generate-keybindings-doc|generate-config-doc|benchmark-driver|benchmark-compare> [options]"
         );
     };
+
+    if matches!(command.as_str(), "benchmark-driver" | "benchmark-compare") {
+        return benchmark::run(std::iter::once(command).chain(args));
+    }
 
     let mut check_only = false;
     for arg in args {

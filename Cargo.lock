@@ -7332,7 +7332,7 @@ dependencies = [
 
 [[package]]
 name = "termy"
-version = "0.1.53"
+version = "0.1.54"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7416,7 +7416,7 @@ dependencies = [
 
 [[package]]
 name = "termy_cli"
-version = "0.1.53"
+version = "0.1.54"
 dependencies = [
  "anyhow",
  "clap",
@@ -9431,6 +9431,10 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "tempfile",
  "termy_command_core",
  "termy_config_core",
 ]

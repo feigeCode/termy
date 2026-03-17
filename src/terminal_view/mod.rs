@@ -37,7 +37,8 @@ use termy_terminal_ui::{
     TerminalClipboardTarget, TerminalCursorState, TerminalCursorStyle, TerminalDamageSnapshot,
     TerminalDirtySpan, TerminalEvent, TerminalGrid, TerminalGridPaintCacheHandle,
     TerminalGridPaintDamage, TerminalGridRows, TerminalMouseMode, TerminalOptions,
-    TerminalQueryColors, TerminalReplyHost, TerminalRuntimeConfig, TerminalSize, TmuxLaunchTarget,
+    TerminalQueryColors, TerminalReplyHost, TerminalRuntimeConfig, TerminalSize,
+    TmuxLaunchTarget,
     WorkingDirFallback as RuntimeWorkingDirFallback, find_link_in_line, keystroke_to_input,
 };
 #[cfg(debug_assertions)]
@@ -47,6 +48,7 @@ use termy_terminal_ui::{
 };
 use termy_toast::ToastManager;
 
+mod benchmark;
 mod command_palette;
 mod inline_input;
 mod interaction;
@@ -66,6 +68,7 @@ use command_palette::{CommandPaletteMode, CommandPaletteState, TmuxSessionIntent
 use inline_input::{InlineInputAlignment, InlineInputState};
 use overlay_view::TerminalOverlayView;
 use runtime::{RuntimeKind, RuntimeState, TmuxRuntime};
+use self::benchmark::{BENCHMARK_SAMPLE_INTERVAL, BenchmarkConfig, BenchmarkSession};
 pub(crate) use tab_strip::constants::*;
 use tab_strip::state::TabStripState;
 
@@ -324,6 +327,7 @@ impl Terminal {
         event_wakeup_tx: Option<Sender<()>>,
         tab_title_shell_integration: Option<&TabTitleShellIntegration>,
         runtime_config: Option<&TerminalRuntimeConfig>,
+        startup_command: Option<&str>,
     ) -> anyhow::Result<Self> {
         Ok(Self::Native(Mutex::new(NativeTerminal::new(
             size,
@@ -331,6 +335,7 @@ impl Terminal {
             event_wakeup_tx,
             tab_title_shell_integration,
             runtime_config,
+            startup_command,
         )?)))
     }
 
@@ -1168,6 +1173,7 @@ pub struct TerminalView {
     resize_indicator_visible_until: Option<Instant>,
     resize_indicator_animation_scheduled: bool,
     alt_screen_refresh_scheduled: bool,
+    benchmark_session: Option<BenchmarkSession>,
     show_debug_overlay: bool,
     debug_overlay_stats: DebugOverlayStats,
     install_cli_available: bool,
@@ -1778,6 +1784,50 @@ impl TerminalView {
         });
     }
 
+    fn record_benchmark_view_wakeup(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.record_view_wakeup();
+        }
+    }
+
+    fn record_benchmark_terminal_event_drain_pass(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.record_terminal_event_drain_pass();
+        }
+    }
+
+    fn record_benchmark_terminal_redraw(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.record_terminal_redraw();
+        }
+    }
+
+    fn record_benchmark_alt_screen_fallback_redraw(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.record_alt_screen_fallback_redraw();
+        }
+    }
+
+    fn record_benchmark_frame(&mut self, now: Instant) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.record_frame(now);
+        }
+    }
+
+    fn sample_benchmark_session(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
+            benchmark_session.sample_if_due(Instant::now());
+        }
+    }
+
+    fn finish_benchmark_session(&mut self) {
+        if let Some(benchmark_session) = self.benchmark_session.as_mut()
+            && let Err(error) = benchmark_session.finish()
+        {
+            log::error!("Failed to write benchmark metrics: {error}");
+        }
+    }
+
     fn record_debug_overlay_frame(&mut self) {
         if !self.show_debug_overlay {
             return;
@@ -2084,6 +2134,7 @@ impl TerminalView {
                 while event_wakeup_rx.try_recv().is_ok() {}
                 let result = cx.update(|cx| {
                     this.update(cx, |view, cx| {
+                        view.record_benchmark_view_wakeup();
                         if view.process_terminal_events(cx) {
                             cx.notify();
                         }
@@ -2188,6 +2239,17 @@ impl TerminalView {
         let padding_y = config.padding_y.max(0.0);
         let background_support_context = BackgroundSupportContext::current();
         let configured_working_dir = config.working_dir.clone();
+        let benchmark_config = match BenchmarkConfig::from_env() {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("Termy startup blocked: {error}");
+                std::process::exit(1);
+            }
+        };
+        if benchmark_config.is_some() && RuntimeKind::from_app_config(&config) == RuntimeKind::Tmux {
+            eprintln!("Termy startup blocked: benchmark mode requires native runtime");
+            std::process::exit(1);
+        }
         let tab_title = config.tab_title.clone();
         let tab_shell_integration = TabTitleShellIntegration {
             enabled: tab_title.shell_integration,
@@ -2208,6 +2270,7 @@ impl TerminalView {
             configured_working_dir.as_deref(),
             &tab_shell_integration,
             &terminal_runtime,
+            benchmark_config.as_ref().map(|config| config.command.as_str()),
             initial_cols,
             initial_rows,
         );
@@ -2301,6 +2364,7 @@ impl TerminalView {
             resize_indicator_visible_until: None,
             resize_indicator_animation_scheduled: false,
             alt_screen_refresh_scheduled: false,
+            benchmark_session: benchmark_config.map(BenchmarkSession::new),
             show_debug_overlay: config.show_debug_overlay,
             debug_overlay_stats: DebugOverlayStats::new(),
             install_cli_available: Self::install_cli_available_from_system(),
@@ -2376,6 +2440,23 @@ impl TerminalView {
                     view.mark_tab_strip_layout_dirty();
                 }
             }
+        }
+
+        if view.benchmark_session.is_some() {
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                loop {
+                    smol::Timer::after(BENCHMARK_SAMPLE_INTERVAL).await;
+                    let result = cx.update(|cx| {
+                        this.update(cx, |view, _cx| {
+                            view.sample_benchmark_session();
+                        })
+                    });
+                    if result.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
         }
         cx.observe_window_activation(window, |view, window, cx| {
             if !window.is_window_active() && view.release_all_forwarded_mouse_presses() {
@@ -2757,6 +2838,7 @@ impl TerminalView {
         let mut should_quit = false;
         let active_tab = self.active_tab;
         let mut reply_host = GpuiClipboardReplyHost::from_cx(cx);
+        self.record_benchmark_terminal_event_drain_pass();
 
         for index in 0..self.tabs.len() {
             let active_pane_id = self.tabs[index].active_pane_id.clone();
@@ -2809,10 +2891,14 @@ impl TerminalView {
         if should_quit {
             // Shell `exit` in the last native pane should close the app immediately.
             self.sync_persisted_native_workspace();
+            self.finish_benchmark_session();
             self.allow_quit_without_prompt = true;
             cx.quit();
         }
 
+        if should_redraw {
+            self.record_benchmark_terminal_redraw();
+        }
         should_redraw
     }
 

@@ -21,7 +21,6 @@ pub use mouse_protocol::{
     TerminalMousePosition, encode_mouse_report,
 };
 pub use pane_terminal::PaneTerminal;
-#[cfg(any(debug_assertions, test))]
 pub use render_metrics::{
     TerminalUiRenderMetricsSnapshot, terminal_ui_render_metrics_reset,
     terminal_ui_render_metrics_snapshot,

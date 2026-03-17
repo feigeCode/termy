@@ -131,6 +131,7 @@ impl TerminalView {
         configured_working_dir: Option<&str>,
         tab_shell_integration: &TabTitleShellIntegration,
         terminal_runtime: &TerminalRuntimeConfig,
+        startup_command: Option<&str>,
         initial_cols: u16,
         initial_rows: u16,
     ) -> (RuntimeState, Option<TmuxSnapshot>, Option<Terminal>) {
@@ -192,6 +193,7 @@ impl TerminalView {
                     Some(event_wakeup_tx.clone()),
                     Some(tab_shell_integration),
                     Some(terminal_runtime),
+                    startup_command,
                 ) {
                     Ok(terminal) => terminal,
                     Err(error) => {

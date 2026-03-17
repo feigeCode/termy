@@ -766,7 +766,7 @@ mod tests {
                 .any(|c| c.is_some_and(|ch| !ch.is_whitespace()))
         );
 
-        let native = Terminal::new_native(size, None, None, None, None)
+        let native = Terminal::new_native(size, None, None, None, None, None)
             .expect("native terminal should initialize for row adapter test");
         native.write_input(b"printf native-row-adapter\r");
         let expected_native_token = "native-row";

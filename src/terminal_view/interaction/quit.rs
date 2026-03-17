@@ -311,6 +311,7 @@ impl TerminalView {
     ) -> bool {
         if self.allow_quit_without_prompt {
             self.sync_persisted_native_workspace();
+            self.finish_benchmark_session();
             self.allow_quit_without_prompt = false;
             return true;
         }

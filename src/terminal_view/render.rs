@@ -1913,6 +1913,7 @@ impl TerminalView {
                                 .active_terminal()
                                 .is_some_and(|terminal| terminal.alternate_screen_mode())
                         {
+                            view.record_benchmark_alt_screen_fallback_redraw();
                             cx.notify();
                         }
                     })
@@ -2052,7 +2053,9 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame_now = Instant::now();
         self.record_debug_overlay_frame();
+        self.record_benchmark_frame(frame_now);
 
         // Process pending OSC 52 clipboard writes
         if let Some(text) = self.pending_clipboard.take() {
@@ -2072,7 +2075,7 @@ impl Render for TerminalView {
 
         self.sync_terminal_size(window, cell_size);
         let active_pane_id = self.active_pane_id().map(ToOwned::to_owned);
-        let now = Instant::now();
+        let now = frame_now;
         self.track_window_resize_indicator(window.viewport_size(), now);
         let pane_focus_config = self.pane_focus_config();
         let command_palette_open = self.is_command_palette_open();

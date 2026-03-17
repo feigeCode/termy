@@ -572,6 +572,7 @@ impl EventListener for JsonEventListener {
         }
         let _ = self.events_tx.send(event);
         if let Some(wake_tx) = &self.wake_tx {
+            // This channel only nudges the UI thread to drain terminal events promptly.
             let _ = wake_tx.try_send(());
         }
     }

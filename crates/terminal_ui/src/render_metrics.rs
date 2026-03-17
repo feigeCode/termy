@@ -31,9 +31,6 @@ static GRID_PAINT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHAPE_LINE_CALLS: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_WAKEUP_COUNT: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(test)]
-static TEST_METRICS_MUTEX: Mutex<()> = Mutex::new(());
-
 fn increment_counter(counter: &AtomicU64) {
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(1))
@@ -69,6 +66,8 @@ pub fn terminal_ui_render_metrics_reset() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static TEST_METRICS_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn snapshot_is_zero_after_reset() {

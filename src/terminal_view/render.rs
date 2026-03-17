@@ -1895,33 +1895,6 @@ impl TerminalView {
             })
             .detach();
         }
-        if !self.runtime_uses_tmux()
-            && self
-                .active_terminal()
-                .is_some_and(|terminal| terminal.alternate_screen_mode())
-            && !self.alt_screen_refresh_scheduled
-        {
-            self.alt_screen_refresh_scheduled = true;
-            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                smol::Timer::after(Duration::from_millis(ALT_SCREEN_POLL_FRAME_MS)).await;
-                let _ = cx.update(|cx| {
-                    this.update(cx, |view, cx| {
-                        view.alt_screen_refresh_scheduled = false;
-                        let polled_events = view.process_terminal_events(cx);
-                        if polled_events
-                            || view
-                                .active_terminal()
-                                .is_some_and(|terminal| terminal.alternate_screen_mode())
-                        {
-                            view.record_benchmark_alt_screen_fallback_redraw();
-                            cx.notify();
-                        }
-                    })
-                });
-            })
-            .detach();
-        }
-
         let colors = self.colors.clone();
         let command_palette_overlay = if self.is_command_palette_open() {
             Some(self.render_command_palette_modal(cx))
@@ -1984,12 +1957,21 @@ impl TerminalView {
             let cpu_percent = self.debug_overlay_stats.cpu_percent;
             let render_fps = self.debug_overlay_stats.fps;
             let memory = self.debug_overlay_memory_label();
+            let frame_p50_ms = self.debug_overlay_stats.frame_p50_ms;
+            let frame_p95_ms = self.debug_overlay_stats.frame_p95_ms;
+            let frame_p99_ms = self.debug_overlay_stats.frame_p99_ms;
+            let view_wake_signals = self.debug_overlay_stats.view_wake_signals;
+            let terminal_event_drain_passes = self.debug_overlay_stats.terminal_event_drain_passes;
+            let terminal_redraws = self.debug_overlay_stats.terminal_redraws;
+            let alt_screen_fallback_redraws = self.debug_overlay_stats.alt_screen_fallback_redraws;
+            #[cfg(debug_assertions)]
+            let runtime_wakeups = self.debug_overlay_stats.runtime_wakeups;
             #[cfg(target_os = "macos")]
             let display_hint = "up to 120Hz";
             #[cfg(not(target_os = "macos"))]
             let display_hint = "system";
 
-            div()
+            let overlay = div()
                 .id("debug-metrics-overlay")
                 .absolute()
                 .top(px(chrome_height + 10.0))
@@ -2008,9 +1990,19 @@ impl TerminalView {
                 .gap(px(2.0))
                 .child(format!("Display: {}", display_hint))
                 .child(format!("Render FPS: {:.1}", render_fps))
+                .child(format!(
+                    "Frame ms p50/p95/p99: {:.2}/{:.2}/{:.2}",
+                    frame_p50_ms, frame_p95_ms, frame_p99_ms
+                ))
                 .child(format!("CPU: {:.1}%", cpu_percent))
                 .child(format!("MEM: {}", memory))
-                .into_any_element()
+                .child(format!("Drain passes: {terminal_event_drain_passes}"))
+                .child(format!("Redraws: {terminal_redraws}"))
+                .child(format!("Alt fallback redraws: {alt_screen_fallback_redraws}"));
+            #[cfg(debug_assertions)]
+            let overlay =
+                overlay.child(format!("Wakeups runtime/view: {runtime_wakeups}/{view_wake_signals}"));
+            overlay.into_any_element()
         });
 
         #[cfg(target_os = "macos")]

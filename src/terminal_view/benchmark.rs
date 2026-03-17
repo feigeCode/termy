@@ -164,11 +164,6 @@ impl BenchmarkSession {
         self.counters.terminal_redraws = self.counters.terminal_redraws.saturating_add(1);
     }
 
-    pub fn record_alt_screen_fallback_redraw(&mut self) {
-        self.counters.alt_screen_fallback_redraws =
-            self.counters.alt_screen_fallback_redraws.saturating_add(1);
-    }
-
     pub fn sample_if_due(&mut self, now: Instant) {
         if now.saturating_duration_since(self.sample_started_at) < BENCHMARK_SAMPLE_INTERVAL {
             return;

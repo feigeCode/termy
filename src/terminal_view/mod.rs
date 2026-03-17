@@ -128,7 +128,6 @@ const TMUX_UNSUPPORTED_WINDOWS_TOAST: &str =
 const INPUT_SCROLL_SUPPRESS_MS: u64 = 160;
 const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
 const WINDOW_RESIZE_INDICATOR_MS: u64 = 850;
-const ALT_SCREEN_POLL_FRAME_MS: u64 = 33;
 const CHILD_WORKING_DIR_CACHE_TTL: Duration = Duration::from_millis(CHILD_WORKING_DIR_CACHE_TTL_MS);
 const BENCHMARK_EXIT_GRACE_DURATION: Duration = Duration::from_millis(250);
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
@@ -709,35 +708,83 @@ struct DebugOverlayStats {
     system: System,
     pid: Option<sysinfo::Pid>,
     sample_started_at: Instant,
+    last_frame_at: Option<Instant>,
     frames_in_sample: u32,
+    frame_interval_samples_micros: Vec<u32>,
     fps: f32,
+    frame_p50_ms: f32,
+    frame_p95_ms: f32,
+    frame_p99_ms: f32,
     cpu_percent: f32,
     memory_bytes: u64,
+    view_wake_signals: u64,
+    terminal_event_drain_passes: u64,
+    terminal_redraws: u64,
+    alt_screen_fallback_redraws: u64,
+    #[cfg(debug_assertions)]
+    runtime_wakeup_base: u64,
+    #[cfg(debug_assertions)]
+    runtime_wakeups: u64,
 }
 
 impl DebugOverlayStats {
     fn new() -> Self {
+        #[cfg(debug_assertions)]
+        let runtime_wakeup_base = terminal_ui_render_metrics_snapshot().runtime_wakeup_count;
         let mut stats = Self {
             system: System::new(),
             pid: get_current_pid().ok(),
             sample_started_at: Instant::now(),
+            last_frame_at: None,
             frames_in_sample: 0,
+            frame_interval_samples_micros: Vec::with_capacity(128),
             fps: 0.0,
+            frame_p50_ms: 0.0,
+            frame_p95_ms: 0.0,
+            frame_p99_ms: 0.0,
             cpu_percent: 0.0,
             memory_bytes: 0,
+            view_wake_signals: 0,
+            terminal_event_drain_passes: 0,
+            terminal_redraws: 0,
+            alt_screen_fallback_redraws: 0,
+            #[cfg(debug_assertions)]
+            runtime_wakeup_base,
+            #[cfg(debug_assertions)]
+            runtime_wakeups: 0,
         };
         stats.refresh_process_metrics();
+        stats.refresh_runtime_wakeups();
         stats
     }
 
     fn reset(&mut self) {
         self.sample_started_at = Instant::now();
+        self.last_frame_at = None;
         self.frames_in_sample = 0;
+        self.frame_interval_samples_micros.clear();
         self.fps = 0.0;
+        self.frame_p50_ms = 0.0;
+        self.frame_p95_ms = 0.0;
+        self.frame_p99_ms = 0.0;
+        self.view_wake_signals = 0;
+        self.terminal_event_drain_passes = 0;
+        self.terminal_redraws = 0;
+        self.alt_screen_fallback_redraws = 0;
+        #[cfg(debug_assertions)]
+        {
+            self.runtime_wakeup_base = terminal_ui_render_metrics_snapshot().runtime_wakeup_count;
+            self.runtime_wakeups = 0;
+        }
         self.refresh_process_metrics();
     }
 
     fn record_frame(&mut self, now: Instant) {
+        if let Some(previous_frame_at) = self.last_frame_at.replace(now) {
+            let frame_interval = now.saturating_duration_since(previous_frame_at);
+            let micros = frame_interval.as_micros().min(u128::from(u32::MAX)) as u32;
+            self.frame_interval_samples_micros.push(micros);
+        }
         self.frames_in_sample = self.frames_in_sample.saturating_add(1);
         let elapsed = now.saturating_duration_since(self.sample_started_at);
         if elapsed < DEBUG_OVERLAY_SAMPLE_INTERVAL {
@@ -748,9 +795,29 @@ impl DebugOverlayStats {
         if elapsed_secs > f32::EPSILON {
             self.fps = self.frames_in_sample as f32 / elapsed_secs;
         }
+        self.refresh_frame_percentiles();
+        self.refresh_runtime_wakeups();
         self.sample_started_at = now;
         self.frames_in_sample = 0;
+        self.frame_interval_samples_micros.clear();
         self.refresh_process_metrics();
+    }
+
+    fn record_view_wake_signal(&mut self) {
+        self.view_wake_signals = self.view_wake_signals.saturating_add(1);
+    }
+
+    fn record_terminal_event_drain_pass(&mut self) {
+        self.terminal_event_drain_passes = self.terminal_event_drain_passes.saturating_add(1);
+    }
+
+    fn record_terminal_redraw(&mut self) {
+        self.terminal_redraws = self.terminal_redraws.saturating_add(1);
+    }
+
+    #[allow(dead_code)]
+    fn record_alt_screen_fallback_redraw(&mut self) {
+        self.alt_screen_fallback_redraws = self.alt_screen_fallback_redraws.saturating_add(1);
     }
 
     fn refresh_process_metrics(&mut self) {
@@ -768,6 +835,41 @@ impl DebugOverlayStats {
             self.memory_bytes = process.memory();
         }
     }
+
+    fn refresh_frame_percentiles(&mut self) {
+        if self.frame_interval_samples_micros.is_empty() {
+            self.frame_p50_ms = 0.0;
+            self.frame_p95_ms = 0.0;
+            self.frame_p99_ms = 0.0;
+            return;
+        }
+
+        let mut sorted_samples = self.frame_interval_samples_micros.clone();
+        sorted_samples.sort_unstable();
+        self.frame_p50_ms = percentile_millis(&sorted_samples, 50, 100);
+        self.frame_p95_ms = percentile_millis(&sorted_samples, 95, 100);
+        self.frame_p99_ms = percentile_millis(&sorted_samples, 99, 100);
+    }
+
+    #[cfg(debug_assertions)]
+    fn refresh_runtime_wakeups(&mut self) {
+        let snapshot = terminal_ui_render_metrics_snapshot();
+        self.runtime_wakeups = snapshot
+            .runtime_wakeup_count
+            .saturating_sub(self.runtime_wakeup_base);
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn refresh_runtime_wakeups(&mut self) {}
+}
+
+fn percentile_millis(samples_micros: &[u32], numerator: usize, denominator: usize) -> f32 {
+    let Some(last_index) = samples_micros.len().checked_sub(1) else {
+        return 0.0;
+    };
+    let index =
+        (last_index.saturating_mul(numerator) + denominator.saturating_sub(1)) / denominator;
+    samples_micros[index] as f32 / 1000.0
 }
 
 struct TerminalTab {
@@ -1173,7 +1275,6 @@ pub struct TerminalView {
     resize_indicator_dims: Option<(u16, u16)>,
     resize_indicator_visible_until: Option<Instant>,
     resize_indicator_animation_scheduled: bool,
-    alt_screen_refresh_scheduled: bool,
     benchmark_session: Option<BenchmarkSession>,
     benchmark_exit_scheduled: bool,
     show_debug_overlay: bool,
@@ -1804,12 +1905,6 @@ impl TerminalView {
         }
     }
 
-    fn record_benchmark_alt_screen_fallback_redraw(&mut self) {
-        if let Some(benchmark_session) = self.benchmark_session.as_mut() {
-            benchmark_session.record_alt_screen_fallback_redraw();
-        }
-    }
-
     fn record_benchmark_frame(&mut self, now: Instant) {
         if let Some(benchmark_session) = self.benchmark_session.as_mut() {
             benchmark_session.record_frame(now);
@@ -2163,6 +2258,7 @@ impl TerminalView {
                 let result = cx.update(|cx| {
                     this.update(cx, |view, cx| {
                         view.record_benchmark_view_wakeup();
+                        view.debug_overlay_stats.record_view_wake_signal();
                         if view.process_terminal_events(cx) {
                             cx.notify();
                         }
@@ -2391,7 +2487,6 @@ impl TerminalView {
             resize_indicator_dims: None,
             resize_indicator_visible_until: None,
             resize_indicator_animation_scheduled: false,
-            alt_screen_refresh_scheduled: false,
             benchmark_session: benchmark_config.map(BenchmarkSession::new),
             benchmark_exit_scheduled: false,
             show_debug_overlay: config.show_debug_overlay,
@@ -2855,11 +2950,19 @@ impl TerminalView {
     }
 
     fn process_terminal_events(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.runtime_uses_tmux() {
+        self.debug_overlay_stats.record_terminal_event_drain_pass();
+
+        let should_redraw = if self.runtime_uses_tmux() {
             self.process_tmux_terminal_events(cx)
         } else {
             self.process_native_terminal_events(cx)
+        };
+
+        if should_redraw {
+            self.debug_overlay_stats.record_terminal_redraw();
         }
+
+        should_redraw
     }
 
     fn process_native_terminal_events(&mut self, cx: &mut Context<Self>) -> bool {

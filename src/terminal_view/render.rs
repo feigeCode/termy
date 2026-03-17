@@ -3271,7 +3271,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cell_colors_scales_inverse_explicit_background_for_non_block_cells() {
+    fn resolve_cell_colors_keeps_opaque_inverse_explicit_background_when_background_opacity_cells_off() {
         let context = test_build_context(0.2);
         let inverse_explicit_background = resolve_cell_colors(
             &test_term_cell(

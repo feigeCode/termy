@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
 use std::{
+    env,
     ffi::OsStr,
     fs,
     io::{self, Write},
@@ -10,9 +11,17 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use termy_terminal_ui::terminal_ui_monotonic_now_ns;
 
-const DEFAULT_DURATION_SECS: u64 = 12;
+const DEFAULT_DURATION_SECS: u64 = 13;
 const TRACE_PADDING_SECS: u64 = 2;
+const BENCHMARK_EVENTS_PATH_ENV: &str = "TERMY_BENCHMARK_EVENTS_PATH";
+const IDLE_BURST_PRE_IDLE: Duration = Duration::from_millis(1500);
+const IDLE_BURST_POST_IDLE: Duration = Duration::from_millis(1000);
+const ECHO_TRAIN_PRE_IDLE: Duration = Duration::from_millis(1500);
+const ECHO_TRAIN_INTERVAL: Duration = Duration::from_millis(250);
+const ECHO_TRAIN_POST_IDLE: Duration = Duration::from_millis(1000);
+const ECHO_TRAIN_DEFAULT_ITERATIONS: u64 = 40;
 
 pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let Some(command) = args.next() else {
@@ -184,7 +193,8 @@ fn build_release_binaries(build: &BuildSpec) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Scenario {
-    BurstOutput,
+    IdleBurst,
+    EchoTrain,
     SteadyScroll,
     AltScreenAnim,
 }
@@ -192,7 +202,8 @@ enum Scenario {
 impl Scenario {
     fn all() -> &'static [Scenario] {
         &[
-            Scenario::BurstOutput,
+            Scenario::IdleBurst,
+            Scenario::EchoTrain,
             Scenario::SteadyScroll,
             Scenario::AltScreenAnim,
         ]
@@ -200,7 +211,8 @@ impl Scenario {
 
     fn parse(value: &str) -> Result<Self> {
         match value {
-            "burst-output" => Ok(Self::BurstOutput),
+            "idle-burst" => Ok(Self::IdleBurst),
+            "echo-train" => Ok(Self::EchoTrain),
             "steady-scroll" => Ok(Self::SteadyScroll),
             "alt-screen-anim" => Ok(Self::AltScreenAnim),
             other => bail!("unknown benchmark scenario `{other}`"),
@@ -209,7 +221,8 @@ impl Scenario {
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::BurstOutput => "burst-output",
+            Self::IdleBurst => "idle-burst",
+            Self::EchoTrain => "echo-train",
             Self::SteadyScroll => "steady-scroll",
             Self::AltScreenAnim => "alt-screen-anim",
         }
@@ -217,29 +230,67 @@ impl Scenario {
 
     fn run(self, duration: Duration) -> Result<()> {
         match self {
-            Self::BurstOutput => run_burst_output(duration),
+            Self::IdleBurst => run_idle_burst(duration),
+            Self::EchoTrain => run_echo_train(duration),
             Self::SteadyScroll => run_steady_scroll(duration),
             Self::AltScreenAnim => run_alt_screen_anim(duration),
         }
     }
 }
 
-fn run_burst_output(duration: Duration) -> Result<()> {
+fn run_idle_burst(duration: Duration) -> Result<()> {
     let start = Instant::now();
     let stdout = io::stdout();
     let mut out = stdout.lock();
-    let mut burst = 0u64;
-    while start.elapsed() < duration {
-        for line in 0..12u64 {
-            writeln!(
-                out,
-                "burst {burst:05}  line {line:02} 0123456789 abcdefghijklmnopqrstuvwxyz"
-            )?;
-        }
-        out.flush()?;
-        burst = burst.saturating_add(1);
-        thread::sleep(Duration::from_millis(28));
+    let mut marker_writer = BenchmarkMarkerWriter::new_from_env()?;
+
+    sleep_for_remaining(start, duration, IDLE_BURST_PRE_IDLE);
+    marker_writer.record("burst_start", None)?;
+
+    let mut burst = String::new();
+    for line in 0..16u64 {
+        burst.push_str(&format!(
+            "burst line {line:02} 0123456789 abcdefghijklmnopqrstuvwxyz\n"
+        ));
     }
+    out.write_all(burst.as_bytes())?;
+    out.flush()?;
+    marker_writer.record("burst_end", None)?;
+
+    sleep_for_remaining(start, duration, IDLE_BURST_POST_IDLE);
+    Ok(())
+}
+
+fn run_echo_train(duration: Duration) -> Result<()> {
+    let start = Instant::now();
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    let mut marker_writer = BenchmarkMarkerWriter::new_from_env()?;
+
+    sleep_for_remaining(start, duration, ECHO_TRAIN_PRE_IDLE);
+
+    let remaining = duration.saturating_sub(start.elapsed());
+    let reserved_post_idle = ECHO_TRAIN_POST_IDLE.min(remaining);
+    let emit_budget = remaining.saturating_sub(reserved_post_idle);
+    let budget_iterations = (emit_budget.as_millis() / ECHO_TRAIN_INTERVAL.as_millis()) as u64;
+    let iterations = budget_iterations
+        .max(1)
+        .min(ECHO_TRAIN_DEFAULT_ITERATIONS);
+    let glyphs = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
+    for seq in 0..iterations {
+        marker_writer.record("echo_start", Some(seq))?;
+        let glyph = glyphs[(seq as usize) % glyphs.len()] as char;
+        write!(out, "{glyph}")?;
+        out.flush()?;
+        if seq + 1 != iterations {
+            thread::sleep(ECHO_TRAIN_INTERVAL);
+        }
+    }
+    writeln!(out)?;
+    out.flush()?;
+
+    sleep_for_remaining(start, duration, ECHO_TRAIN_POST_IDLE);
     Ok(())
 }
 
@@ -258,6 +309,65 @@ fn run_steady_scroll(duration: Duration) -> Result<()> {
         thread::sleep(Duration::from_millis(6));
     }
     Ok(())
+}
+
+fn sleep_for_remaining(start: Instant, total_duration: Duration, requested_sleep: Duration) {
+    let remaining = total_duration.saturating_sub(start.elapsed());
+    thread::sleep(requested_sleep.min(remaining));
+}
+
+struct BenchmarkMarkerWriter {
+    writer: io::BufWriter<fs::File>,
+}
+
+impl BenchmarkMarkerWriter {
+    fn new_from_env() -> Result<Self> {
+        let path = env::var(BENCHMARK_EVENTS_PATH_ENV)
+            .context("missing TERMY_BENCHMARK_EVENTS_PATH for benchmark-driver")?;
+        let path = PathBuf::from(path);
+        let parent = path
+            .parent()
+            .context("benchmark events path is missing a parent directory")?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        let file = fs::File::create(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        Ok(Self {
+            writer: io::BufWriter::new(file),
+        })
+    }
+
+    fn record(&mut self, kind: &str, seq: Option<u64>) -> Result<()> {
+        let marker = MarkerEvent {
+            kind: kind.to_string(),
+            seq,
+            monotonic_ns: terminal_ui_monotonic_now_ns(),
+        };
+        serde_json::to_writer(&mut self.writer, &marker)
+            .context("failed to serialize benchmark marker")?;
+        self.writer
+            .write_all(b"\n")
+            .context("failed to write benchmark marker newline")?;
+        self.writer.flush().context("failed to flush benchmark marker")?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MarkerEvent {
+    kind: String,
+    seq: Option<u64>,
+    monotonic_ns: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct FrameEvent {
+    monotonic_ns: u64,
+    elapsed_ms: u64,
+    total_frames: u64,
+    terminal_redraws: u64,
+    view_wake_signals: u64,
+    runtime_wakeups: u64,
 }
 
 fn run_alt_screen_anim(duration: Duration) -> Result<()> {
@@ -347,6 +457,30 @@ struct RunResult {
     scenario: String,
     app_summary: AppSummary,
     energy_summary: EnergySummary,
+    micro_latency: MicroLatencySummary,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct MicroLatencySummary {
+    idle_burst: Option<IdleBurstLatencySummary>,
+    echo_train: Option<EchoTrainLatencySummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct IdleBurstLatencySummary {
+    first_frame_after_burst_ms: Option<f32>,
+    last_frame_after_burst_ms: Option<f32>,
+    frames_until_settle: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct EchoTrainLatencySummary {
+    echo_first_frame_ms_p50: f32,
+    echo_first_frame_ms_p95: f32,
+    echo_first_frame_ms_p99: f32,
+    echo_first_frame_ms_max: f32,
+    echo_missed_count: u64,
+    echo_sample_count: u64,
 }
 
 fn run_single_benchmark(
@@ -359,10 +493,13 @@ fn run_single_benchmark(
     let energy_dir = output_root.join("energy").join(build.label).join(scenario.as_str());
     let config_root = raw_dir.join("config");
     let metrics_dir = raw_dir.join("app");
+    let driver_dir = raw_dir.join("driver");
     fs::create_dir_all(config_root.join("termy"))
         .with_context(|| format!("failed to create {}", config_root.display()))?;
     fs::create_dir_all(&metrics_dir)
         .with_context(|| format!("failed to create {}", metrics_dir.display()))?;
+    fs::create_dir_all(&driver_dir)
+        .with_context(|| format!("failed to create {}", driver_dir.display()))?;
     fs::create_dir_all(&energy_dir)
         .with_context(|| format!("failed to create {}", energy_dir.display()))?;
 
@@ -371,6 +508,7 @@ fn run_single_benchmark(
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     let trace_path = energy_dir.join("activity-monitor.trace");
+    let markers_path = driver_dir.join("markers.ndjson");
     let command = benchmark_driver_command(build, scenario, duration_secs);
     let time_limit_secs = duration_secs.saturating_add(TRACE_PADDING_SECS);
     let mut activity_command = activity_monitor_command(
@@ -378,6 +516,7 @@ fn run_single_benchmark(
         &trace_path,
         &config_root,
         &metrics_dir,
+        &markers_path,
         scenario,
         &command,
         time_limit_secs,
@@ -389,6 +528,8 @@ fn run_single_benchmark(
 
     let summary_path = metrics_dir.join("summary.json");
     let summary: AppSummary = read_json(&summary_path)?;
+    let frames_path = metrics_dir.join("frames.ndjson");
+    let micro_latency = summarize_micro_latency(scenario, &markers_path, &frames_path)?;
 
     let toc_path = energy_dir.join("toc.xml");
     let live_path = energy_dir.join("activity-monitor-process-live.xml");
@@ -417,6 +558,7 @@ fn run_single_benchmark(
         scenario: scenario.as_str().to_string(),
         app_summary: summary,
         energy_summary,
+        micro_latency,
     })
 }
 
@@ -438,6 +580,7 @@ fn activity_monitor_command(
     trace_path: &Path,
     config_root: &Path,
     metrics_dir: &Path,
+    markers_path: &Path,
     scenario: Scenario,
     benchmark_command: &str,
     time_limit_secs: u64,
@@ -459,6 +602,11 @@ fn activity_monitor_command(
         .arg(format!("TERMY_BENCHMARK_SCENARIO={}", scenario.as_str()))
         .arg("--env")
         .arg(format!("TERMY_BENCHMARK_METRICS_PATH={}", metrics_dir.display()))
+        .arg("--env")
+        .arg(format!(
+            "{BENCHMARK_EVENTS_PATH_ENV}={}",
+            markers_path.display()
+        ))
         .arg("--env")
         .arg("TERMY_BENCHMARK_EXIT_ON_COMPLETE=1")
         .arg("--env")
@@ -515,6 +663,106 @@ fn parse_activity_monitor_summary(live_path: &Path, ledger_path: &Path) -> Resul
         disk_bytes_written: ledger_row
             .get("disk-bytes-written")
             .and_then(|value| value.parse::<u64>().ok()),
+    })
+}
+
+fn summarize_micro_latency(
+    scenario: Scenario,
+    markers_path: &Path,
+    frames_path: &Path,
+) -> Result<MicroLatencySummary> {
+    match scenario {
+        Scenario::IdleBurst => {
+            let markers: Vec<MarkerEvent> = read_ndjson(markers_path)?;
+            let frames: Vec<FrameEvent> = read_ndjson(frames_path)?;
+            Ok(MicroLatencySummary {
+                idle_burst: Some(summarize_idle_burst_latency(&markers, &frames)?),
+                echo_train: None,
+            })
+        }
+        Scenario::EchoTrain => {
+            let markers: Vec<MarkerEvent> = read_ndjson(markers_path)?;
+            let frames: Vec<FrameEvent> = read_ndjson(frames_path)?;
+            Ok(MicroLatencySummary {
+                idle_burst: None,
+                echo_train: Some(summarize_echo_train_latency(&markers, &frames)?),
+            })
+        }
+        Scenario::SteadyScroll | Scenario::AltScreenAnim => Ok(MicroLatencySummary::default()),
+    }
+}
+
+fn summarize_idle_burst_latency(
+    markers: &[MarkerEvent],
+    frames: &[FrameEvent],
+) -> Result<IdleBurstLatencySummary> {
+    let burst_start = markers
+        .iter()
+        .find(|marker| marker.kind == "burst_start")
+        .context("missing burst_start marker")?
+        .monotonic_ns;
+    let burst_end = markers
+        .iter()
+        .find(|marker| marker.kind == "burst_end")
+        .context("missing burst_end marker")?
+        .monotonic_ns;
+    let first_frame = frames.iter().find(|frame| frame.monotonic_ns >= burst_start);
+    let last_frame = frames.iter().rev().find(|frame| frame.monotonic_ns >= burst_end);
+    let frames_before_burst = frames
+        .iter()
+        .rev()
+        .find(|frame| frame.monotonic_ns < burst_start)
+        .map(|frame| frame.total_frames)
+        .unwrap_or(0);
+
+    Ok(IdleBurstLatencySummary {
+        first_frame_after_burst_ms: first_frame
+            .map(|frame| nanos_to_millis(frame.monotonic_ns.saturating_sub(burst_start))),
+        last_frame_after_burst_ms: last_frame
+            .map(|frame| nanos_to_millis(frame.monotonic_ns.saturating_sub(burst_end))),
+        frames_until_settle: last_frame.map(|frame| {
+            frame
+                .total_frames
+                .saturating_sub(frames_before_burst)
+        }),
+    })
+}
+
+fn summarize_echo_train_latency(
+    markers: &[MarkerEvent],
+    frames: &[FrameEvent],
+) -> Result<EchoTrainLatencySummary> {
+    let echo_markers: Vec<&MarkerEvent> = markers
+        .iter()
+        .filter(|marker| marker.kind == "echo_start")
+        .collect();
+    if echo_markers.is_empty() {
+        bail!("missing echo_start markers");
+    }
+
+    let mut latencies_ns = Vec::with_capacity(echo_markers.len());
+    let mut missed_count = 0u64;
+    for marker in echo_markers {
+        if let Some(frame) = frames.iter().find(|frame| frame.monotonic_ns >= marker.monotonic_ns) {
+            latencies_ns.push(frame.monotonic_ns.saturating_sub(marker.monotonic_ns));
+        } else {
+            missed_count = missed_count.saturating_add(1);
+        }
+    }
+
+    let mut sorted = latencies_ns;
+    sorted.sort_unstable();
+    Ok(EchoTrainLatencySummary {
+        echo_first_frame_ms_p50: percentile_nanos_to_millis(&sorted, 50, 100),
+        echo_first_frame_ms_p95: percentile_nanos_to_millis(&sorted, 95, 100),
+        echo_first_frame_ms_p99: percentile_nanos_to_millis(&sorted, 99, 100),
+        echo_first_frame_ms_max: sorted
+            .last()
+            .copied()
+            .map(nanos_to_millis)
+            .unwrap_or(0.0),
+        echo_missed_count: missed_count,
+        echo_sample_count: sorted.len() as u64,
     })
 }
 
@@ -589,6 +837,30 @@ fn run_command(command: &mut Command, description: String) -> Result<()> {
     Ok(())
 }
 
+fn read_ndjson<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("failed to parse ndjson row"))
+        .collect::<Result<Vec<_>>>()
+        .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn nanos_to_millis(nanos: u64) -> f32 {
+    nanos as f32 / 1_000_000.0
+}
+
+fn percentile_nanos_to_millis(samples: &[u64], numerator: usize, denominator: usize) -> f32 {
+    let Some(last_index) = samples.len().checked_sub(1) else {
+        return 0.0;
+    };
+    let index =
+        (last_index.saturating_mul(numerator) + denominator.saturating_sub(1)) / denominator;
+    nanos_to_millis(samples[index])
+}
+
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -660,6 +932,78 @@ impl ScenarioComparison {
                 candidate.energy_summary.idle_wakeups,
                 baseline.energy_summary.idle_wakeups,
             ),
+            idle_burst_first_frame_ms: option_f32_delta(
+                candidate
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.first_frame_after_burst_ms),
+                baseline
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.first_frame_after_burst_ms),
+            ),
+            idle_burst_last_frame_ms: option_f32_delta(
+                candidate
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.last_frame_after_burst_ms),
+                baseline
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.last_frame_after_burst_ms),
+            ),
+            idle_burst_frames_until_settle: option_i64_delta(
+                candidate
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.frames_until_settle),
+                baseline
+                    .micro_latency
+                    .idle_burst
+                    .as_ref()
+                    .and_then(|summary| summary.frames_until_settle),
+            ),
+            echo_first_frame_ms_p95: option_f32_delta(
+                candidate
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_first_frame_ms_p95),
+                baseline
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_first_frame_ms_p95),
+            ),
+            echo_first_frame_ms_max: option_f32_delta(
+                candidate
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_first_frame_ms_max),
+                baseline
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_first_frame_ms_max),
+            ),
+            echo_missed_count: option_i64_delta(
+                candidate
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_missed_count),
+                baseline
+                    .micro_latency
+                    .echo_train
+                    .as_ref()
+                    .map(|summary| summary.echo_missed_count),
+            ),
         };
         Self {
             scenario,
@@ -676,11 +1020,31 @@ struct ScenarioDeltas {
     frame_p99_ms: f32,
     cpu_avg_percent: f32,
     idle_wakeups: Option<i64>,
+    idle_burst_first_frame_ms: Option<f32>,
+    idle_burst_last_frame_ms: Option<f32>,
+    idle_burst_frames_until_settle: Option<i64>,
+    echo_first_frame_ms_p95: Option<f32>,
+    echo_first_frame_ms_max: Option<f32>,
+    echo_missed_count: Option<i64>,
 }
 
 fn option_delta(candidate: Option<u64>, baseline: Option<u64>) -> Option<i64> {
     match (candidate, baseline) {
         (Some(candidate), Some(baseline)) => Some(candidate as i64 - baseline as i64),
+        _ => None,
+    }
+}
+
+fn option_i64_delta(candidate: Option<u64>, baseline: Option<u64>) -> Option<i64> {
+    match (candidate, baseline) {
+        (Some(candidate), Some(baseline)) => Some(candidate as i64 - baseline as i64),
+        _ => None,
+    }
+}
+
+fn option_f32_delta(candidate: Option<f32>, baseline: Option<f32>) -> Option<f32> {
+    match (candidate, baseline) {
+        (Some(candidate), Some(baseline)) => Some(candidate - baseline),
         _ => None,
     }
 }
@@ -782,6 +1146,76 @@ fn render_report(summary: &ComparisonSummary) -> String {
             format_option_i64(scenario.deltas.idle_wakeups),
         ));
 
+        if let (Some(baseline), Some(candidate)) = (
+            scenario.baseline.micro_latency.idle_burst.as_ref(),
+            scenario.candidate.micro_latency.idle_burst.as_ref(),
+        ) {
+            report.push_str("| Idle-burst metric | Baseline | Candidate | Delta |\n");
+            report.push_str("| --- | ---: | ---: | ---: |\n");
+            report.push_str(&format!(
+                "| First frame after burst ms | {} | {} | {} |\n",
+                format_option_f32(baseline.first_frame_after_burst_ms),
+                format_option_f32(candidate.first_frame_after_burst_ms),
+                format_option_f32(scenario.deltas.idle_burst_first_frame_ms),
+            ));
+            report.push_str(&format!(
+                "| Last frame after burst ms | {} | {} | {} |\n",
+                format_option_f32(baseline.last_frame_after_burst_ms),
+                format_option_f32(candidate.last_frame_after_burst_ms),
+                format_option_f32(scenario.deltas.idle_burst_last_frame_ms),
+            ));
+            report.push_str(&format!(
+                "| Frames until settle | {} | {} | {} |\n\n",
+                format_option_u64(baseline.frames_until_settle),
+                format_option_u64(candidate.frames_until_settle),
+                format_option_i64(scenario.deltas.idle_burst_frames_until_settle),
+            ));
+        }
+
+        if let (Some(baseline), Some(candidate)) = (
+            scenario.baseline.micro_latency.echo_train.as_ref(),
+            scenario.candidate.micro_latency.echo_train.as_ref(),
+        ) {
+            report.push_str("| Echo-train metric | Baseline | Candidate | Delta |\n");
+            report.push_str("| --- | ---: | ---: | ---: |\n");
+            report.push_str(&format!(
+                "| First frame p50 ms | {:.2} | {:.2} | {:.2} |\n",
+                baseline.echo_first_frame_ms_p50,
+                candidate.echo_first_frame_ms_p50,
+                candidate.echo_first_frame_ms_p50 - baseline.echo_first_frame_ms_p50,
+            ));
+            report.push_str(&format!(
+                "| First frame p95 ms | {:.2} | {:.2} | {} |\n",
+                baseline.echo_first_frame_ms_p95,
+                candidate.echo_first_frame_ms_p95,
+                format_option_f32(scenario.deltas.echo_first_frame_ms_p95),
+            ));
+            report.push_str(&format!(
+                "| First frame p99 ms | {:.2} | {:.2} | {:.2} |\n",
+                baseline.echo_first_frame_ms_p99,
+                candidate.echo_first_frame_ms_p99,
+                candidate.echo_first_frame_ms_p99 - baseline.echo_first_frame_ms_p99,
+            ));
+            report.push_str(&format!(
+                "| First frame max ms | {:.2} | {:.2} | {} |\n",
+                baseline.echo_first_frame_ms_max,
+                candidate.echo_first_frame_ms_max,
+                format_option_f32(scenario.deltas.echo_first_frame_ms_max),
+            ));
+            report.push_str(&format!(
+                "| Missed echoes | {} | {} | {} |\n",
+                baseline.echo_missed_count,
+                candidate.echo_missed_count,
+                format_option_i64(scenario.deltas.echo_missed_count),
+            ));
+            report.push_str(&format!(
+                "| Echo samples | {} | {} | {} |\n\n",
+                baseline.echo_sample_count,
+                candidate.echo_sample_count,
+                candidate.echo_sample_count as i64 - baseline.echo_sample_count as i64,
+            ));
+        }
+
         report.push_str("Findings:\n");
         report.push_str(&format!(
             "- Candidate {} frame p95 by {:.2} ms.\n",
@@ -801,6 +1235,29 @@ fn render_report(summary: &ComparisonSummary) -> String {
             },
             scenario.deltas.cpu_avg_percent.abs()
         ));
+        if let Some(delta) = scenario.deltas.idle_burst_first_frame_ms {
+            report.push_str(&format!(
+                "- Candidate {} idle-burst first-frame latency by {:.2} ms.\n",
+                if delta < 0.0 {
+                    "improves"
+                } else {
+                    "regresses"
+                },
+                delta.abs()
+            ));
+        }
+        if let Some(delta) = scenario.deltas.echo_first_frame_ms_p95 {
+            report.push_str(&format!(
+                "- Candidate {} echo-train first-frame p95 by {:.2} ms.\n",
+                if delta < 0.0 {
+                    "improves"
+                } else {
+                    "regresses"
+                },
+                delta.abs()
+            ));
+        }
+        report.push('\n');
     }
 
     report
@@ -818,13 +1275,23 @@ fn format_option_i64(value: Option<i64>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
+fn format_option_f32(value: Option<f32>) -> String {
+    value
+        .map(|value| format!("{value:.2}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Scenario, parse_single_row_table};
+    use super::{
+        FrameEvent, MarkerEvent, Scenario, parse_single_row_table, render_report,
+        summarize_echo_train_latency, summarize_idle_burst_latency,
+    };
 
     #[test]
     fn parses_scenario_names() {
-        assert_eq!(Scenario::parse("burst-output").unwrap(), Scenario::BurstOutput);
+        assert_eq!(Scenario::parse("idle-burst").unwrap(), Scenario::IdleBurst);
+        assert_eq!(Scenario::parse("echo-train").unwrap(), Scenario::EchoTrain);
         assert!(Scenario::parse("nope").is_err());
     }
 
@@ -846,5 +1313,212 @@ mod tests {
         let parsed = parse_single_row_table(xml).unwrap();
         assert_eq!(parsed.get("cpu-total").unwrap(), "42");
         assert_eq!(parsed.get("idle-wakeups").unwrap(), "7");
+    }
+
+    #[test]
+    fn summarizes_idle_burst_latency() {
+        let markers = vec![
+            MarkerEvent {
+                kind: "burst_start".to_string(),
+                seq: None,
+                monotonic_ns: 100,
+            },
+            MarkerEvent {
+                kind: "burst_end".to_string(),
+                seq: None,
+                monotonic_ns: 150,
+            },
+        ];
+        let frames = vec![
+            FrameEvent {
+                monotonic_ns: 90,
+                elapsed_ms: 0,
+                total_frames: 1,
+                terminal_redraws: 0,
+                view_wake_signals: 0,
+                runtime_wakeups: 0,
+            },
+            FrameEvent {
+                monotonic_ns: 130,
+                elapsed_ms: 1,
+                total_frames: 2,
+                terminal_redraws: 1,
+                view_wake_signals: 1,
+                runtime_wakeups: 1,
+            },
+            FrameEvent {
+                monotonic_ns: 180,
+                elapsed_ms: 2,
+                total_frames: 4,
+                terminal_redraws: 2,
+                view_wake_signals: 2,
+                runtime_wakeups: 2,
+            },
+        ];
+
+        let summary = summarize_idle_burst_latency(&markers, &frames).unwrap();
+        assert!(
+            (summary.first_frame_after_burst_ms.unwrap() - 0.00003).abs() < f32::EPSILON,
+            "unexpected first frame latency: {:?}",
+            summary.first_frame_after_burst_ms
+        );
+        assert!(
+            (summary.last_frame_after_burst_ms.unwrap() - 0.00003).abs() < f32::EPSILON,
+            "unexpected last frame latency: {:?}",
+            summary.last_frame_after_burst_ms
+        );
+        assert_eq!(summary.frames_until_settle, Some(3));
+    }
+
+    #[test]
+    fn summarizes_echo_train_latency() {
+        let markers = vec![
+            MarkerEvent {
+                kind: "echo_start".to_string(),
+                seq: Some(0),
+                monotonic_ns: 100,
+            },
+            MarkerEvent {
+                kind: "echo_start".to_string(),
+                seq: Some(1),
+                monotonic_ns: 200,
+            },
+        ];
+        let frames = vec![
+            FrameEvent {
+                monotonic_ns: 120,
+                elapsed_ms: 1,
+                total_frames: 1,
+                terminal_redraws: 1,
+                view_wake_signals: 1,
+                runtime_wakeups: 1,
+            },
+            FrameEvent {
+                monotonic_ns: 260,
+                elapsed_ms: 2,
+                total_frames: 2,
+                terminal_redraws: 2,
+                view_wake_signals: 2,
+                runtime_wakeups: 2,
+            },
+        ];
+
+        let summary = summarize_echo_train_latency(&markers, &frames).unwrap();
+        assert_eq!(summary.echo_missed_count, 0);
+        assert_eq!(summary.echo_sample_count, 2);
+        assert!((summary.echo_first_frame_ms_max - 0.00006).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn render_report_mentions_micro_latency_tables() {
+        let report = render_report(&super::ComparisonSummary {
+            baseline_git_sha: "abc".to_string(),
+            candidate_git_sha: "def".to_string(),
+            scenarios: vec![super::ScenarioComparison {
+                scenario: "idle-burst".to_string(),
+                baseline: super::RunResult {
+                    build_label: "baseline".to_string(),
+                    git_sha: "abc".to_string(),
+                    scenario: "idle-burst".to_string(),
+                    app_summary: super::AppSummary {
+                        build_label: Some("baseline".to_string()),
+                        git_sha: Some("abc".to_string()),
+                        scenario: "idle-burst".to_string(),
+                        duration_ms: 3000,
+                        sample_count: 2,
+                        total_frames: 4,
+                        fps_avg: 1.0,
+                        frame_p50_ms: 12.0,
+                        frame_p95_ms: 20.0,
+                        frame_p99_ms: 25.0,
+                        cpu_avg_percent: 3.0,
+                        cpu_max_percent: 5.0,
+                        memory_max_bytes: 1,
+                        runtime_wakeups: 1,
+                        view_wake_signals: 1,
+                        terminal_event_drain_passes: 1,
+                        terminal_redraws: 1,
+                        alt_screen_fallback_redraws: 0,
+                        grid_paint_count: 1,
+                        shape_line_calls: 1,
+                    },
+                    energy_summary: super::EnergySummary {
+                        trace_template: "Activity Monitor".to_string(),
+                        cpu_total_ns: None,
+                        cpu_percent: None,
+                        idle_wakeups: Some(10),
+                        memory_bytes: None,
+                        disk_bytes_read: None,
+                        disk_bytes_written: None,
+                    },
+                    micro_latency: super::MicroLatencySummary {
+                        idle_burst: Some(super::IdleBurstLatencySummary {
+                            first_frame_after_burst_ms: Some(4.0),
+                            last_frame_after_burst_ms: Some(12.0),
+                            frames_until_settle: Some(2),
+                        }),
+                        echo_train: None,
+                    },
+                },
+                candidate: super::RunResult {
+                    build_label: "candidate".to_string(),
+                    git_sha: "def".to_string(),
+                    scenario: "idle-burst".to_string(),
+                    app_summary: super::AppSummary {
+                        build_label: Some("candidate".to_string()),
+                        git_sha: Some("def".to_string()),
+                        scenario: "idle-burst".to_string(),
+                        duration_ms: 3000,
+                        sample_count: 2,
+                        total_frames: 5,
+                        fps_avg: 2.0,
+                        frame_p50_ms: 8.0,
+                        frame_p95_ms: 10.0,
+                        frame_p99_ms: 12.0,
+                        cpu_avg_percent: 4.0,
+                        cpu_max_percent: 6.0,
+                        memory_max_bytes: 1,
+                        runtime_wakeups: 2,
+                        view_wake_signals: 2,
+                        terminal_event_drain_passes: 2,
+                        terminal_redraws: 2,
+                        alt_screen_fallback_redraws: 0,
+                        grid_paint_count: 2,
+                        shape_line_calls: 2,
+                    },
+                    energy_summary: super::EnergySummary {
+                        trace_template: "Activity Monitor".to_string(),
+                        cpu_total_ns: None,
+                        cpu_percent: None,
+                        idle_wakeups: Some(11),
+                        memory_bytes: None,
+                        disk_bytes_read: None,
+                        disk_bytes_written: None,
+                    },
+                    micro_latency: super::MicroLatencySummary {
+                        idle_burst: Some(super::IdleBurstLatencySummary {
+                            first_frame_after_burst_ms: Some(2.0),
+                            last_frame_after_burst_ms: Some(8.0),
+                            frames_until_settle: Some(1),
+                        }),
+                        echo_train: None,
+                    },
+                },
+                deltas: super::ScenarioDeltas {
+                    frame_p95_ms: -10.0,
+                    frame_p99_ms: -13.0,
+                    cpu_avg_percent: 1.0,
+                    idle_wakeups: Some(1),
+                    idle_burst_first_frame_ms: Some(-2.0),
+                    idle_burst_last_frame_ms: Some(-4.0),
+                    idle_burst_frames_until_settle: Some(-1),
+                    echo_first_frame_ms_p95: None,
+                    echo_first_frame_ms_max: None,
+                    echo_missed_count: None,
+                },
+            }],
+        });
+        assert!(report.contains("Idle-burst metric"));
+        assert!(report.contains("First frame after burst ms"));
     }
 }

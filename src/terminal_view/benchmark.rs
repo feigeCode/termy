@@ -8,7 +8,8 @@ use std::{
 };
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 use termy_terminal_ui::{
-    terminal_ui_render_metrics_reset, terminal_ui_render_metrics_snapshot,
+    terminal_ui_monotonic_now_ns, terminal_ui_render_metrics_reset,
+    terminal_ui_render_metrics_snapshot,
 };
 
 pub(super) const BENCHMARK_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
@@ -100,6 +101,7 @@ pub(super) struct BenchmarkSession {
     frames_in_sample: u64,
     total_frames: u64,
     samples: Vec<BenchmarkSample>,
+    frame_events: Vec<BenchmarkFrameEvent>,
     counters: BenchmarkCounters,
     system: System,
     pid: Option<sysinfo::Pid>,
@@ -118,6 +120,7 @@ impl BenchmarkSession {
             frames_in_sample: 0,
             total_frames: 0,
             samples: Vec::new(),
+            frame_events: Vec::with_capacity(2048),
             counters: BenchmarkCounters::default(),
             system: System::new(),
             pid: get_current_pid().ok(),
@@ -134,6 +137,16 @@ impl BenchmarkSession {
             self.frame_intervals_micros.push(micros);
         }
         self.last_frame_at = Some(now);
+
+        let terminal_ui = terminal_ui_render_metrics_snapshot();
+        self.frame_events.push(BenchmarkFrameEvent {
+            monotonic_ns: terminal_ui_monotonic_now_ns(),
+            elapsed_ms: duration_millis(now.saturating_duration_since(self.start_at)),
+            total_frames: self.total_frames,
+            terminal_redraws: self.counters.terminal_redraws,
+            view_wake_signals: self.counters.view_wake_signals,
+            runtime_wakeups: terminal_ui.runtime_wakeup_count,
+        });
     }
 
     pub fn record_view_wakeup(&mut self) {
@@ -244,6 +257,25 @@ impl BenchmarkSession {
             .flush()
             .map_err(|error| format!("failed to flush {}: {error}", timeline_path.display()))?;
 
+        let frames_path = self.config.metrics_path.join("frames.ndjson");
+        let frames_file = File::create(&frames_path)
+            .map_err(|error| format!("failed to create {}: {error}", frames_path.display()))?;
+        let mut frames_writer = BufWriter::new(frames_file);
+        for frame in &self.frame_events {
+            serde_json::to_writer(&mut frames_writer, frame).map_err(|error| {
+                format!(
+                    "failed to serialize benchmark frame to {}: {error}",
+                    frames_path.display()
+                )
+            })?;
+            frames_writer
+                .write_all(b"\n")
+                .map_err(|error| format!("failed to write {}: {error}", frames_path.display()))?;
+        }
+        frames_writer
+            .flush()
+            .map_err(|error| format!("failed to flush {}: {error}", frames_path.display()))?;
+
         let summary = self.build_summary();
         let summary_path = self.config.metrics_path.join("summary.json");
         let summary_file = File::create(&summary_path)
@@ -316,6 +348,16 @@ struct BenchmarkSample {
     alt_screen_fallback_redraws: u64,
     grid_paint_count: u64,
     shape_line_calls: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BenchmarkFrameEvent {
+    monotonic_ns: u64,
+    elapsed_ms: u64,
+    total_frames: u64,
+    terminal_redraws: u64,
+    view_wake_signals: u64,
+    runtime_wakeups: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]

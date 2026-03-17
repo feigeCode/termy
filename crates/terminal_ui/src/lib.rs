@@ -1,6 +1,7 @@
 mod grid;
 mod links;
 mod locale;
+mod monotonic_time;
 mod mouse_protocol;
 mod pane_terminal;
 mod path_env;
@@ -20,6 +21,7 @@ pub use mouse_protocol::{
     TerminalMouseButton, TerminalMouseEventKind, TerminalMouseMode, TerminalMouseModifiers,
     TerminalMousePosition, encode_mouse_report,
 };
+pub use monotonic_time::terminal_ui_monotonic_now_ns;
 pub use pane_terminal::PaneTerminal;
 pub use render_metrics::{
     TerminalUiRenderMetricsSnapshot, terminal_ui_render_metrics_reset,

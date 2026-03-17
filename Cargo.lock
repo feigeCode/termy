@@ -9437,6 +9437,7 @@ dependencies = [
  "tempfile",
  "termy_command_core",
  "termy_config_core",
+ "termy_terminal_ui",
 ]
 
 [[package]]

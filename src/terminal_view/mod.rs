@@ -11,13 +11,15 @@ use alacritty_terminal::term::cell::Flags;
 use flume::{Sender, bounded};
 use gpui::AppContext;
 use gpui::{
-    AnyElement, App, AsyncApp, ClipboardItem, Context, Element, Entity, ExternalPaths, FocusHandle,
-    Focusable, Font, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
+    AnyElement, App, AsyncApp, ClipboardItem, Context, Element, Entity, FocusHandle, Focusable,
+    Font, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Render, ScrollWheelEvent, SharedString, Size,
     StatefulInteractiveElement, Styled, TouchPhase, WeakEntity, Window, WindowBackgroundAppearance,
     div, point, px,
 };
+#[cfg(not(target_os = "macos"))]
+use gpui::ExternalPaths;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
@@ -50,6 +52,8 @@ use termy_toast::ToastManager;
 mod command_palette;
 mod inline_input;
 mod interaction;
+#[cfg(target_os = "macos")]
+mod macos_file_drop;
 mod overlay_view;
 mod persistence;
 mod render;
@@ -67,6 +71,8 @@ use inline_input::{InlineInputAlignment, InlineInputState};
 use overlay_view::TerminalOverlayView;
 use runtime::{RuntimeKind, RuntimeState, TmuxRuntime};
 pub(crate) use tab_strip::constants::*;
+#[cfg(target_os = "macos")]
+pub(crate) use macos_file_drop::{NativeDropResult, install_native_file_drop};
 use tab_strip::state::TabStripState;
 
 const MIN_FONT_SIZE: f32 = 8.0;

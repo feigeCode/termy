@@ -1,5 +1,6 @@
 /target
 AGENTS.md
+.codex/
 .ds_store
 .env
 ./docs/examples/plugins/hello-rust/target

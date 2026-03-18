@@ -138,6 +138,7 @@ impl TerminalView {
 
         if delta != 0 {
             terminal.scroll_display(delta);
+            self.sync_content_scroll_baseline();
             self.mark_terminal_scrollbar_activity(cx);
         }
     }

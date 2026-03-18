@@ -439,6 +439,36 @@ impl TerminalView {
         Some((pane_id, selection_pos))
     }
 
+    /// Sync content_scroll_baseline to the current display_offset after a user-initiated
+    /// scroll action, so that the next content-driven change is detected correctly.
+    pub(in super::super) fn sync_content_scroll_baseline(&mut self) {
+        self.content_scroll_baseline = self
+            .active_terminal()
+            .map(|t| t.scroll_state().0)
+            .unwrap_or(self.content_scroll_baseline);
+    }
+
+    /// Adjust selection positions to compensate for display_offset changes caused by
+    /// new terminal content arriving while the user is scrolled into history.
+    /// Prevents the selection from visually drifting when Alacritty auto-adjusts the
+    /// scroll offset to keep the viewport stable.
+    pub(in super::super) fn adjust_selection_for_display_offset_change(
+        &mut self,
+        old_offset: usize,
+        new_offset: usize,
+    ) {
+        let delta = new_offset as i32 - old_offset as i32;
+        if delta == 0 {
+            return;
+        }
+        if let Some(anchor) = &mut self.selection_anchor {
+            anchor.line -= delta;
+        }
+        if let Some(head) = &mut self.selection_head {
+            head.line -= delta;
+        }
+    }
+
     pub(in super::super) fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection_range()?;
         let terminal = self.active_terminal()?;

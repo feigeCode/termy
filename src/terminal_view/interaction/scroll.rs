@@ -309,6 +309,7 @@ impl TerminalView {
         );
         if changed {
             self.terminal_scroll_accumulator_y = 0.0;
+            self.sync_content_scroll_baseline();
         }
         self.start_terminal_scrollbar_track_hold(hit.local_y, cx);
         self.mark_terminal_scrollbar_activity(cx);
@@ -352,6 +353,7 @@ impl TerminalView {
             return false;
         }
         self.terminal_scroll_accumulator_y = 0.0;
+        self.sync_content_scroll_baseline();
         cx.notify();
         self.mark_terminal_scrollbar_activity(cx);
         self.terminal_scrollbar_track_hold_local_y.is_some()
@@ -384,6 +386,7 @@ impl TerminalView {
         );
         if changed {
             self.terminal_scroll_accumulator_y = 0.0;
+            self.sync_content_scroll_baseline();
             cx.notify();
         }
     }
@@ -393,6 +396,7 @@ impl TerminalView {
             .active_terminal()
             .is_some_and(|terminal| terminal.scroll_to_bottom())
         {
+            self.content_scroll_baseline = 0;
             self.mark_terminal_scrollbar_activity(cx);
             cx.notify();
         }
@@ -449,6 +453,7 @@ impl TerminalView {
             .active_terminal()
             .is_some_and(|terminal| terminal.scroll_display(delta_lines))
         {
+            self.sync_content_scroll_baseline();
             cx.notify();
         } else {
             self.terminal_scroll_accumulator_y = 0.0;

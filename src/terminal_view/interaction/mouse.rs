@@ -709,6 +709,7 @@ impl TerminalView {
                     .active_terminal()
                     .is_some_and(|terminal| terminal.scroll_display(delta_lines))
             {
+                self.sync_content_scroll_baseline();
                 self.mark_terminal_scrollbar_activity(cx);
                 changed = true;
             }

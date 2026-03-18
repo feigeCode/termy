@@ -1267,6 +1267,10 @@ pub struct TerminalView {
     selection_head: Option<SelectionPos>,
     selection_dragging: bool,
     selection_moved: bool,
+    /// Tracks the active terminal's display_offset as observed from the UI thread.
+    /// Updated after every user-initiated scroll and after each content-scroll adjustment,
+    /// so that process_terminal_events can detect only content-driven offset changes.
+    content_scroll_baseline: usize,
     pending_cursor_move_click: Option<PendingCursorMoveClick>,
     pending_cursor_move_preview: Option<PendingCursorMovePreview>,
     terminal_context_menu: Option<TerminalContextMenuState>,
@@ -2493,6 +2497,7 @@ impl TerminalView {
             selection_head: None,
             selection_dragging: false,
             selection_moved: false,
+            content_scroll_baseline: 0,
             pending_cursor_move_click: None,
             pending_cursor_move_preview: None,
             terminal_context_menu: None,
@@ -2982,6 +2987,23 @@ impl TerminalView {
 
         if should_redraw {
             self.debug_overlay_stats.record_terminal_redraw();
+
+            // Detect content-driven display_offset changes: Alacritty auto-increments the
+            // offset to keep the viewport stable when new lines arrive while the user is
+            // scrolled into history. The background PTY thread already updated the offset
+            // before we got here, so we compare against content_scroll_baseline (a value
+            // we maintain separately from user-initiated scrolls) to find the delta.
+            let current_offset = self
+                .active_terminal()
+                .map(|t| t.scroll_state().0)
+                .unwrap_or(0);
+            if current_offset != self.content_scroll_baseline {
+                self.adjust_selection_for_display_offset_change(
+                    self.content_scroll_baseline,
+                    current_offset,
+                );
+                self.content_scroll_baseline = current_offset;
+            }
         }
 
         should_redraw

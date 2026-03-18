@@ -758,6 +758,33 @@ mod tests {
     }
 
     #[test]
+    fn expanded_and_compact_vertical_layouts_share_list_origin() {
+        let expanded = TerminalView::vertical_tab_strip_layout_for_input(
+            VerticalTabStripLayoutInput {
+                strip_width: 220.0,
+                compact: false,
+                header_height: TABBAR_HEIGHT,
+                list_height: 180.0,
+                tab_heights: vec![TAB_ITEM_HEIGHT],
+            },
+        );
+        let compact = TerminalView::vertical_tab_strip_layout_for_input(
+            VerticalTabStripLayoutInput {
+                strip_width: collapsed_vertical_tab_strip_width(
+                    TerminalView::titlebar_left_padding_for_platform(),
+                ),
+                compact: true,
+                header_height: TABBAR_HEIGHT,
+                list_height: 180.0,
+                tab_heights: vec![TAB_ITEM_HEIGHT],
+            },
+        );
+
+        assert_float_eq(expanded.list_top, compact.list_top);
+        assert_float_eq(expanded.bottom_shelf_top, compact.bottom_shelf_top);
+    }
+
+    #[test]
     fn vertical_layout_drop_slot_respects_animated_row_heights() {
         let snapshot = TerminalView::vertical_tab_strip_layout_for_input(
             VerticalTabStripLayoutInput {

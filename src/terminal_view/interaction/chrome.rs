@@ -281,8 +281,14 @@ mod tests {
     #[test]
     fn vertical_tabs_list_height_subtracts_header_top_shelf_and_bottom_shelf() {
         assert_eq!(
-            TerminalView::vertical_tabs_list_height_for(600.0, 0.0, 34.0, 44.0, 38.0),
-            484.0
+            TerminalView::vertical_tabs_list_height_for(
+                600.0,
+                0.0,
+                34.0,
+                VERTICAL_NEW_TAB_SHELF_HEIGHT,
+                VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
+            ),
+            490.0
         );
     }
 

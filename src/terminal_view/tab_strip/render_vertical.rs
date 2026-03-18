@@ -68,7 +68,7 @@ mod tests {
         let layout = TerminalView::vertical_new_tab_shelf_layout(219.0, false);
         assert_eq!(layout.shelf_height, VERTICAL_NEW_TAB_SHELF_HEIGHT);
         assert_eq!(layout.button_x, VERTICAL_TAB_STRIP_PADDING);
-        assert_eq!(layout.button_y, 11.0);
+        assert_eq!(layout.button_y, 8.0);
         assert_eq!(layout.button_width, 203.0);
         assert_eq!(layout.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
     }
@@ -102,6 +102,19 @@ mod tests {
         assert_eq!(expanded.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
         assert_eq!(compact.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
         assert!(compact.button_width > compact.button_height);
+    }
+
+    #[test]
+    fn expanded_and_compact_vertical_new_tab_shelves_share_height() {
+        let expanded = TerminalView::vertical_new_tab_shelf_layout(219.0, false);
+        let compact = TerminalView::vertical_new_tab_shelf_layout(
+            collapsed_vertical_tab_strip_width(TerminalView::titlebar_left_padding_for_platform())
+                - TAB_STROKE_THICKNESS,
+            true,
+        );
+
+        assert_eq!(expanded.shelf_height, compact.shelf_height);
+        assert_eq!(expanded.button_y, compact.button_y);
     }
 
     #[test]

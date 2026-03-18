@@ -60,7 +60,7 @@ mod render;
 mod runtime;
 mod scrollbar;
 mod search;
-mod tab_strip;
+pub(crate) mod tab_strip;
 mod tabs;
 mod titles;
 #[cfg(target_os = "macos")]
@@ -905,6 +905,19 @@ struct NativePaneZoomSnapshot {
     active_original_index: usize,
 }
 impl TerminalTab {
+    fn has_active_pane(&self) -> bool {
+        self.panes.iter().any(|pane| pane.id == self.active_pane_id)
+    }
+
+    fn assert_active_pane_invariant(&self) {
+        assert!(
+            self.panes.is_empty() || self.has_active_pane(),
+            "tab {} is missing active pane {}",
+            self.window_id,
+            self.active_pane_id
+        );
+    }
+
     fn active_pane_index(&self) -> Option<usize> {
         self.panes
             .iter()
@@ -1814,6 +1827,7 @@ impl TerminalView {
                                 < NEW_TAB_ANIMATION_DURATION
                         })
                         .unwrap_or(false);
+                    view.mark_tab_strip_layout_dirty();
                     if still_animating {
                         view.schedule_new_tab_animation(cx);
                     } else {
@@ -2443,9 +2457,9 @@ impl TerminalView {
             tab_close_visibility: config.tab_close_visibility,
             tab_width_mode: config.tab_width_mode,
             vertical_tabs: config.vertical_tabs,
-            vertical_tabs_width: config
-                .vertical_tabs_width
-                .clamp(VERTICAL_TAB_STRIP_MIN_WIDTH, VERTICAL_TAB_STRIP_MAX_WIDTH),
+            vertical_tabs_width: tab_strip::clamp_expanded_vertical_tab_strip_width(
+                config.vertical_tabs_width,
+            ),
             vertical_tabs_minimized: config.vertical_tabs_minimized,
             auto_hide_tabbar: config.auto_hide_tabbar,
             new_tab_animation_tab_id: None,
@@ -2696,9 +2710,8 @@ impl TerminalView {
         let tab_close_visibility_changed = self.tab_close_visibility != config.tab_close_visibility;
         let tab_width_mode_changed = self.tab_width_mode != config.tab_width_mode;
         let vertical_tabs_changed = self.vertical_tabs != config.vertical_tabs;
-        let vertical_tabs_width = config
-            .vertical_tabs_width
-            .clamp(VERTICAL_TAB_STRIP_MIN_WIDTH, VERTICAL_TAB_STRIP_MAX_WIDTH);
+        let vertical_tabs_width =
+            tab_strip::clamp_expanded_vertical_tab_strip_width(config.vertical_tabs_width);
         let vertical_tabs_width_changed =
             (self.vertical_tabs_width - vertical_tabs_width).abs() > f32::EPSILON;
         let vertical_tabs_minimized_changed =

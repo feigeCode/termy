@@ -190,23 +190,28 @@ impl TerminalView {
         true
     }
 
+    fn update_vertical_tab_strip_width(&mut self, requested_width: f32) -> bool {
+        let next_width =
+            crate::terminal_view::tab_strip::clamp_expanded_vertical_tab_strip_width(requested_width);
+        if (self.vertical_tabs_width - next_width).abs() < f32::EPSILON {
+            return false;
+        }
+
+        self.vertical_tabs_width = next_width;
+        self.mark_tab_strip_layout_dirty();
+        self.clear_pane_render_caches();
+        self.clear_terminal_scrollbar_marker_cache();
+        self.cell_size = None;
+        true
+    }
+
     fn apply_vertical_tab_strip_resize_drag(&mut self, position: gpui::Point<Pixels>) -> bool {
         if self.vertical_tab_strip_resize_drag.is_none() || self.vertical_tabs_minimized {
             return false;
         }
 
         let pointer_x: f32 = position.x.into();
-        let next_width =
-            pointer_x.clamp(VERTICAL_TAB_STRIP_MIN_WIDTH, VERTICAL_TAB_STRIP_MAX_WIDTH);
-        if (self.vertical_tabs_width - next_width).abs() < f32::EPSILON {
-            return false;
-        }
-
-        self.vertical_tabs_width = next_width;
-        self.clear_pane_render_caches();
-        self.clear_terminal_scrollbar_marker_cache();
-        self.cell_size = None;
-        true
+        self.update_vertical_tab_strip_width(pointer_x)
     }
 
     fn persist_vertical_tab_strip_width(&self) -> Result<(), String> {
@@ -420,13 +425,15 @@ impl TerminalView {
                 if left_indices.is_empty() || right_indices.is_empty() {
                     return false;
                 }
+                let horizontal_lane_count =
+                    Self::native_pane_lane_count_for_axis(&tab.panes, PaneResizeAxis::Horizontal);
                 let min_width = Self::native_min_extent_allowed(
                     tab.panes
                         .iter()
                         .map(|pane| pane.left.saturating_add(pane.width))
                         .max()
                         .unwrap_or(0),
-                    tab.panes.len(),
+                    horizontal_lane_count,
                     Self::native_pane_min_extent_for_axis(PaneResizeAxis::Horizontal),
                 );
 
@@ -504,13 +511,15 @@ impl TerminalView {
                 if top_indices.is_empty() || bottom_indices.is_empty() {
                     return false;
                 }
+                let vertical_lane_count =
+                    Self::native_pane_lane_count_for_axis(&tab.panes, PaneResizeAxis::Vertical);
                 let min_height = Self::native_min_extent_allowed(
                     tab.panes
                         .iter()
                         .map(|pane| pane.top.saturating_add(pane.height))
                         .max()
                         .unwrap_or(0),
-                    tab.panes.len(),
+                    vertical_lane_count,
                     Self::native_pane_min_extent_for_axis(PaneResizeAxis::Vertical),
                 );
 

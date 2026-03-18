@@ -181,7 +181,7 @@ impl TerminalView {
             }
         }
         self.reset_tab_drag_state();
-        self.scroll_active_tab_into_view();
+        self.scroll_active_tab_into_view(self.tab_strip_orientation());
         cx.notify();
         true
     }
@@ -292,7 +292,7 @@ impl TerminalView {
                 self.refresh_tab_title(self.active_tab);
                 self.mark_tab_strip_layout_dirty();
                 self.reset_tab_interaction_state();
-                self.scroll_active_tab_into_view();
+                self.scroll_active_tab_into_view(self.tab_strip_orientation());
                 self.schedule_persist_native_workspace();
                 self.start_new_tab_animation(tab_id, cx);
                 cx.notify();
@@ -357,7 +357,7 @@ impl TerminalView {
         self.reset_tab_drag_state();
 
         self.clear_selection();
-        self.scroll_active_tab_into_view();
+        self.scroll_active_tab_into_view(self.tab_strip_orientation());
         self.schedule_persist_native_workspace();
         cx.notify();
     }
@@ -668,6 +668,7 @@ impl TerminalView {
             panes.insert(insert_index, active_pane);
             tab.panes = panes;
             tab.active_pane_id = snapshot.active_pane_id;
+            tab.assert_active_pane_invariant();
 
             self.clear_selection();
             self.clear_hovered_link();
@@ -716,6 +717,7 @@ impl TerminalView {
         active_pane.height = max_rows;
         tab.panes = vec![active_pane];
         tab.active_pane_id = active_pane_id.clone();
+        tab.assert_active_pane_invariant();
 
         self.native_pane_zoom_snapshots.insert(
             tab_id,
@@ -779,6 +781,7 @@ impl TerminalView {
         }
 
         tab.active_pane_id = pane_id.to_string();
+        tab.assert_active_pane_invariant();
         self.clear_selection();
         self.clear_hovered_link();
         self.schedule_persist_native_workspace();
@@ -882,6 +885,7 @@ impl TerminalView {
 
         tab.panes.insert(active_index + 1, split_pane);
         tab.active_pane_id = pane_id;
+        tab.assert_active_pane_invariant();
         self.clear_selection();
         self.clear_hovered_link();
         self.schedule_persist_native_workspace();
@@ -1042,6 +1046,7 @@ impl TerminalView {
         if let Some(next) = tab.panes.get(next_index) {
             tab.active_pane_id = next.id.clone();
         }
+        tab.assert_active_pane_invariant();
 
         self.clear_selection();
         self.clear_hovered_link();

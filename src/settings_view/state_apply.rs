@@ -446,8 +446,17 @@ impl SettingsWindow {
                 let parsed = value
                     .parse::<f32>()
                     .map_err(|_| "Vertical tabs width must be a positive number".to_string())?;
-                if !(56.0..=480.0).contains(&parsed) {
-                    return Err("Vertical tabs width must be between 56 and 480".to_string());
+                if !parsed.is_finite() {
+                    return Err("Vertical tabs width must be a positive number".to_string());
+                }
+                let min = crate::terminal_view::tab_strip::min_expanded_vertical_tab_strip_width();
+                let clamped =
+                    crate::terminal_view::tab_strip::clamp_expanded_vertical_tab_strip_width(parsed);
+                if (clamped - parsed).abs() > f32::EPSILON {
+                    return Err(format!(
+                        "Vertical tabs width must be between {} and 480",
+                        min.round() as i32
+                    ));
                 }
                 self.config.vertical_tabs_width = parsed;
                 config::set_root_setting(
@@ -538,5 +547,44 @@ impl SettingsWindow {
         }
         self.colors = TerminalColors::from_theme(&self.config.theme, &self.config.colors);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_utils::open_settings_window_handle;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn vertical_tabs_width_rejects_values_below_shared_minimum(cx: &mut TestAppContext) {
+        let settings = open_settings_window_handle(cx);
+        settings
+            .update(cx, |view, _window, _cx| {
+                let result = view.apply_tabs_field(EditableField::VerticalTabsWidth, "12");
+                assert_eq!(
+                    result,
+                    Err(format!(
+                        "Vertical tabs width must be between {} and 480",
+                        crate::terminal_view::tab_strip::min_expanded_vertical_tab_strip_width()
+                            .round() as i32
+                    ))
+                );
+            })
+            .expect("settings window update should succeed");
+    }
+
+    #[gpui::test]
+    fn vertical_tabs_width_rejects_non_finite_values(cx: &mut TestAppContext) {
+        let settings = open_settings_window_handle(cx);
+        settings
+            .update(cx, |view, _window, _cx| {
+                let result = view.apply_tabs_field(EditableField::VerticalTabsWidth, "NaN");
+                assert_eq!(
+                    result,
+                    Err("Vertical tabs width must be a positive number".to_string())
+                );
+            })
+            .expect("settings window update should succeed");
     }
 }

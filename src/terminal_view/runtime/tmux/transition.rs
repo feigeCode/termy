@@ -169,7 +169,7 @@ impl TerminalView {
         self.mark_tab_strip_layout_dirty();
         self.reset_tab_interaction_state();
         self.clear_selection();
-        self.scroll_active_tab_into_view();
+        self.scroll_active_tab_into_view(self.tab_strip_orientation());
         self.refresh_runtime_capability_surfaces(cx);
         cx.notify();
     }

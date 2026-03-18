@@ -1,0 +1,301 @@
+use super::*;
+
+impl TerminalView {
+    fn terminal_grid_size_for_pane_count(
+        pane_count: usize,
+        viewport_width: f32,
+        viewport_height: f32,
+        sidebar_width: f32,
+        content_top_inset: f32,
+        padding_x: f32,
+        padding_y: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> (u16, u16) {
+        let (outer_padding_x, outer_padding_y) = if Self::uses_outer_terminal_padding(pane_count) {
+            (padding_x, padding_y)
+        } else {
+            (0.0, 0.0)
+        };
+        let terminal_width =
+            (viewport_width - sidebar_width - (outer_padding_x * 2.0)).max(cell_width * 2.0);
+        let terminal_height =
+            (viewport_height - content_top_inset - (outer_padding_y * 2.0)).max(cell_height);
+        (
+            Self::compute_terminal_cols(terminal_width, cell_width, false),
+            Self::compute_terminal_rows(terminal_height, cell_height),
+        )
+    }
+
+    fn repair_native_tab_active_pane_for_resize(tab: &mut TerminalTab) -> bool {
+        if tab.panes.is_empty() {
+            return false;
+        }
+        if tab.has_active_pane() {
+            return true;
+        }
+
+        // Restored native layouts can carry a pane id that no longer exists.
+        // Repair that invariant here so a resize never crashes the app.
+        let fallback_id = tab
+            .panes
+            .first()
+            .map(|pane| pane.id.clone())
+            .expect("non-empty native tab must have a first pane");
+        log::warn!(
+            "native resize repaired stale active pane id '{}' for tab '{}'; falling back to '{}'",
+            tab.active_pane_id,
+            tab.window_id,
+            fallback_id
+        );
+        tab.active_pane_id = fallback_id;
+        true
+    }
+
+    pub(in super::super) fn execute_layout_command_action(
+        &mut self,
+        action: CommandAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match action {
+            CommandAction::ZoomIn => {
+                let current: f32 = self.font_size.into();
+                self.update_zoom(current + ZOOM_STEP, cx);
+                true
+            }
+            CommandAction::ZoomOut => {
+                let current: f32 = self.font_size.into();
+                self.update_zoom(current - ZOOM_STEP, cx);
+                true
+            }
+            CommandAction::ZoomReset => {
+                self.update_zoom(self.base_font_size, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(in super::super) fn update_zoom(&mut self, next_size: f32, cx: &mut Context<Self>) {
+        let clamped = next_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let current: f32 = self.font_size.into();
+        if (current - clamped).abs() < f32::EPSILON {
+            return;
+        }
+
+        self.font_size = px(clamped);
+        self.cell_size = None;
+        self.clear_tab_title_width_cache();
+        cx.notify();
+    }
+
+    pub(in super::super) fn calculate_cell_size(
+        &mut self,
+        window: &mut Window,
+        _cx: &App,
+    ) -> Size<Pixels> {
+        if let Some(cell_size) = self.cell_size {
+            return cell_size;
+        }
+
+        let font = Font {
+            family: self.font_family.clone(),
+            weight: FontWeight::NORMAL,
+            ..Default::default()
+        };
+
+        let text_system = window.text_system();
+        let font_id = text_system.resolve_font(&font);
+        let cell_width = text_system
+            .advance(font_id, self.font_size, 'M')
+            .map(|advance| advance.width)
+            .unwrap_or(px(9.0));
+
+        let cell_height = self.font_size * self.line_height;
+
+        let cell_size = Size {
+            width: cell_width,
+            height: cell_height,
+        };
+        self.cell_size = Some(cell_size);
+        cell_size
+    }
+
+    pub(in super::super) fn sync_terminal_size(
+        &mut self,
+        window: &Window,
+        cell_size: Size<Pixels>,
+    ) {
+        let viewport = window.viewport_size();
+        let viewport_width: f32 = viewport.width.into();
+        let viewport_height: f32 = viewport.height.into();
+        let cell_width: f32 = cell_size.width.into();
+        let cell_height: f32 = cell_size.height.into();
+
+        if cell_width <= 0.0 || cell_height <= 0.0 {
+            return;
+        }
+
+        let sidebar_width = self.tab_strip_sidebar_width();
+        let content_top_inset = self.terminal_content_top_inset();
+        let backend_mode = self.runtime_kind();
+        let runtime_uses_tmux = matches!(backend_mode, RuntimeKind::Tmux);
+        let active_pane_count = self.tabs.get(self.active_tab).map_or(0, |tab| tab.panes.len());
+        let (cols, rows) = Self::terminal_grid_size_for_pane_count(
+            active_pane_count,
+            viewport_width,
+            viewport_height,
+            sidebar_width,
+            content_top_inset,
+            self.padding_x,
+            self.padding_y,
+            cell_width,
+            cell_height,
+        );
+
+        match backend_mode {
+            RuntimeKind::Tmux => {
+                if (self.tmux_client_cols() != cols || self.tmux_client_rows() != rows)
+                    && let Err(error) = self.sync_tmux_client_size(cols, rows)
+                {
+                    let now = Instant::now();
+                    if self.should_emit_tmux_resize_error_toast(now) {
+                        termy_toast::error(format!("tmux resize failed: {error}"));
+                    } else {
+                        log::debug!("tmux resize failed (toast debounced): {error}");
+                    }
+                }
+            }
+            RuntimeKind::Native => {
+                for tab in &mut self.tabs {
+                    if !Self::repair_native_tab_active_pane_for_resize(tab) {
+                        continue;
+                    }
+                    let (cols, rows) = Self::terminal_grid_size_for_pane_count(
+                        tab.panes.len(),
+                        viewport_width,
+                        viewport_height,
+                        sidebar_width,
+                        content_top_inset,
+                        self.padding_x,
+                        self.padding_y,
+                        cell_width,
+                        cell_height,
+                    );
+                    Self::sync_native_tab_pane_geometry(tab, cols, rows);
+                }
+            }
+        }
+
+        for tab in &self.tabs {
+            let tab_uses_native_split_padding =
+                Self::uses_native_split_content_padding(runtime_uses_tmux, tab.panes.len());
+            let (content_padding_x, content_padding_y) = if tab_uses_native_split_padding {
+                (self.padding_x, self.padding_y)
+            } else {
+                (0.0, 0.0)
+            };
+            for pane in &tab.panes {
+                let mut pane_cols = pane.width.max(1);
+                let mut pane_rows = pane.height.max(1);
+                if content_padding_x > 0.0 || content_padding_y > 0.0 {
+                    let pane_width_px = (f32::from(pane.width) * cell_width).max(cell_width);
+                    let pane_height_px = (f32::from(pane.height) * cell_height).max(cell_height);
+                    pane_cols = ((pane_width_px - (content_padding_x * 2.0)).max(cell_width)
+                        / cell_width)
+                        .floor()
+                        .max(1.0) as u16;
+                    pane_rows = ((pane_height_px - (content_padding_y * 2.0)).max(cell_height)
+                        / cell_height)
+                        .floor()
+                        .max(1.0) as u16;
+                }
+                let next_size = TerminalSize {
+                    cols: pane_cols,
+                    rows: pane_rows,
+                    cell_width: cell_size.width,
+                    cell_height: cell_size.height,
+                };
+                let current = pane.terminal.size();
+                if current.cols != next_size.cols
+                    || current.rows != next_size.rows
+                    || current.cell_width != next_size.cell_width
+                    || current.cell_height != next_size.cell_height
+                {
+                    pane.terminal.resize(next_size);
+                }
+
+                let alt_screen = pane.terminal.alternate_screen_mode();
+                let prev_alt_screen = pane.last_alternate_screen.get();
+                if alt_screen != prev_alt_screen {
+                    pane.last_alternate_screen.set(alt_screen);
+                    if alt_screen {
+                        pane.terminal.nudge_resize();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_terminal() -> Terminal {
+        Terminal::new_tmux(TerminalSize::default(), TerminalOptions::default())
+    }
+
+    fn test_pane(id: &str) -> TerminalPane {
+        TerminalPane {
+            id: id.to_string(),
+            left: 0,
+            top: 0,
+            width: 1,
+            height: 1,
+            degraded: false,
+            terminal: test_terminal(),
+            render_cache: RefCell::new(TerminalPaneRenderCache::default()),
+            last_alternate_screen: Cell::new(false),
+        }
+    }
+
+    #[test]
+    fn terminal_grid_size_uses_outer_padding_only_for_single_pane_tabs() {
+        let single_pane = TerminalView::terminal_grid_size_for_pane_count(
+            1, 800.0, 600.0, 0.0, 32.0, 12.0, 8.0, 10.0, 20.0,
+        );
+        let split_pane = TerminalView::terminal_grid_size_for_pane_count(
+            2, 800.0, 600.0, 0.0, 32.0, 12.0, 8.0, 10.0, 20.0,
+        );
+
+        assert_eq!(single_pane, (77, 27));
+        assert_eq!(split_pane, (80, 28));
+    }
+
+    #[test]
+    fn repair_native_tab_active_pane_for_resize_falls_back_to_first_pane() {
+        let mut tab = TerminalTab {
+            id: 1,
+            window_id: "@native-1".to_string(),
+            window_index: 0,
+            panes: vec![test_pane("%native-1"), test_pane("%native-2")],
+            active_pane_id: "%missing".to_string(),
+            manual_title: None,
+            explicit_title: None,
+            shell_title: None,
+            current_command: None,
+            pending_command_title: None,
+            pending_command_token: 0,
+            last_prompt_cwd: None,
+            title: DEFAULT_TAB_TITLE.to_string(),
+            title_text_width: 0.0,
+            sticky_title_width: 0.0,
+            display_width: TAB_MIN_WIDTH,
+            running_process: false,
+        };
+
+        assert!(TerminalView::repair_native_tab_active_pane_for_resize(&mut tab));
+        assert_eq!(tab.active_pane_id, "%native-1");
+    }
+}

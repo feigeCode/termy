@@ -1,5 +1,7 @@
 pub(crate) const TABBAR_HEIGHT: f32 = 34.0;
-pub(crate) const VERTICAL_TAB_STRIP_MIN_WIDTH: f32 = 56.0;
+// Keep the expanded sidebar wide enough to preserve the titlebar branding
+// lane and top-shelf controls without collapsing into clipped chrome.
+pub(crate) const VERTICAL_TAB_STRIP_MIN_WIDTH: f32 = 160.0;
 pub(crate) const VERTICAL_TAB_STRIP_MAX_WIDTH: f32 = 480.0;
 pub(crate) const VERTICAL_TAB_STRIP_COLLAPSED_WIDTH: f32 = 56.0;
 pub(crate) const VERTICAL_TAB_STRIP_PADDING: f32 = 8.0;
@@ -23,8 +25,11 @@ pub(crate) const TAB_MIN_WIDTH: f32 = 96.0;
 pub(crate) const TAB_MAX_WIDTH: f32 = 420.0;
 pub(crate) const TAB_ADAPTIVE_GROWTH_FACTOR: f32 = 0.85;
 pub(crate) const TAB_ADAPTIVE_HARD_CAP_RATIO: f32 = 0.60;
-pub(crate) const TAB_CLOSE_SLOT_WIDTH: f32 = 24.0;
+pub(crate) const TAB_CLOSE_SLOT_WIDTH: f32 = 28.0;
 pub(crate) const TAB_CLOSE_HITBOX: f32 = TAB_CLOSE_SLOT_WIDTH;
+pub(crate) const TAB_CLOSE_CHIP_WIDTH: f32 = 18.0;
+pub(crate) const TAB_CLOSE_CHIP_HEIGHT: f32 = 18.0;
+pub(crate) const TAB_CLOSE_CHIP_RADIUS: f32 = 6.0;
 pub(crate) const TAB_SWITCH_HINT_TEXT_SIZE: f32 = 10.0;
 pub(crate) const TAB_STROKE_FOREGROUND_MIX: f32 = 0.12;
 pub(crate) const TAB_STROKE_THICKNESS: f32 = 1.0;
@@ -37,5 +42,13 @@ pub(crate) const TABBAR_NEW_TAB_BUTTON_SIZE: f32 = 22.0;
 pub(crate) const TABBAR_NEW_TAB_BUTTON_RADIUS: f32 = 2.0;
 pub(crate) const TABBAR_NEW_TAB_ICON_SIZE: f32 = 13.0;
 pub(crate) const TABBAR_NEW_TAB_ICON_BASELINE_NUDGE_Y: f32 = -1.0;
+pub(crate) const VERTICAL_NEW_TAB_SHELF_HEIGHT: f32 =
+    VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0);
+pub(crate) const VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT: f32 = TABBAR_NEW_TAB_BUTTON_SIZE;
+pub(crate) const VERTICAL_NEW_TAB_SHELF_LABEL_GAP: f32 = 6.0;
+pub(crate) const VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE: f32 = TABBAR_NEW_TAB_BUTTON_SIZE;
+pub(crate) const VERTICAL_TITLEBAR_CONTROL_ICON_SIZE: f32 = TABBAR_NEW_TAB_ICON_SIZE;
+pub(crate) const VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT: f32 =
+    VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0);
 pub(crate) const TAB_STRIP_SCROLL_EPSILON: f32 = 0.5;
 pub(crate) const TAB_STRIP_WHEEL_DELTA_LINE_REFERENCE_PX: f32 = 16.0;

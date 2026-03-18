@@ -34,6 +34,8 @@ mod sections;
 mod state;
 mod state_apply;
 mod style;
+#[cfg(test)]
+mod test_utils;
 
 use self::search::SearchableSetting;
 use self::state::{ActiveTextInput, DropdownOption, EditableField};
@@ -1223,6 +1225,8 @@ impl Drop for SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::test_utils::open_settings_window_handle;
+    use gpui::TestAppContext;
 
     #[test]
     fn settings_effective_background_opacity_prefers_preview() {
@@ -1268,5 +1272,22 @@ mod tests {
                 opacity: 0.6,
             })
         );
+    }
+
+    #[gpui::test]
+    fn apply_runtime_config_preserves_out_of_range_vertical_tab_width(
+        cx: &mut TestAppContext,
+    ) {
+        let settings = open_settings_window_handle(cx);
+        settings
+            .update(cx, |view, _window, _cx| {
+                let next = AppConfig {
+                    vertical_tabs_width: 12.0,
+                    ..Default::default()
+                };
+                assert!(view.apply_runtime_config(next));
+                assert_eq!(view.config.vertical_tabs_width, 12.0);
+            })
+            .expect("settings window update should succeed");
     }
 }

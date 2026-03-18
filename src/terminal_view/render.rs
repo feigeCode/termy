@@ -40,6 +40,14 @@ fn desaturate_rgb(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
 
 const COMMAND_PALETTE_BACKDROP_STRENGTH: f32 = 1.0;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct UpdateBannerLayout {
+    overlay_top: f32,
+    overlay_left: f32,
+    root_spacer_height: f32,
+    terminal_pane_spacer_height: f32,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct CellColorTransform {
     fg_blend: f32,
@@ -450,6 +458,50 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
+    fn update_banner_layout_for(
+        show_update_banner: bool,
+        vertical_tabs: bool,
+        show_tab_strip_chrome: bool,
+        sidebar_width: f32,
+    ) -> Option<UpdateBannerLayout> {
+        if !show_update_banner {
+            return None;
+        }
+
+        let right_pane_only = vertical_tabs && show_tab_strip_chrome;
+        Some(UpdateBannerLayout {
+            overlay_top: if right_pane_only {
+                0.0
+            } else {
+                Self::window_titlebar_height_for(vertical_tabs, show_tab_strip_chrome)
+            },
+            overlay_left: if right_pane_only {
+                sidebar_width.max(0.0)
+            } else {
+                0.0
+            },
+            root_spacer_height: if right_pane_only {
+                0.0
+            } else {
+                UPDATE_BANNER_HEIGHT
+            },
+            terminal_pane_spacer_height: if right_pane_only {
+                UPDATE_BANNER_HEIGHT
+            } else {
+                0.0
+            },
+        })
+    }
+
+    fn update_banner_layout(&self) -> Option<UpdateBannerLayout> {
+        Self::update_banner_layout_for(
+            self.show_update_banner,
+            self.vertical_tabs,
+            self.should_render_tab_strip_chrome(),
+            self.tab_strip_sidebar_width(),
+        )
+    }
+
     fn pane_right_gap_cells(pane: &TerminalPane, panes: &[TerminalPane]) -> Option<u32> {
         let pane_right = u32::from(pane.left) + u32::from(pane.width);
         let pane_top = u32::from(pane.top);
@@ -1906,7 +1958,7 @@ impl TerminalView {
         } else {
             None
         };
-        let chrome_height = self.chrome_height();
+        let chrome_height = self.terminal_content_top_inset();
         let terminal_overlay = (command_palette_overlay.is_some() || search_overlay.is_some())
             .then(|| {
                 div()
@@ -2009,15 +2061,22 @@ impl TerminalView {
         #[cfg(target_os = "macos")]
         let banner_overlay: Option<AnyElement> = if self.show_update_banner {
             let banner_state = self.auto_updater.as_ref().map(|e| e.read(cx).state.clone());
+            let banner_layout = self.update_banner_layout();
             banner_state
                 .as_ref()
                 .and_then(|state| self.render_update_banner(state, &colors, cx))
                 .map(|banner| {
+                    let layout = banner_layout.unwrap_or(UpdateBannerLayout {
+                        overlay_top: 0.0,
+                        overlay_left: 0.0,
+                        root_spacer_height: 0.0,
+                        terminal_pane_spacer_height: 0.0,
+                    });
                     div()
                         .id("update-banner-overlay")
                         .absolute()
-                        .top(px(Self::titlebar_height()))
-                        .left_0()
+                        .top(px(layout.overlay_top))
+                        .left(px(layout.overlay_left))
                         .right_0()
                         .child(banner)
                         .into_any_element()
@@ -2421,26 +2480,60 @@ impl Render for TerminalView {
         self.record_render_metrics_for_pass(render_pass_cache_counts);
 
         let focus_handle = self.focus_handle.clone();
-        let titlebar_height = Self::titlebar_height();
         let tabbar_bg = terminal_surface_bg;
-        let show_tabbar = !self.vertical_tabs && !(self.auto_hide_tabbar && self.tabs.len() <= 1);
-        let tabs_row = show_tabbar
+        let show_tab_strip_chrome = self.should_render_tab_strip_chrome();
+        let titlebar_height =
+            Self::window_titlebar_height_for(self.vertical_tabs, show_tab_strip_chrome);
+        let show_horizontal_tabbar = !self.vertical_tabs && show_tab_strip_chrome;
+        let tabs_row = show_horizontal_tabbar
             .then(|| self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
-        let vertical_tab_strip = self
-            .vertical_tabs
+        let hidden_titlebar_branding = Self::should_render_hidden_titlebar_branding(
+            self.auto_hide_tabbar,
+            self.tabs.len(),
+            self.show_termy_in_titlebar,
+        )
+            .then(|| {
+                self.render_titlebar_branding(
+                    window,
+                    &colors,
+                    &font_family,
+                    tabbar_bg,
+                    false,
+                    cx,
+                )
+            })
+            .flatten();
+        let vertical_tab_strip = (self.vertical_tabs && show_tab_strip_chrome)
             .then(|| self.render_vertical_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
+        #[cfg(target_os = "macos")]
+        let update_banner_layout = self.update_banner_layout();
 
         #[cfg(target_os = "macos")]
-        let banner_spacer: Option<AnyElement> = self.show_update_banner.then(|| {
-            div()
-                .id("update-banner-spacer")
-                .w_full()
-                .h(px(UPDATE_BANNER_HEIGHT))
-                .flex_none()
-                .into_any_element()
-        });
+        let banner_spacer: Option<AnyElement> = update_banner_layout
+            .filter(|layout| layout.root_spacer_height > f32::EPSILON)
+            .map(|layout| {
+                div()
+                    .id("update-banner-spacer")
+                    .w_full()
+                    .h(px(layout.root_spacer_height))
+                    .flex_none()
+                    .into_any_element()
+            });
         #[cfg(not(target_os = "macos"))]
         let banner_spacer: Option<AnyElement> = None;
+        #[cfg(target_os = "macos")]
+        let terminal_banner_spacer: Option<AnyElement> = update_banner_layout
+            .filter(|layout| layout.terminal_pane_spacer_height > f32::EPSILON)
+            .map(|layout| {
+                div()
+                    .id("update-banner-terminal-spacer")
+                    .w_full()
+                    .h(px(layout.terminal_pane_spacer_height))
+                    .flex_none()
+                    .into_any_element()
+            });
+        #[cfg(not(target_os = "macos"))]
+        let terminal_banner_spacer: Option<AnyElement> = None;
         if self.terminal_scrollbar_mode() == ui_scrollbar::ScrollbarVisibilityMode::OnScroll
             && !self.terminal_scrollbar_animation_active
             && self.terminal_scrollbar_needs_animation(Instant::now())
@@ -2549,7 +2642,8 @@ impl Render for TerminalView {
                         .flex()
                         .items_end()
                         .mt(px(TOP_STRIP_CONTENT_OFFSET_Y))
-                        .children(tabs_row),
+                        .children(tabs_row)
+                        .children(hidden_titlebar_branding),
                 )
                 .into_any()
         });
@@ -2678,52 +2772,63 @@ impl Render for TerminalView {
                             .children(vertical_tab_strip)
                             .child(
                                 div()
-                                    .id("terminal-surface")
-                                    .relative()
+                                    .id("terminal-pane")
+                                    .flex()
+                                    .flex_col()
                                     .flex_1()
                                     .h_full()
                                     .overflow_hidden()
-                                    .cursor_text()
-                                    .on_scroll_wheel(
-                                        cx.listener(Self::handle_terminal_scroll_wheel),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(Self::handle_mouse_down),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Middle,
-                                        cx.listener(Self::handle_mouse_down),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        cx.listener(Self::handle_mouse_down),
-                                    )
-                                    .on_mouse_move(cx.listener(Self::handle_mouse_move))
-                                    .on_mouse_up(
-                                        MouseButton::Left,
-                                        cx.listener(Self::handle_mouse_up),
-                                    )
-                                    .on_mouse_up(
-                                        MouseButton::Middle,
-                                        cx.listener(Self::handle_mouse_up),
-                                    )
-                                    .on_mouse_up(
-                                        MouseButton::Right,
-                                        cx.listener(Self::handle_mouse_up),
-                                    )
-                                    .when_some(self.pane_resize_drag.as_ref(), |s, drag| match drag
-                                        .axis
-                                    {
-                                        PaneResizeAxis::Horizontal => s.cursor_col_resize(),
-                                        PaneResizeAxis::Vertical => s.cursor_row_resize(),
-                                    })
-                                    .font_family(font_family.clone())
-                                    .text_size(font_size)
-                                    .child(ime_input_layer)
-                                    .child(terminal_grid_layer)
-                                    .children(ime_preedit_overlay)
-                                    .children(terminal_scrollbar_overlay),
+                                    .children(terminal_banner_spacer)
+                                    .child(
+                                        div()
+                                            .id("terminal-surface")
+                                            .relative()
+                                            .flex_1()
+                                            .h_full()
+                                            .overflow_hidden()
+                                            .cursor_text()
+                                            .on_scroll_wheel(
+                                                cx.listener(Self::handle_terminal_scroll_wheel),
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(Self::handle_mouse_down),
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Middle,
+                                                cx.listener(Self::handle_mouse_down),
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Right,
+                                                cx.listener(Self::handle_mouse_down),
+                                            )
+                                            .on_mouse_move(cx.listener(Self::handle_mouse_move))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(Self::handle_mouse_up),
+                                            )
+                                            .on_mouse_up(
+                                                MouseButton::Middle,
+                                                cx.listener(Self::handle_mouse_up),
+                                            )
+                                            .on_mouse_up(
+                                                MouseButton::Right,
+                                                cx.listener(Self::handle_mouse_up),
+                                            )
+                                            .when_some(
+                                                self.pane_resize_drag.as_ref(),
+                                                |s, drag| match drag.axis {
+                                                    PaneResizeAxis::Horizontal => s.cursor_col_resize(),
+                                                    PaneResizeAxis::Vertical => s.cursor_row_resize(),
+                                                },
+                                            )
+                                            .font_family(font_family.clone())
+                                            .text_size(font_size)
+                                            .child(ime_input_layer)
+                                            .child(terminal_grid_layer)
+                                            .children(ime_preedit_overlay)
+                                            .children(terminal_scrollbar_overlay),
+                                    ),
                             ),
                     ),
             )
@@ -2749,6 +2854,32 @@ impl Render for TerminalView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_banner_layout_stays_full_width_without_vertical_sidebar_chrome() {
+        assert_eq!(
+            TerminalView::update_banner_layout_for(true, false, true, 0.0),
+            Some(UpdateBannerLayout {
+                overlay_top: TerminalView::titlebar_height(),
+                overlay_left: 0.0,
+                root_spacer_height: UPDATE_BANNER_HEIGHT,
+                terminal_pane_spacer_height: 0.0,
+            })
+        );
+    }
+
+    #[test]
+    fn update_banner_layout_shifts_to_terminal_pane_for_visible_vertical_tabs() {
+        assert_eq!(
+            TerminalView::update_banner_layout_for(true, true, true, 224.0),
+            Some(UpdateBannerLayout {
+                overlay_top: 0.0,
+                overlay_left: 224.0,
+                root_spacer_height: 0.0,
+                terminal_pane_spacer_height: UPDATE_BANNER_HEIGHT,
+            })
+        );
+    }
 
     fn test_render_cell(col: usize, row: usize, c: char) -> CellRenderInfo {
         CellRenderInfo {

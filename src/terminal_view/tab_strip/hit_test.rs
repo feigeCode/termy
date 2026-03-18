@@ -1,5 +1,6 @@
 use super::super::*;
-use super::layout::TabStripGeometry;
+use super::layout::{TabStripGeometry, VerticalTabStripLayoutSnapshot};
+use super::state::TabStripOrientation;
 
 impl TerminalView {
     pub(crate) fn unified_titlebar_tab_shell_hit_test(
@@ -33,7 +34,7 @@ impl TerminalView {
         window: &Window,
     ) -> bool {
         let geometry = self.tab_strip_geometry(window);
-        let scroll_offset_x: f32 = self.tab_strip.scroll_handle.offset().x.into();
+        let scroll_offset_x: f32 = self.tab_strip.horizontal_scroll_handle.offset().x.into();
         Self::unified_titlebar_tab_interactive_hit_test_for_geometry(
             x,
             y,
@@ -64,14 +65,60 @@ impl TerminalView {
 
         geometry.new_tab_button_contains(x, y)
     }
+
+    pub(crate) fn tab_strip_interactive_hit_test(
+        &self,
+        orientation: TabStripOrientation,
+        x: f32,
+        y: f32,
+        window: &Window,
+    ) -> bool {
+        match orientation {
+            TabStripOrientation::Horizontal => {
+                self.unified_titlebar_tab_interactive_hit_test(x, y, window)
+            }
+            TabStripOrientation::Vertical => self.vertical_tab_strip_interactive_hit_test(x, y),
+        }
+    }
+
+    pub(crate) fn vertical_tab_strip_interactive_hit_test(&self, x: f32, y: f32) -> bool {
+        let local_y = y - self.vertical_tab_strip_top_inset();
+        if local_y < 0.0 {
+            return false;
+        }
+
+        let layout = self.vertical_tab_strip_layout_snapshot();
+        let scroll_offset_y: f32 = self.tab_strip.vertical_scroll_handle.offset().y.into();
+        Self::vertical_tab_strip_interactive_hit_test_for_layout(x, local_y, &layout, scroll_offset_y)
+    }
+
+    pub(super) fn vertical_tab_strip_interactive_hit_test_for_layout(
+        x: f32,
+        y: f32,
+        layout: &VerticalTabStripLayoutSnapshot,
+        scroll_offset_y: f32,
+    ) -> bool {
+        layout.interactive_hit(x, y, scroll_offset_y)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_view::tab_strip::layout::VerticalTabStripLayoutInput;
 
     fn tab_hit_test_y() -> f32 {
         TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT - 1.0
+    }
+
+    fn vertical_hit_test_layout(strip_width: f32, compact: bool) -> VerticalTabStripLayoutSnapshot {
+        TerminalView::vertical_tab_strip_layout_for_input(VerticalTabStripLayoutInput {
+            strip_width,
+            compact,
+            header_height: TABBAR_HEIGHT,
+            list_height: 180.0,
+            tab_heights: vec![TAB_ITEM_HEIGHT, TAB_ITEM_HEIGHT],
+        })
     }
 
     #[test]
@@ -214,6 +261,21 @@ mod tests {
     }
 
     #[test]
+    fn interactive_hit_test_excludes_right_inset_space() {
+        let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
+        let x = geometry.action_rail_end_x() + (geometry.right_inset_width * 0.5);
+        assert!(
+            !TerminalView::unified_titlebar_tab_interactive_hit_test_for_geometry(
+                x,
+                tab_hit_test_y(),
+                geometry,
+                [120.0, 120.0],
+                0.0,
+            )
+        );
+    }
+
+    #[test]
     fn interactive_hit_test_respects_half_open_region_boundaries() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
         let tabs_boundary = geometry.tabs_viewport_end_x();
@@ -242,5 +304,77 @@ mod tests {
                 0.0,
             )
         );
+    }
+
+    #[test]
+    fn vertical_interactive_hit_test_detects_tab_rows() {
+        let strip_width = 220.0;
+        let compact = false;
+        let layout = vertical_hit_test_layout(strip_width, compact);
+
+        assert!(TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            24.0,
+            layout.list_top + 12.0,
+            &layout,
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn vertical_interactive_hit_test_detects_shelf_buttons_and_resize_handle() {
+        let strip_width = 220.0;
+        let compact = false;
+        let layout = vertical_hit_test_layout(strip_width, compact);
+        let top_button_x =
+            layout.top_shelf_layout.button_x + (layout.top_shelf_layout.button_width * 0.5);
+        let top_button_y = layout.header_height
+            + layout.top_shelf_layout.button_y
+            + (layout.top_shelf_layout.button_height * 0.5);
+        assert!(TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            top_button_x,
+            top_button_y,
+            &layout,
+            0.0,
+        ));
+        assert!(TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            layout.bottom_shelf_layout.button_x + (layout.bottom_shelf_layout.button_size * 0.5),
+            layout.bottom_shelf_top
+                + layout.bottom_shelf_layout.button_y
+                + (layout.bottom_shelf_layout.button_size * 0.5),
+            &layout,
+            0.0,
+        ));
+        assert!(TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            strip_width - 1.0,
+            24.0,
+            &layout,
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn vertical_interactive_hit_test_excludes_noninteractive_chrome_backgrounds() {
+        let strip_width = 220.0;
+        let compact = false;
+        let layout = vertical_hit_test_layout(strip_width, compact);
+
+        assert!(!TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            24.0,
+            12.0,
+            &layout,
+            0.0,
+        ));
+        assert!(!TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            12.0,
+            layout.header_height + 8.0,
+            &layout,
+            0.0,
+        ));
+        assert!(!TerminalView::vertical_tab_strip_interactive_hit_test_for_layout(
+            24.0,
+            layout.list_top + TAB_ITEM_HEIGHT + 40.0,
+            &layout,
+            0.0,
+        ));
     }
 }

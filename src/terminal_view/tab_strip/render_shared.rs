@@ -27,6 +27,34 @@ mod tests {
         assert!(TerminalView::tab_strip_chrome_visible(false, 1));
         assert!(TerminalView::tab_strip_chrome_visible(true, 2));
     }
+
+    #[test]
+    fn hidden_titlebar_branding_shows_when_auto_hide_hides_single_tab_chrome() {
+        assert!(TerminalView::should_render_hidden_titlebar_branding(
+            true, 1, true
+        ));
+    }
+
+    #[test]
+    fn hidden_titlebar_branding_shows_when_auto_hide_hides_empty_tab_chrome() {
+        assert!(TerminalView::should_render_hidden_titlebar_branding(
+            true, 0, true
+        ));
+    }
+
+    #[test]
+    fn hidden_titlebar_branding_hides_when_branding_is_disabled() {
+        assert!(!TerminalView::should_render_hidden_titlebar_branding(
+            true, 1, false
+        ));
+    }
+
+    #[test]
+    fn hidden_titlebar_branding_hides_when_tab_strip_chrome_is_visible() {
+        assert!(!TerminalView::should_render_hidden_titlebar_branding(
+            false, 1, true
+        ));
+    }
 }
 
 impl TerminalView {
@@ -79,6 +107,14 @@ impl TerminalView {
 
     pub(crate) fn tab_strip_chrome_visible(auto_hide_tabbar: bool, tab_count: usize) -> bool {
         !auto_hide_tabbar || tab_count > 1
+    }
+
+    pub(crate) fn should_render_hidden_titlebar_branding(
+        auto_hide_tabbar: bool,
+        tab_count: usize,
+        show_termy_in_titlebar: bool,
+    ) -> bool {
+        !Self::tab_strip_chrome_visible(auto_hide_tabbar, tab_count) && show_termy_in_titlebar
     }
 
     pub(crate) fn should_render_tab_strip_chrome(&self) -> bool {

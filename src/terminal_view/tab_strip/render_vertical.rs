@@ -121,17 +121,17 @@ mod tests {
     }
 
     #[test]
-    fn vertical_titlebar_branding_width_hides_when_sidebar_is_collapsed() {
+    fn titlebar_branding_width_hides_for_visible_compact_sidebar() {
         assert_eq!(
-            TerminalView::vertical_titlebar_branding_width(true, true, 64.0),
+            TerminalView::titlebar_branding_width(true, true, 64.0),
             0.0
         );
         assert_eq!(
-            TerminalView::vertical_titlebar_branding_width(true, false, 64.0),
+            TerminalView::titlebar_branding_width(true, false, 64.0),
             64.0
         );
         assert_eq!(
-            TerminalView::vertical_titlebar_branding_width(false, true, 64.0),
+            TerminalView::titlebar_branding_width(false, true, 64.0),
             64.0
         );
     }
@@ -197,7 +197,7 @@ impl TerminalView {
         })
     }
 
-    fn vertical_titlebar_branding_width(
+    fn titlebar_branding_width(
         show_sidebar_chrome: bool,
         compact_sidebar: bool,
         reserved_width: f32,
@@ -209,7 +209,7 @@ impl TerminalView {
         }
     }
 
-    fn vertical_titlebar_shows_handoff_divider(
+    fn titlebar_branding_shows_handoff_divider(
         show_sidebar_chrome: bool,
         branding_width: f32,
     ) -> bool {
@@ -227,7 +227,7 @@ impl TerminalView {
         }
 
         let (y, h) =
-            if Self::vertical_titlebar_shows_handoff_divider(show_sidebar_chrome, branding_width) {
+            if Self::titlebar_branding_shows_handoff_divider(show_sidebar_chrome, branding_width) {
                 let divider_top = (titlebar_height - TAB_ITEM_HEIGHT + TAB_STROKE_THICKNESS).max(0.0);
                 let divider_height =
                     (titlebar_height - divider_top - TAB_STROKE_THICKNESS).max(0.0);
@@ -249,7 +249,7 @@ impl TerminalView {
         TABBAR_NEW_TAB_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0)
     }
 
-    pub(crate) fn render_vertical_titlebar_branding(
+    pub(crate) fn render_titlebar_branding(
         &mut self,
         window: &Window,
         colors: &TerminalColors,
@@ -261,7 +261,7 @@ impl TerminalView {
         let font_family_key = font_family.to_string();
         let reserved_width =
             self.termy_branding_reserved_width(window, font_family, font_family_key.as_str());
-        let branding_width = Self::vertical_titlebar_branding_width(
+        let branding_width = Self::titlebar_branding_width(
             show_sidebar_chrome,
             self.vertical_tabs_minimized,
             reserved_width,
@@ -585,7 +585,7 @@ impl TerminalView {
             },
         );
         debug_assert_eq!(chrome_layout.tab_strokes.len(), self.tabs.len());
-        let titlebar_block = self.render_vertical_titlebar_branding(
+        let titlebar_block = self.render_titlebar_branding(
             window,
             colors,
             font_family,

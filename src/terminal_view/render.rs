@@ -2487,9 +2487,13 @@ impl Render for TerminalView {
         let show_horizontal_tabbar = !self.vertical_tabs && show_tab_strip_chrome;
         let tabs_row = show_horizontal_tabbar
             .then(|| self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
-        let vertical_titlebar_branding = (self.vertical_tabs && !show_tab_strip_chrome)
+        let hidden_titlebar_branding = Self::should_render_hidden_titlebar_branding(
+            self.auto_hide_tabbar,
+            self.tabs.len(),
+            self.show_termy_in_titlebar,
+        )
             .then(|| {
-                self.render_vertical_titlebar_branding(
+                self.render_titlebar_branding(
                     window,
                     &colors,
                     &font_family,
@@ -2639,7 +2643,7 @@ impl Render for TerminalView {
                         .items_end()
                         .mt(px(TOP_STRIP_CONTENT_OFFSET_Y))
                         .children(tabs_row)
-                        .children(vertical_titlebar_branding),
+                        .children(hidden_titlebar_branding),
                 )
                 .into_any()
         });

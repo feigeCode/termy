@@ -193,6 +193,21 @@ mod tests {
         assert!(TerminalView::tab_strip_chrome_visible(false, 1));
         assert!(TerminalView::tab_strip_chrome_visible(true, 2));
     }
+
+    #[test]
+    fn termy_branding_handoff_divider_matches_horizontal_boundary_geometry() {
+        let divider = TerminalView::termy_branding_handoff_divider(128.0)
+            .expect("divider should render for positive width");
+        assert_eq!(divider.x, 127.0);
+        assert_eq!(divider.y, 3.0);
+        assert_eq!(divider.w, 1.0);
+        assert_eq!(divider.h, 31.0);
+    }
+
+    #[test]
+    fn termy_branding_handoff_divider_is_absent_without_lane_width() {
+        assert_eq!(TerminalView::termy_branding_handoff_divider(0.0), None);
+    }
 }
 
 struct TabStripRenderState {
@@ -471,6 +486,15 @@ impl TerminalView {
         Self::tab_strip_chrome_visible(self.auto_hide_tabbar, self.tabs.len())
     }
 
+    fn termy_branding_handoff_divider(lane_width: f32) -> Option<chrome::StrokeRect> {
+        (lane_width > f32::EPSILON).then_some(chrome::StrokeRect {
+            x: (lane_width - TAB_STROKE_THICKNESS).max(0.0),
+            y: (TABBAR_HEIGHT - TAB_ITEM_HEIGHT + TAB_STROKE_THICKNESS).max(0.0),
+            w: TAB_STROKE_THICKNESS,
+            h: (TAB_ITEM_HEIGHT - TAB_STROKE_THICKNESS).max(0.0),
+        })
+    }
+
     fn build_tab_strip_render_state(
         &mut self,
         window: &Window,
@@ -623,6 +647,7 @@ impl TerminalView {
         colors: &TerminalColors,
         font_family: &SharedString,
         tabbar_bg: gpui::Rgba,
+        show_handoff_divider: bool,
     ) -> Option<AnyElement> {
         let font_family_key = font_family.to_string();
         let reserved_width =
@@ -654,6 +679,13 @@ impl TerminalView {
                     reserved_width,
                     branding_text_color,
                 ))
+                .children(show_handoff_divider.then(|| {
+                    Self::render_tab_stroke(
+                        Self::termy_branding_handoff_divider(lane_width)
+                            .expect("positive branding lane width must yield divider"),
+                        palette.tab_stroke_color,
+                    )
+                }))
                 .into_any_element(),
         )
     }

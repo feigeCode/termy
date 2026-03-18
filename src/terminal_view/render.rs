@@ -2430,7 +2430,13 @@ impl Render for TerminalView {
         let vertical_titlebar_branding = self
             .vertical_tabs
             .then(|| {
-                self.render_vertical_titlebar_branding(window, &colors, &font_family, tabbar_bg)
+                self.render_vertical_titlebar_branding(
+                    window,
+                    &colors,
+                    &font_family,
+                    tabbar_bg,
+                    show_tab_strip_chrome,
+                )
             })
             .flatten();
         let vertical_tab_strip = (self.vertical_tabs && show_tab_strip_chrome)

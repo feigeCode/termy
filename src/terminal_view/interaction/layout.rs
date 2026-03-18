@@ -43,12 +43,45 @@ impl TerminalView {
         }
     }
 
+    fn vertical_tab_strip_top_shelf_height(&self) -> f32 {
+        if self.vertical_tabs && self.should_render_tab_strip_chrome() {
+            VERTICAL_NEW_TAB_SHELF_HEIGHT
+        } else {
+            0.0
+        }
+    }
+
+    fn vertical_tab_strip_bottom_control_slot_height(&self) -> f32 {
+        if self.vertical_tabs && self.should_render_tab_strip_chrome() {
+            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn vertical_tabs_list_height_for(
+        viewport_height: f32,
+        chrome_height: f32,
+        header_height: f32,
+        top_shelf_height: f32,
+        bottom_slot_height: f32,
+    ) -> f32 {
+        (viewport_height - chrome_height - header_height - top_shelf_height - bottom_slot_height)
+            .max(0.0)
+    }
+
     pub(in super::super) fn effective_vertical_tabs_list_height(&self) -> f32 {
         let header_height = self.vertical_tab_strip_header_height();
-        let list_height = self.last_viewport_size_px.map_or(0.0, |(_, height)| height as f32)
-            - self.chrome_height()
-            - header_height;
-        list_height.max(0.0)
+        let top_shelf_height = self.vertical_tab_strip_top_shelf_height();
+        let bottom_slot_height = self.vertical_tab_strip_bottom_control_slot_height();
+        let viewport_height = self.last_viewport_size_px.map_or(0.0, |(_, height)| height as f32);
+        Self::vertical_tabs_list_height_for(
+            viewport_height,
+            self.chrome_height(),
+            header_height,
+            top_shelf_height,
+            bottom_slot_height,
+        )
     }
 
     pub(in super::super) fn native_pane_min_extent_for_axis(axis: PaneResizeAxis) -> u16 {
@@ -488,6 +521,22 @@ mod tests {
         assert!(
             TerminalView::collapsed_vertical_tab_strip_width()
                 >= TerminalView::titlebar_left_padding_for_platform()
+        );
+    }
+
+    #[test]
+    fn vertical_bottom_shelf_height_matches_control_clearance() {
+        assert_eq!(
+            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0),
+            38.0
+        );
+    }
+
+    #[test]
+    fn vertical_tabs_list_height_subtracts_header_top_shelf_and_bottom_shelf() {
+        assert_eq!(
+            TerminalView::vertical_tabs_list_height_for(600.0, 0.0, 34.0, 44.0, 38.0),
+            484.0
         );
     }
 

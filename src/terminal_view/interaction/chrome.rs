@@ -43,7 +43,11 @@ impl TerminalView {
 
     fn vertical_tab_strip_top_shelf_height(&self) -> f32 {
         if self.vertical_tabs && self.should_render_tab_strip_chrome() {
-            VERTICAL_NEW_TAB_SHELF_HEIGHT
+            if self.vertical_tabs_minimized {
+                VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT
+            } else {
+                VERTICAL_NEW_TAB_SHELF_HEIGHT
+            }
         } else {
             0.0
         }
@@ -51,7 +55,7 @@ impl TerminalView {
 
     fn vertical_tab_strip_bottom_control_slot_height(&self) -> f32 {
         if self.vertical_tabs && self.should_render_tab_strip_chrome() {
-            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0)
+            VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT
         } else {
             0.0
         }
@@ -201,7 +205,7 @@ mod tests {
     #[test]
     fn vertical_bottom_shelf_height_matches_control_clearance() {
         assert_eq!(
-            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0),
+            VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
             38.0
         );
     }
@@ -211,6 +215,20 @@ mod tests {
         assert_eq!(
             TerminalView::vertical_tabs_list_height_for(600.0, 0.0, 34.0, 44.0, 38.0),
             484.0
+        );
+    }
+
+    #[test]
+    fn compact_vertical_tabs_list_height_uses_compact_top_shelf() {
+        assert_eq!(
+            TerminalView::vertical_tabs_list_height_for(
+                600.0,
+                0.0,
+                34.0,
+                VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
+                VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
+            ),
+            490.0
         );
     }
 }

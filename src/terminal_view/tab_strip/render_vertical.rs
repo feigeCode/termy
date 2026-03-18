@@ -79,14 +79,19 @@ mod tests {
             collapsed_vertical_tab_strip_width(TerminalView::titlebar_left_padding_for_platform());
         let divider_x = strip_width - TAB_STROKE_THICKNESS;
         let layout = TerminalView::vertical_new_tab_shelf_layout(divider_x, true);
-        assert_eq!(layout.button_width, VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE);
-        assert_eq!(layout.button_height, VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE);
-        assert!(layout.button_x >= VERTICAL_TAB_STRIP_PADDING);
+        assert_eq!(layout.shelf_height, VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT);
+        assert_eq!(layout.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
+        assert_eq!(
+            layout.button_y,
+            (layout.shelf_height - layout.button_height) * 0.5
+        );
+        assert_eq!(layout.button_width, divider_x - (VERTICAL_TAB_STRIP_PADDING * 2.0));
+        assert_eq!(layout.button_x, VERTICAL_TAB_STRIP_PADDING);
         assert!(layout.button_x + layout.button_width <= divider_x);
     }
 
     #[test]
-    fn vertical_new_tab_shelf_uses_shared_button_height_in_both_states() {
+    fn compact_vertical_new_tab_button_is_wider_but_not_taller_than_expanded() {
         let expanded = TerminalView::vertical_new_tab_shelf_layout(219.0, false);
         let compact = TerminalView::vertical_new_tab_shelf_layout(
             collapsed_vertical_tab_strip_width(TerminalView::titlebar_left_padding_for_platform())
@@ -94,7 +99,9 @@ mod tests {
             true,
         );
 
-        assert_eq!(expanded.button_height, compact.button_height);
+        assert_eq!(expanded.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
+        assert_eq!(compact.button_height, VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT);
+        assert!(compact.button_width > compact.button_height);
     }
 
     #[test]

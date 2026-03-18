@@ -439,22 +439,14 @@ impl TerminalView {
         divider_x: f32,
         compact: bool,
     ) -> VerticalNewTabShelfLayout {
-        let shelf_height = VERTICAL_NEW_TAB_SHELF_HEIGHT;
-        let button_height = if compact {
-            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE
+        let shelf_height = if compact {
+            VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT
         } else {
-            VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT
+            VERTICAL_NEW_TAB_SHELF_HEIGHT
         };
-        let button_width = if compact {
-            VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE
-        } else {
-            (divider_x - (VERTICAL_TAB_STRIP_PADDING * 2.0)).max(button_height)
-        };
-        let button_x = if compact {
-            ((divider_x - button_width) * 0.5).max(VERTICAL_TAB_STRIP_PADDING)
-        } else {
-            VERTICAL_TAB_STRIP_PADDING
-        };
+        let button_height = VERTICAL_NEW_TAB_SHELF_BUTTON_HEIGHT;
+        let button_width = (divider_x - (VERTICAL_TAB_STRIP_PADDING * 2.0)).max(button_height);
+        let button_x = VERTICAL_TAB_STRIP_PADDING;
 
         VerticalNewTabShelfLayout {
             shelf_height,
@@ -467,7 +459,7 @@ impl TerminalView {
 
     pub(super) fn vertical_bottom_shelf_layout() -> VerticalBottomShelfLayout {
         VerticalBottomShelfLayout {
-            shelf_height: TABBAR_NEW_TAB_BUTTON_SIZE + (VERTICAL_TAB_STRIP_PADDING * 2.0),
+            shelf_height: VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
             button_size: VERTICAL_TITLEBAR_CONTROL_BUTTON_SIZE,
             icon_size: VERTICAL_TITLEBAR_CONTROL_ICON_SIZE,
         }
@@ -677,6 +669,27 @@ mod tests {
         );
 
         assert_float_eq(snapshot.list_top, TABBAR_HEIGHT + VERTICAL_NEW_TAB_SHELF_HEIGHT);
+        assert_float_eq(snapshot.bottom_shelf_top, snapshot.list_top + 180.0);
+    }
+
+    #[test]
+    fn compact_vertical_layout_list_origin_uses_compact_top_shelf_height() {
+        let snapshot = TerminalView::vertical_tab_strip_layout_for_input(
+            VerticalTabStripLayoutInput {
+                strip_width: collapsed_vertical_tab_strip_width(
+                    TerminalView::titlebar_left_padding_for_platform(),
+                ),
+                compact: true,
+                header_height: TABBAR_HEIGHT,
+                list_height: 180.0,
+                tab_heights: vec![TAB_ITEM_HEIGHT],
+            },
+        );
+
+        assert_float_eq(
+            snapshot.list_top,
+            TABBAR_HEIGHT + VERTICAL_COMPACT_CONTROL_SHELF_HEIGHT,
+        );
         assert_float_eq(snapshot.bottom_shelf_top, snapshot.list_top + 180.0);
     }
 

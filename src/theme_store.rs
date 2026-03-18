@@ -111,7 +111,9 @@ fn save_theme_store_cache(raw_json: &str) {
         .ok()
         .and_then(|v| serde_json::to_string(&v).ok())
         .unwrap_or_else(|| raw_json.to_string());
-    let _ = std::fs::write(path, minified);
+    if let Err(error) = std::fs::write(&path, minified) {
+        log::debug!("Failed to write theme store cache to {}: {}", path.display(), error);
+    }
 }
 
 fn load_theme_store_cache() -> Option<Vec<ThemeStoreTheme>> {

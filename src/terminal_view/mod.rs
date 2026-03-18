@@ -182,13 +182,124 @@ struct SelectionPos {
 pub(super) struct TerminalViewportGeometry {
     origin_x: f32,
     origin_y: f32,
+    height: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalContentRect {
+    origin_x: f32,
+    origin_y: f32,
     width: f32,
     height: f32,
+}
+
+impl TerminalContentRect {
+    fn new(origin_x: f32, origin_y: f32, width: f32, height: f32) -> Option<Self> {
+        if width <= f32::EPSILON || height <= f32::EPSILON {
+            return None;
+        }
+
+        Some(Self {
+            origin_x,
+            origin_y,
+            width,
+            height,
+        })
+    }
+
+    fn right(self) -> f32 {
+        self.origin_x + self.width
+    }
+
+    fn bottom(self) -> f32 {
+        self.origin_y + self.height
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalScrollbarSurfaceGeometry {
+    origin_x: f32,
+    origin_y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl TerminalScrollbarSurfaceGeometry {
+    fn new(origin_x: f32, origin_y: f32, width: f32, height: f32) -> Option<Self> {
+        if width <= f32::EPSILON || height <= f32::EPSILON {
+            return None;
+        }
+
+        Some(Self {
+            origin_x,
+            origin_y,
+            width,
+            height,
+        })
+    }
+
+    fn gutter_frame(self) -> Option<TerminalScrollbarGutterFrame> {
+        let gutter_width = TERMINAL_SCROLLBAR_GUTTER_WIDTH.min(self.width.max(0.0));
+        if gutter_width <= f32::EPSILON {
+            return None;
+        }
+
+        Some(TerminalScrollbarGutterFrame {
+            left: (self.origin_x + self.width.max(0.0) - gutter_width).max(self.origin_x),
+            top: self.origin_y,
+            width: gutter_width,
+            height: self.height,
+        })
+    }
+
+    fn local_y(self, content_y: f32) -> Option<f32> {
+        if content_y < self.origin_y || content_y > self.origin_y + self.height {
+            return None;
+        }
+
+        Some(content_y - self.origin_y)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalScrollbarGutterFrame {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TerminalPaneNeighborGaps {
+    right_cells: Option<u32>,
+    bottom_cells: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalPaneLayout {
+    frame: TerminalContentRect,
+    content_frame: TerminalContentRect,
+    scrollbar_surface: TerminalScrollbarSurfaceGeometry,
+    cell_width: f32,
+    cell_height: f32,
+    extends_right_edge: bool,
+    extends_bottom_edge: bool,
+    gaps: TerminalPaneNeighborGaps,
+}
+
+fn cell_ranges_overlap(start_a: u32, end_a: u32, start_b: u32, end_b: u32) -> bool {
+    start_a < end_b && start_b < end_a
 }
 
 #[derive(Clone, Copy, Debug)]
 struct TerminalScrollbarDragState {
     thumb_grab_offset: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TerminalScrollbarTrackHoldState {
+    local_y: f32,
+    track_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1356,7 +1467,7 @@ pub struct TerminalView {
     terminal_scrollbar_visibility_controller: ScrollbarVisibilityController,
     terminal_scrollbar_animation_active: bool,
     terminal_scrollbar_drag: Option<TerminalScrollbarDragState>,
-    terminal_scrollbar_track_hold_local_y: Option<f32>,
+    terminal_scrollbar_track_hold: Option<TerminalScrollbarTrackHoldState>,
     terminal_scrollbar_track_hold_active: bool,
     pane_resize_drag: Option<PaneResizeDragState>,
     vertical_tab_strip_resize_drag: Option<VerticalTabStripResizeDragState>,
@@ -2162,6 +2273,141 @@ impl TerminalView {
         )
     }
 
+    fn terminal_content_bounds(&self, window: &Window) -> Option<TerminalContentRect> {
+        let viewport = window.viewport_size();
+        let viewport_width: f32 = viewport.width.into();
+        let viewport_height: f32 = viewport.height.into();
+        TerminalContentRect::new(
+            0.0,
+            0.0,
+            viewport_width - self.tab_strip_sidebar_width(),
+            viewport_height - self.terminal_content_top_inset(),
+        )
+    }
+
+    fn pane_neighbor_gaps(pane: &TerminalPane, panes: &[TerminalPane]) -> TerminalPaneNeighborGaps {
+        let pane_left = u32::from(pane.left);
+        let pane_top = u32::from(pane.top);
+        let pane_right = pane_left + u32::from(pane.width);
+        let pane_bottom = pane_top + u32::from(pane.height);
+        let mut gaps = TerminalPaneNeighborGaps::default();
+
+        for candidate in panes {
+            if candidate.id == pane.id {
+                continue;
+            }
+
+            let candidate_left = u32::from(candidate.left);
+            let candidate_top = u32::from(candidate.top);
+            let candidate_right = candidate_left + u32::from(candidate.width);
+            let candidate_bottom = candidate_top + u32::from(candidate.height);
+
+            if candidate_left >= pane_right
+                && cell_ranges_overlap(pane_top, pane_bottom, candidate_top, candidate_bottom)
+            {
+                let gap = candidate_left.saturating_sub(pane_right);
+                gaps.right_cells = Some(gaps.right_cells.map_or(gap, |current| current.min(gap)));
+            }
+
+            if candidate_top >= pane_bottom
+                && cell_ranges_overlap(pane_left, pane_right, candidate_left, candidate_right)
+            {
+                let gap = candidate_top.saturating_sub(pane_bottom);
+                gaps.bottom_cells = Some(gaps.bottom_cells.map_or(gap, |current| current.min(gap)));
+            }
+        }
+
+        gaps
+    }
+
+    fn terminal_pane_layout(
+        &self,
+        tab: &TerminalTab,
+        pane: &TerminalPane,
+        content_bounds: TerminalContentRect,
+    ) -> Option<TerminalPaneLayout> {
+        let terminal_size = pane.terminal.size();
+        if terminal_size.cols == 0 || terminal_size.rows == 0 {
+            return None;
+        }
+
+        let cell_width: f32 = terminal_size.cell_width.into();
+        let cell_height: f32 = terminal_size.cell_height.into();
+        if cell_width <= f32::EPSILON || cell_height <= f32::EPSILON {
+            return None;
+        }
+
+        let (outer_padding_x, outer_padding_y) = self.effective_terminal_padding();
+        let (content_padding_x, content_padding_y) = self.native_split_content_padding();
+        let frame = TerminalContentRect::new(
+            outer_padding_x + (f32::from(pane.left) * cell_width),
+            outer_padding_y + (f32::from(pane.top) * cell_height),
+            f32::from(pane.width) * cell_width,
+            f32::from(pane.height) * cell_height,
+        )?;
+        let content_frame = TerminalContentRect::new(
+            frame.origin_x + content_padding_x,
+            frame.origin_y + content_padding_y,
+            f32::from(terminal_size.cols) * cell_width,
+            f32::from(terminal_size.rows) * cell_height,
+        )?;
+        let gaps = Self::pane_neighbor_gaps(pane, &tab.panes);
+        let pane_right = u32::from(pane.left).saturating_add(u32::from(pane.width));
+        let pane_bottom = u32::from(pane.top).saturating_add(u32::from(pane.height));
+        let max_right = tab
+            .panes
+            .iter()
+            .map(|candidate| u32::from(candidate.left).saturating_add(u32::from(candidate.width)))
+            .max()
+            .unwrap_or(pane_right);
+        let max_bottom = tab
+            .panes
+            .iter()
+            .map(|candidate| u32::from(candidate.top).saturating_add(u32::from(candidate.height)))
+            .max()
+            .unwrap_or(pane_bottom);
+        let multi_pane = tab.panes.len() > 1;
+        let extends_right_edge = !multi_pane || pane_right == max_right;
+        let extends_bottom_edge = !multi_pane || pane_bottom == max_bottom;
+        let scrollbar_surface = TerminalScrollbarSurfaceGeometry::new(
+            if multi_pane { frame.origin_x } else { content_bounds.origin_x },
+            if multi_pane { frame.origin_y } else { content_bounds.origin_y },
+            if multi_pane && !extends_right_edge {
+                frame.width
+            } else if multi_pane {
+                (content_bounds.right() - frame.origin_x).max(0.0)
+            } else {
+                content_bounds.width
+            },
+            if multi_pane && !extends_bottom_edge {
+                frame.height
+            } else if multi_pane {
+                (content_bounds.bottom() - frame.origin_y).max(0.0)
+            } else {
+                content_bounds.height
+            },
+        )?;
+
+        Some(TerminalPaneLayout {
+            frame,
+            content_frame,
+            scrollbar_surface,
+            cell_width,
+            cell_height,
+            extends_right_edge,
+            extends_bottom_edge,
+            gaps,
+        })
+    }
+
+    fn active_terminal_pane_layout(&self, window: &Window) -> Option<TerminalPaneLayout> {
+        let content_bounds = self.terminal_content_bounds(window)?;
+        let tab = self.active_tab_ref()?;
+        let pane_index = tab.active_pane_index()?;
+        let pane = tab.panes.get(pane_index)?;
+        self.terminal_pane_layout(tab, pane, content_bounds)
+    }
+
     pub(super) fn terminal_viewport_geometry(&self) -> Option<TerminalViewportGeometry> {
         let pane = self.active_pane_ref()?;
         let size = pane.terminal.size();
@@ -2180,16 +2426,8 @@ impl TerminalView {
         Some(TerminalViewportGeometry {
             origin_x: padding_x + (f32::from(pane.left) * cell_width) + content_padding_x,
             origin_y: padding_y + (f32::from(pane.top) * cell_height) + content_padding_y,
-            width: cell_width * f32::from(size.cols),
             height: cell_height * f32::from(size.rows),
         })
-    }
-
-    pub(super) fn terminal_surface_geometry(
-        &self,
-        _window: &Window,
-    ) -> Option<TerminalViewportGeometry> {
-        self.terminal_viewport_geometry()
     }
 
     pub(super) fn clear_terminal_scrollbar_marker_cache(&mut self) {
@@ -2232,7 +2470,7 @@ impl TerminalView {
         thumb_grab_offset: f32,
         cx: &mut Context<Self>,
     ) {
-        self.terminal_scrollbar_track_hold_local_y = None;
+        self.terminal_scrollbar_track_hold = None;
         self.terminal_scrollbar_drag = Some(TerminalScrollbarDragState { thumb_grab_offset });
         self.terminal_scrollbar_visibility_controller
             .start_drag(Instant::now());
@@ -2250,12 +2488,12 @@ impl TerminalView {
         true
     }
 
-    pub(super) fn start_terminal_scrollbar_track_hold(
+    fn start_terminal_scrollbar_track_hold(
         &mut self,
-        local_y: f32,
+        state: TerminalScrollbarTrackHoldState,
         cx: &mut Context<Self>,
     ) {
-        self.terminal_scrollbar_track_hold_local_y = Some(local_y);
+        self.terminal_scrollbar_track_hold = Some(state);
         self.mark_terminal_scrollbar_activity(cx);
         if self.terminal_scrollbar_track_hold_active {
             return;
@@ -2287,11 +2525,13 @@ impl TerminalView {
     }
 
     pub(super) fn update_terminal_scrollbar_track_hold(&mut self, local_y: f32) {
-        self.terminal_scrollbar_track_hold_local_y = Some(local_y);
+        if let Some(state) = self.terminal_scrollbar_track_hold.as_mut() {
+            state.local_y = local_y;
+        }
     }
 
     pub(super) fn stop_terminal_scrollbar_track_hold(&mut self) -> bool {
-        self.terminal_scrollbar_track_hold_local_y.take().is_some()
+        self.terminal_scrollbar_track_hold.take().is_some()
     }
 
     fn terminal_scrollbar_needs_animation(&self, now: Instant) -> bool {
@@ -2628,7 +2868,7 @@ impl TerminalView {
             terminal_scrollbar_visibility_controller: ScrollbarVisibilityController::default(),
             terminal_scrollbar_animation_active: false,
             terminal_scrollbar_drag: None,
-            terminal_scrollbar_track_hold_local_y: None,
+            terminal_scrollbar_track_hold: None,
             terminal_scrollbar_track_hold_active: false,
             pane_resize_drag: None,
             vertical_tab_strip_resize_drag: None,
@@ -2920,7 +3160,7 @@ impl TerminalView {
             self.terminal_scrollbar_visibility = config.terminal_scrollbar_visibility;
             self.terminal_scrollbar_visibility_controller.reset();
             self.terminal_scrollbar_drag = None;
-            self.terminal_scrollbar_track_hold_local_y = None;
+            self.terminal_scrollbar_track_hold = None;
             self.terminal_scrollbar_track_hold_active = false;
             self.terminal_scrollbar_animation_active = false;
             self.clear_terminal_scrollbar_marker_cache();
@@ -3626,6 +3866,20 @@ mod tests {
         assert!(!TerminalView::uses_native_split_content_padding(false, 1));
         assert!(TerminalView::uses_native_split_content_padding(false, 2));
         assert!(!TerminalView::uses_native_split_content_padding(true, 2));
+    }
+
+    #[test]
+    fn terminal_content_rect_reports_right_and_bottom_edges() {
+        let rect = TerminalContentRect::new(32.0, 48.0, 640.0, 420.0).expect("rect");
+
+        assert_eq!(rect.right(), 672.0);
+        assert_eq!(rect.bottom(), 468.0);
+    }
+
+    #[test]
+    fn terminal_scrollbar_surface_geometry_requires_positive_size() {
+        assert!(TerminalScrollbarSurfaceGeometry::new(0.0, 0.0, 0.0, 10.0).is_none());
+        assert!(TerminalScrollbarSurfaceGeometry::new(0.0, 0.0, 10.0, 0.0).is_none());
     }
 
     #[test]

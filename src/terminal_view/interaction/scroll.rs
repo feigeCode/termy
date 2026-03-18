@@ -16,21 +16,20 @@ enum WheelScrollRetargetResult {
     NotRetargeted,
 }
 
-fn terminal_scrollbar_local_y_from_window_y(
-    window_y: f32,
-    content_top_inset: f32,
-    surface_origin_y: f32,
-    surface_height: f32,
-) -> Option<f32> {
-    let content_y = TerminalView::window_y_to_terminal_content_y(window_y, content_top_inset);
-    if content_y < surface_origin_y || content_y > surface_origin_y + surface_height {
-        return None;
+impl TerminalView {
+    fn terminal_scrollbar_interaction_layout(
+        &self,
+        window: &Window,
+    ) -> Option<(
+        TerminalScrollbarSurfaceGeometry,
+        terminal_scrollbar::TerminalScrollbarLayout,
+    )> {
+        let pane_layout = self.active_terminal_pane_layout(window)?;
+        let surface = pane_layout.scrollbar_surface;
+        let layout = self.terminal_scrollbar_layout_for_track(surface.height)?;
+        Some((surface, layout))
     }
 
-    Some(content_y - surface_origin_y)
-}
-
-impl TerminalView {
     fn should_attempt_wheel_scroll_retarget(touch_phase: TouchPhase, delta_lines: i32) -> bool {
         matches!(touch_phase, TouchPhase::Moved) && delta_lines != 0
     }
@@ -218,29 +217,14 @@ impl TerminalView {
             return None;
         }
 
-        let surface = self.terminal_surface_geometry(window)?;
-        let gutter_width = TERMINAL_SCROLLBAR_GUTTER_WIDTH.min(surface.width.max(0.0));
-        if gutter_width <= f32::EPSILON {
-            return None;
-        }
-        let scrollbar_left =
-            (surface.origin_x + surface.width.max(0.0) - gutter_width).max(surface.origin_x);
-        let scrollbar_right = scrollbar_left + gutter_width;
-
-        let x: f32 = position.x.into();
-        if x < scrollbar_left || x > scrollbar_right {
+        let (surface, layout) = self.terminal_scrollbar_interaction_layout(window)?;
+        let gutter = surface.gutter_frame()?;
+        let (x, y) = self.terminal_content_position(position);
+        if x < gutter.left || x > gutter.left + gutter.width {
             return None;
         }
 
-        let window_y: f32 = position.y.into();
-        let local_y = terminal_scrollbar_local_y_from_window_y(
-            window_y,
-            self.terminal_content_top_inset(),
-            surface.origin_y,
-            surface.height,
-        )?;
-
-        let layout = self.terminal_scrollbar_layout_for_track(surface.height)?;
+        let local_y = surface.local_y(y)?;
         let metrics = layout.metrics;
         let thumb_hit =
             local_y >= metrics.thumb_top && local_y <= metrics.thumb_top + metrics.thumb_height;
@@ -286,10 +270,8 @@ impl TerminalView {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(surface) = self.terminal_surface_geometry(window) else {
-            return;
-        };
-        let Some(layout) = self.terminal_scrollbar_layout_for_track(surface.height) else {
+        let Some((surface, layout)) = self.terminal_scrollbar_interaction_layout(window) else {
+            self.stop_terminal_scrollbar_track_hold();
             return;
         };
         let range = layout.range;
@@ -297,7 +279,8 @@ impl TerminalView {
 
         if hit.thumb_hit {
             self.stop_terminal_scrollbar_track_hold();
-            let thumb_grab_offset = (hit.local_y - hit.thumb_top).clamp(0.0, metrics.thumb_height);
+            let thumb_grab_offset =
+                (hit.local_y - hit.thumb_top).clamp(0.0, metrics.thumb_height);
             self.start_terminal_scrollbar_drag(thumb_grab_offset, cx);
             cx.notify();
             return;
@@ -311,7 +294,13 @@ impl TerminalView {
             self.terminal_scroll_accumulator_y = 0.0;
             self.sync_content_scroll_baseline();
         }
-        self.start_terminal_scrollbar_track_hold(hit.local_y, cx);
+        self.start_terminal_scrollbar_track_hold(
+            TerminalScrollbarTrackHoldState {
+                local_y: hit.local_y,
+                track_height: surface.height,
+            },
+            cx,
+        );
         self.mark_terminal_scrollbar_activity(cx);
         cx.notify();
     }
@@ -320,43 +309,40 @@ impl TerminalView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(local_y) = self.terminal_scrollbar_track_hold_local_y else {
+        let Some(state) = self.terminal_scrollbar_track_hold else {
             return false;
         };
         if self.terminal_scrollbar_drag.is_some() {
             return false;
         }
 
-        let Some(surface) = self.terminal_viewport_geometry() else {
-            self.terminal_scrollbar_track_hold_local_y = None;
-            return false;
-        };
-        let Some(layout) = self.terminal_scrollbar_layout_for_track(surface.height) else {
-            self.terminal_scrollbar_track_hold_local_y = None;
+        let Some(layout) = self.terminal_scrollbar_layout_for_track(state.track_height) else {
+            self.terminal_scrollbar_track_hold = None;
             return false;
         };
         let range = layout.range;
         let metrics = layout.metrics;
         let thumb_contains_point =
-            local_y >= metrics.thumb_top && local_y <= metrics.thumb_top + metrics.thumb_height;
+            state.local_y >= metrics.thumb_top
+                && state.local_y <= metrics.thumb_top + metrics.thumb_height;
         if thumb_contains_point {
-            self.terminal_scrollbar_track_hold_local_y = None;
+            self.terminal_scrollbar_track_hold = None;
             return false;
         }
 
         let changed = self.apply_terminal_scroll_offset(
-            ui_scrollbar::offset_from_track_click(local_y, range, metrics),
+            ui_scrollbar::offset_from_track_click(state.local_y, range, metrics),
             layout,
         );
         if !changed {
-            self.terminal_scrollbar_track_hold_local_y = None;
+            self.terminal_scrollbar_track_hold = None;
             return false;
         }
         self.terminal_scroll_accumulator_y = 0.0;
         self.sync_content_scroll_baseline();
         cx.notify();
         self.mark_terminal_scrollbar_activity(cx);
-        self.terminal_scrollbar_track_hold_local_y.is_some()
+        self.terminal_scrollbar_track_hold.is_some()
     }
 
     pub(in super::super) fn handle_terminal_scrollbar_drag(
@@ -368,10 +354,10 @@ impl TerminalView {
         let Some(drag) = self.terminal_scrollbar_drag else {
             return;
         };
-        let Some(surface) = self.terminal_surface_geometry(window) else {
-            return;
-        };
-        let Some(layout) = self.terminal_scrollbar_layout_for_track(surface.height) else {
+        let Some((surface, layout)) = self.terminal_scrollbar_interaction_layout(window) else {
+            if self.finish_terminal_scrollbar_drag(cx) {
+                cx.notify();
+            }
             return;
         };
         let range = layout.range;
@@ -584,14 +570,28 @@ mod tests {
     }
 
     #[test]
-    fn terminal_scrollbar_local_y_from_window_y_subtracts_content_top_inset_before_surface_math() {
-        let local_y = terminal_scrollbar_local_y_from_window_y(164.0, 44.0, 100.0, 300.0);
+    fn terminal_scrollbar_surface_local_y_uses_content_space_origin() {
+        let surface =
+            TerminalScrollbarSurfaceGeometry::new(600.0, 100.0, 12.0, 300.0).expect("surface");
+        let local_y = surface.local_y(120.0);
         assert_eq!(local_y, Some(20.0));
     }
 
     #[test]
-    fn terminal_scrollbar_local_y_from_window_y_rejects_points_outside_surface() {
-        let local_y = terminal_scrollbar_local_y_from_window_y(120.0, 44.0, 100.0, 300.0);
+    fn terminal_scrollbar_surface_local_y_rejects_points_outside_surface() {
+        let surface =
+            TerminalScrollbarSurfaceGeometry::new(600.0, 100.0, 12.0, 300.0).expect("surface");
+        let local_y = surface.local_y(80.0);
         assert_eq!(local_y, None);
+    }
+
+    #[test]
+    fn terminal_scrollbar_gutter_frame_anchors_to_surface_right_edge() {
+        let surface = TerminalScrollbarSurfaceGeometry::new(600.0, 400.0, 407.0, 409.0)
+            .expect("surface");
+
+        let frame = surface.gutter_frame().expect("frame");
+        assert_eq!(frame.left, 995.0);
+        assert_eq!(frame.width, 12.0);
     }
 }

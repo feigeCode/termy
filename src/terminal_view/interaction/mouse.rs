@@ -1018,13 +1018,17 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        if event.dragging()
-            && self.terminal_scrollbar_track_hold_local_y.is_some()
-            && let Some(hit) = self.terminal_scrollbar_hit_test(event.position, window)
-        {
-            self.update_terminal_scrollbar_track_hold(hit.local_y);
-            cx.stop_propagation();
-            return;
+        if event.dragging() && self.terminal_scrollbar_track_hold.is_some() {
+            if let Some(hit) = self.terminal_scrollbar_hit_test(event.position, window) {
+                self.update_terminal_scrollbar_track_hold(hit.local_y);
+                cx.stop_propagation();
+                return;
+            }
+            if self.stop_terminal_scrollbar_track_hold() {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
         }
         if self.pane_resize_drag.is_some() {
             if event.dragging() {

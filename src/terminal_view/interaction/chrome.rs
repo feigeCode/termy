@@ -20,8 +20,10 @@ impl TerminalView {
 
         if self.vertical_tabs_minimized {
             collapsed_vertical_tab_strip_width(Self::titlebar_left_padding_for_platform())
+                + VERTICAL_TAB_STRIP_MACOS_TRAILING_PADDING
         } else {
             clamp_expanded_vertical_tab_strip_width(self.vertical_tabs_width)
+                + VERTICAL_TAB_STRIP_MACOS_TRAILING_PADDING
         }
     }
 

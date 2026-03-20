@@ -101,7 +101,108 @@ fn clipboard_item_to_terminal_paste_input(
     }
 }
 
+fn synthetic_modifier_keystroke(key: &str, modifiers: gpui::Modifiers) -> gpui::Keystroke {
+    gpui::Keystroke {
+        modifiers,
+        key: key.to_string(),
+        key_char: None,
+    }
+}
+
+fn modifier_transition_events(
+    previous: gpui::Modifiers,
+    current: gpui::Modifiers,
+) -> Vec<(gpui::Keystroke, TerminalKeyEventKind)> {
+    // GPUI surfaces pure modifier transitions separately from key presses, so
+    // synthesize terminal key events here when enhanced keyboard reporting is active.
+    let mut events = Vec::with_capacity(4);
+
+    for (key, was_pressed, is_pressed) in [
+        ("control", previous.control, current.control),
+        ("alt", previous.alt, current.alt),
+        ("shift", previous.shift, current.shift),
+        ("super", previous.platform, current.platform),
+    ] {
+        if was_pressed && !is_pressed {
+            events.push((
+                synthetic_modifier_keystroke(key, current),
+                TerminalKeyEventKind::Release,
+            ));
+        }
+    }
+
+    for (key, was_pressed, is_pressed) in [
+        ("control", previous.control, current.control),
+        ("alt", previous.alt, current.alt),
+        ("shift", previous.shift, current.shift),
+        ("super", previous.platform, current.platform),
+    ] {
+        if !was_pressed && is_pressed {
+            events.push((
+                synthetic_modifier_keystroke(key, current),
+                TerminalKeyEventKind::Press,
+            ));
+        }
+    }
+
+    events
+}
+
 impl TerminalView {
+    fn active_keyboard_mode(&self) -> TerminalKeyboardMode {
+        self.active_terminal()
+            .map(Terminal::keyboard_mode)
+            .unwrap_or_default()
+    }
+
+    fn prompt_shortcuts_enabled(&self) -> bool {
+        !self
+            .active_terminal()
+            .is_some_and(|terminal| terminal.alternate_screen_mode())
+    }
+
+    fn write_terminal_keystroke(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        event_kind: TerminalKeyEventKind,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(input) = keystroke_to_input(
+            keystroke,
+            event_kind,
+            self.active_keyboard_mode(),
+            self.prompt_shortcuts_enabled(),
+        ) else {
+            return false;
+        };
+
+        self.write_terminal_input(&input, cx);
+        true
+    }
+
+    pub(in crate::terminal_view) fn release_forwarded_modifiers(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let previous = std::mem::take(&mut self.last_terminal_modifiers);
+        let mut wrote_input = false;
+        let mut cleared_selection = false;
+
+        for (keystroke, event_kind) in modifier_transition_events(previous, gpui::Modifiers::default())
+        {
+            if self.write_terminal_keystroke(&keystroke, event_kind, cx) {
+                wrote_input = true;
+                cleared_selection |= self.clear_selection();
+            }
+        }
+
+        if cleared_selection {
+            cx.notify();
+        }
+
+        wrote_input
+    }
+
     fn write_dropped_paths(&mut self, input: &[u8], cx: &mut Context<Self>) {
         let _ = self.close_terminal_context_menu(cx);
         self.write_terminal_paste_input(input, cx);
@@ -135,6 +236,21 @@ impl TerminalView {
             .switch_hints
             .handle_modifiers_changed(event.modifiers, Instant::now())
         {
+            cx.notify();
+        }
+
+        let previous = self.last_terminal_modifiers;
+        self.last_terminal_modifiers = event.modifiers;
+        let mut wrote_input = false;
+        let mut cleared_selection = false;
+        for (keystroke, event_kind) in modifier_transition_events(previous, event.modifiers) {
+            if self.write_terminal_keystroke(&keystroke, event_kind, cx) {
+                wrote_input = true;
+                cleared_selection |= self.clear_selection();
+            }
+        }
+
+        if wrote_input || cleared_selection {
             cx.notify();
         }
     }
@@ -345,6 +461,8 @@ impl TerminalView {
             }
         }
 
+        self.last_terminal_modifiers = event.keystroke.modifiers;
+
         // Printable character input without modifiers is delegated to the
         // platform IME / input handler so that CJK input methods work.
         // Named special keys (enter, tab, space, etc.) and modifier
@@ -355,13 +473,33 @@ impl TerminalView {
             return;
         }
 
-        let prompt_shortcuts_enabled = !self
-            .active_terminal()
-            .is_some_and(|terminal| terminal.alternate_screen_mode());
-        if let Some(input) = keystroke_to_input(&event.keystroke, prompt_shortcuts_enabled) {
-            self.write_terminal_input(&input, cx);
+        let event_kind = if event.is_held {
+            TerminalKeyEventKind::Repeat
+        } else {
+            TerminalKeyEventKind::Press
+        };
+        if self.write_terminal_keystroke(&event.keystroke, event_kind, cx) {
             self.clear_selection();
             // Stop propagation so the event does not bubble up to the IME input handler.
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn handle_key_up(
+        &mut self,
+        event: &KeyUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_command_palette_open() || self.search_open || self.renaming_tab.is_some() {
+            self.last_terminal_modifiers = event.keystroke.modifiers;
+            return;
+        }
+
+        self.last_terminal_modifiers = event.keystroke.modifiers;
+        if self.write_terminal_keystroke(&event.keystroke, TerminalKeyEventKind::Release, cx) {
+            self.clear_selection();
             cx.stop_propagation();
             cx.notify();
         }
@@ -404,7 +542,7 @@ impl TerminalView {
 mod tests {
     use super::{
         clipboard_item_to_terminal_paste_input, dropped_paths_to_terminal_paste_input,
-        image_extension, shell_quote_paths,
+        image_extension, modifier_transition_events, shell_quote_paths,
         should_defer_key_down_to_ime,
     };
     use gpui::{Keystroke, Modifiers};
@@ -524,5 +662,28 @@ mod tests {
         assert_eq!(image_extension(gpui::ImageFormat::Tiff), "tiff");
         assert_eq!(image_extension(gpui::ImageFormat::Svg), "svg");
         assert_eq!(image_extension(gpui::ImageFormat::Ico), "ico");
+    }
+
+    #[test]
+    fn modifier_transitions_synthesize_shift_press_with_super_held() {
+        let previous = Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        };
+        let current = Modifiers {
+            platform: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+
+        let events = modifier_transition_events(previous, current);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0.key, "shift");
+        assert_eq!(
+            events[0].1,
+            termy_terminal_ui::TerminalKeyEventKind::Press
+        );
+        assert!(events[0].0.modifiers.platform);
+        assert!(events[0].0.modifiers.shift);
     }
 }

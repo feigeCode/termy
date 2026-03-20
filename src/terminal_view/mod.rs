@@ -399,6 +399,12 @@ struct MouseReportingState {
     scroll_accumulator_y: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingKeyRelease {
+    Consumed,
+    Terminal { pane_id: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PaneFocusPreset {
     inactive_fg_blend: f32,
@@ -1441,6 +1447,7 @@ pub struct TerminalView {
     copy_on_select: bool,
     copy_on_select_toast: bool,
     last_terminal_modifiers: gpui::Modifiers,
+    pending_key_releases: HashMap<String, PendingKeyRelease>,
     selection_anchor: Option<SelectionPos>,
     selection_head: Option<SelectionPos>,
     selection_dragging: bool,
@@ -2870,6 +2877,7 @@ impl TerminalView {
             copy_on_select: config.copy_on_select,
             copy_on_select_toast: config.copy_on_select_toast,
             last_terminal_modifiers: gpui::Modifiers::default(),
+            pending_key_releases: HashMap::default(),
             selection_anchor: None,
             selection_head: None,
             selection_dragging: false,

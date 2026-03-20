@@ -569,7 +569,10 @@ fn associated_text<'a>(
     event_kind: TerminalKeyEventKind,
     keyboard_mode: TerminalKeyboardMode,
 ) -> Option<&'a str> {
-    if !keyboard_mode.report_associated_text()
+    // `associated_text` is only part of kitty's report-all protocol, so
+    // `Keystroke.key_char` must stay out of legacy/non-report-all sequences.
+    if !keyboard_mode.report_all_keys_as_esc()
+        || !keyboard_mode.report_associated_text()
         || matches!(event_kind, TerminalKeyEventKind::Release)
     {
         return None;
@@ -713,7 +716,7 @@ impl SequenceModifiers {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalKeyEventKind, TerminalKeyboardMode, keystroke_to_input};
+    use super::{TerminalKeyEventKind, TerminalKeyboardMode, associated_text, keystroke_to_input};
     use gpui::{Keystroke, Modifiers};
 
     fn keystroke(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
@@ -960,6 +963,37 @@ mod tests {
                 true,
             ),
             Some(b"a".to_vec())
+        );
+    }
+
+    #[test]
+    fn associated_text_requires_report_all_mode() {
+        assert_eq!(
+            associated_text(
+                &keystroke("a", Some("a"), Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                TerminalKeyboardMode {
+                    report_associated_text: true,
+                    ..TerminalKeyboardMode::default()
+                },
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn associated_text_uses_key_char_in_report_all_mode() {
+        assert_eq!(
+            associated_text(
+                &keystroke("a", Some("a"), Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                TerminalKeyboardMode {
+                    report_all_keys_as_esc: true,
+                    report_associated_text: true,
+                    ..TerminalKeyboardMode::default()
+                },
+            ),
+            Some("a")
         );
     }
 }

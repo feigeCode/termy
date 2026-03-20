@@ -177,19 +177,23 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn handle_search_key_down(&mut self, key: &str, cx: &mut Context<Self>) {
+    pub(super) fn handle_search_key_down(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         match key {
             "escape" => {
                 self.close_search(cx);
+                true
             }
             "enter" => {
                 self.search_next(cx);
+                true
             }
             "shift-enter" => {
                 self.search_previous(cx);
+                true
             }
             _ => {
                 // Text input is handled elsewhere via InlineInput actions
+                false
             }
         }
     }

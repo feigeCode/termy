@@ -38,7 +38,6 @@ pub enum ContextMenuAction {
     Paste,
     OpenSearch,
     CopyBufferPosition,
-    SearchGoogle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +50,6 @@ const CONTEXT_MENU_COPY_ID: i32 = 1;
 const CONTEXT_MENU_PASTE_ID: i32 = 2;
 const CONTEXT_MENU_OPEN_SEARCH_ID: i32 = 3;
 const CONTEXT_MENU_COPY_BUFFER_POSITION_ID: i32 = 4;
-const CONTEXT_MENU_SEARCH_GOOGLE_ID: i32 = 5;
 const TAB_CONTEXT_MENU_PIN_ID: i32 = 101;
 const TAB_CONTEXT_MENU_UNPIN_ID: i32 = 102;
 
@@ -191,7 +189,6 @@ pub fn show_copy_paste_context_menu(
     buffer_position_label: Option<String>,
     can_copy: bool,
     can_paste: bool,
-    can_search_google: bool,
 ) -> Option<ContextMenuAction> {
     #[cfg(target_os = "macos")]
     {
@@ -200,7 +197,6 @@ pub fn show_copy_paste_context_menu(
             buffer_position_label: Option<String>,
             can_copy: bool,
             can_paste: bool,
-            can_search_google: bool,
         ) -> Option<ContextMenuAction> {
             let app = NSApplication::sharedApplication(mtm);
             let Some(_current_event) = app.currentEvent() else {
@@ -240,18 +236,11 @@ pub fn show_copy_paste_context_menu(
                 CONTEXT_MENU_OPEN_SEARCH_ID,
                 true,
             );
-            let search_google_item = TermyContextMenuItem::new_with_action_id(
-                mtm,
-                "Search Google",
-                CONTEXT_MENU_SEARCH_GOOGLE_ID,
-                can_search_google,
-            );
 
             menu.addItem(&copy_item);
             menu.addItem(&paste_item);
             menu.addItem(&open_search_item);
             menu.addItem(&copy_buffer_position_item);
-            menu.addItem(&search_google_item);
 
             CONTEXT_MENU_SELECTION.store(0, Ordering::Relaxed);
             let location: NSPoint = NSEvent::mouseLocation();
@@ -262,7 +251,6 @@ pub fn show_copy_paste_context_menu(
                 CONTEXT_MENU_PASTE_ID => Some(ContextMenuAction::Paste),
                 CONTEXT_MENU_OPEN_SEARCH_ID => Some(ContextMenuAction::OpenSearch),
                 CONTEXT_MENU_COPY_BUFFER_POSITION_ID => Some(ContextMenuAction::CopyBufferPosition),
-                CONTEXT_MENU_SEARCH_GOOGLE_ID => Some(ContextMenuAction::SearchGoogle),
                 _ => None,
             }
         }
@@ -273,17 +261,10 @@ pub fn show_copy_paste_context_menu(
                 buffer_position_label,
                 can_copy,
                 can_paste,
-                can_search_google,
             );
         }
         return run_on_main(|mtm| {
-            show_copy_paste_context_menu_on_main(
-                mtm,
-                buffer_position_label,
-                can_copy,
-                can_paste,
-                can_search_google,
-            )
+            show_copy_paste_context_menu_on_main(mtm, buffer_position_label, can_copy, can_paste)
         });
     }
 
@@ -316,7 +297,6 @@ pub fn show_copy_paste_context_menu(
         let paste_title = wide_string("Paste");
         let open_search_title = wide_string("Open Search");
         let copy_buffer_position_title = wide_string("Copy Buffer Position");
-        let search_google_title = wide_string("Search Google");
         let copy_flags = if can_copy {
             MF_STRING
         } else {
@@ -328,11 +308,6 @@ pub fn show_copy_paste_context_menu(
             MF_STRING | MF_GRAYED
         };
         let copy_buffer_position_flags = if has_buffer_position {
-            MF_STRING
-        } else {
-            MF_STRING | MF_GRAYED
-        };
-        let search_google_flags = if can_search_google {
             MF_STRING
         } else {
             MF_STRING | MF_GRAYED
@@ -367,13 +342,6 @@ pub fn show_copy_paste_context_menu(
                 windows::core::PCWSTR(copy_buffer_position_title.as_ptr()),
             )
             .ok()?;
-            AppendMenuW(
-                menu,
-                search_google_flags,
-                CONTEXT_MENU_SEARCH_GOOGLE_ID as usize,
-                windows::core::PCWSTR(search_google_title.as_ptr()),
-            )
-            .ok()?;
         }
 
         let mut cursor = POINT::default();
@@ -399,7 +367,6 @@ pub fn show_copy_paste_context_menu(
             CONTEXT_MENU_PASTE_ID => Some(ContextMenuAction::Paste),
             CONTEXT_MENU_OPEN_SEARCH_ID => Some(ContextMenuAction::OpenSearch),
             CONTEXT_MENU_COPY_BUFFER_POSITION_ID => Some(ContextMenuAction::CopyBufferPosition),
-            CONTEXT_MENU_SEARCH_GOOGLE_ID => Some(ContextMenuAction::SearchGoogle),
             _ => None,
         };
     }
@@ -409,12 +376,7 @@ pub fn show_copy_paste_context_menu(
         not(any(target_os = "macos", target_os = "windows"))
     ))]
     {
-        let _ = (
-            buffer_position_label,
-            can_copy,
-            can_paste,
-            can_search_google,
-        );
+        let _ = (buffer_position_label, can_copy, can_paste);
         None
     }
 }

@@ -1814,8 +1814,7 @@ impl TerminalView {
                                 state.can_paste,
                                 CommandAction::Paste,
                             ))
-                            .child(open_search_item())
-                            .child(search_google_item(state.can_search_google)),
+                            .child(open_search_item()),
                     )
                     .into_any_element(),
             )

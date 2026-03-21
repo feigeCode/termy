@@ -372,7 +372,6 @@ struct TerminalContextMenuState {
     buffer_position: Option<SelectionPos>,
     can_copy: bool,
     can_paste: bool,
-    can_search_google: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

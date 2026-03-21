@@ -18,6 +18,10 @@ fn search_key_action(key: &str, shift_pressed: bool) -> Option<SearchKeyAction> 
 }
 
 impl TerminalView {
+    fn search_prefill_from_selection(selection: Option<String>) -> Option<String> {
+        selection.filter(|text| !text.trim().is_empty())
+    }
+
     pub(super) fn execute_search_command_action(
         &mut self,
         action: CommandAction,
@@ -57,7 +61,15 @@ impl TerminalView {
     }
 
     pub(super) fn open_search(&mut self, cx: &mut Context<Self>) {
+        let prefill = Self::search_prefill_from_selection(self.selected_text());
+
         if self.search_open {
+            if let Some(prefill) = prefill {
+                self.search_input.set_text(prefill);
+                self.perform_search();
+                self.reset_cursor_blink_phase();
+                cx.notify();
+            }
             return;
         }
 
@@ -73,8 +85,13 @@ impl TerminalView {
 
         self.search_open = true;
         self.search_state.open();
-        self.search_input.clear();
-        self.clear_terminal_scrollbar_marker_cache();
+        if let Some(prefill) = prefill {
+            self.search_input.set_text(prefill);
+            self.perform_search();
+        } else {
+            self.search_input.clear();
+            self.clear_terminal_scrollbar_marker_cache();
+        }
         self.reset_cursor_blink_phase();
         cx.notify();
     }
@@ -455,6 +472,23 @@ fn extract_line_text(
 mod tests {
     use super::*;
     use termy_terminal_ui::TerminalSize;
+
+    #[test]
+    fn search_prefill_ignores_empty_selection() {
+        assert_eq!(TerminalView::search_prefill_from_selection(None), None);
+        assert_eq!(
+            TerminalView::search_prefill_from_selection(Some("   \n\t".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn search_prefill_keeps_non_empty_selection() {
+        assert_eq!(
+            TerminalView::search_prefill_from_selection(Some("panic: missing semicolon".into())),
+            Some("panic: missing semicolon".into())
+        );
+    }
 
     fn filled_line_count(lines: &[Option<String>]) -> usize {
         lines

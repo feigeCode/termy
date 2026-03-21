@@ -20,15 +20,14 @@ impl TerminalView {
         Some(buffer_position)
     }
 
-    fn terminal_context_menu_capabilities(&self, cx: &mut Context<Self>) -> (bool, bool, bool) {
+    fn terminal_context_menu_capabilities(&self, cx: &mut Context<Self>) -> (bool, bool) {
         let has_selection = self.selected_text().is_some();
         let can_copy = has_selection;
         let can_paste = cx
             .read_from_clipboard()
             .and_then(|item| item.text())
             .is_some();
-        let can_search_google = has_selection;
-        (can_copy, can_paste, can_search_google)
+        (can_copy, can_paste)
     }
 
     fn command_action_for_context_menu_action(
@@ -39,7 +38,6 @@ impl TerminalView {
             termy_native_sdk::ContextMenuAction::Paste => Some(CommandAction::Paste),
             termy_native_sdk::ContextMenuAction::OpenSearch => Some(CommandAction::OpenSearch),
             termy_native_sdk::ContextMenuAction::CopyBufferPosition => None,
-            termy_native_sdk::ContextMenuAction::SearchGoogle => None,
         }
     }
 
@@ -113,10 +111,6 @@ impl TerminalView {
             self.execute_terminal_context_menu_copy_buffer_position(cx);
             return;
         }
-
-        if action == termy_native_sdk::ContextMenuAction::SearchGoogle {
-            self.execute_terminal_context_menu_search_google(cx);
-        }
     }
 
     fn execute_tab_context_menu_action(
@@ -140,34 +134,12 @@ impl TerminalView {
         }
     }
 
-    pub(in super::super) fn execute_terminal_context_menu_search_google(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        let selected = self.selected_text();
-        let _ = self.close_terminal_context_menu(cx);
-        let Some(selected) = selected else {
-            return;
-        };
-        if selected.trim().is_empty() {
-            return;
-        }
-
-        let query: String = url::form_urlencoded::byte_serialize(selected.as_bytes()).collect();
-        let url = format!("https://www.google.com/search?q={query}");
-        if let Err(error) = webbrowser::open(&url) {
-            termy_toast::error(format!("Failed to open browser: {error}"));
-            self.notify_overlay(cx);
-        }
-    }
-
     #[cfg(not(target_os = "linux"))]
     fn schedule_native_terminal_context_menu(
         &mut self,
         buffer_position_label: Option<String>,
         can_copy: bool,
         can_paste: bool,
-        can_search_google: bool,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -176,7 +148,6 @@ impl TerminalView {
                     buffer_position_label,
                     can_copy,
                     can_paste,
-                    can_search_google,
                 )
             })
             .await;
@@ -219,14 +190,13 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let _ = self.close_tab_context_menu(cx);
-        let (can_copy, can_paste, can_search_google) = self.terminal_context_menu_capabilities(cx);
+        let (can_copy, can_paste) = self.terminal_context_menu_capabilities(cx);
         let buffer_position = self.terminal_context_menu_buffer_position(position);
         let state = TerminalContextMenuState {
             anchor_position: position,
             buffer_position,
             can_copy,
             can_paste,
-            can_search_google,
         };
         #[cfg(target_os = "linux")]
         let state_changed = self.terminal_context_menu.as_ref() != Some(&state);
@@ -247,7 +217,6 @@ impl TerminalView {
                 buffer_position_label,
                 can_copy,
                 can_paste,
-                can_search_google,
                 cx,
             );
         }
@@ -315,12 +284,6 @@ mod tests {
         assert_eq!(
             TerminalView::command_action_for_context_menu_action(
                 termy_native_sdk::ContextMenuAction::CopyBufferPosition
-            ),
-            None
-        );
-        assert_eq!(
-            TerminalView::command_action_for_context_menu_action(
-                termy_native_sdk::ContextMenuAction::SearchGoogle
             ),
             None
         );

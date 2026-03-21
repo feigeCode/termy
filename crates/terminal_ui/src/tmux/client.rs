@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+
 use anyhow::{Context, Result, anyhow};
 use flume::{Receiver, RecvTimeoutError, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,9 +29,11 @@ use super::shutdown::{
     run_shutdown_actions,
 };
 use super::snapshot::{PANE_SNAPSHOT_FORMAT, WINDOW_SNAPSHOT_FORMAT, parse_snapshot};
+#[cfg(unix)]
+use super::types::TmuxLaunchTarget;
 use super::types::{
-    TmuxControlError, TmuxLaunchTarget, TmuxNotification, TmuxRuntimeConfig, TmuxSessionSummary,
-    TmuxShutdownMode, TmuxSnapshot, TmuxSocketTarget,
+    TmuxControlError, TmuxNotification, TmuxRuntimeConfig, TmuxSessionSummary, TmuxShutdownMode,
+    TmuxSnapshot, TmuxSocketTarget,
 };
 
 pub struct TmuxClient {

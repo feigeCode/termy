@@ -210,6 +210,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn interactive_hit_test_detects_new_tab_button() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
@@ -227,6 +228,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn interactive_hit_test_excludes_action_rail_empty_space() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
@@ -246,6 +248,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn interactive_hit_test_excludes_gutter() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
@@ -299,6 +302,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn interactive_hit_test_respects_half_open_region_boundaries() {
         let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);

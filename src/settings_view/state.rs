@@ -4,6 +4,7 @@ const MAX_THEME_SUGGESTIONS: usize = 16;
 const MAX_FONT_SUGGESTIONS: usize = 200;
 const PANE_FOCUS_MAX: f32 = 2.0;
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum EditableField {
     Theme,

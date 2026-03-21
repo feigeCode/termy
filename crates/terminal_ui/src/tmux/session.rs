@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(unused_variables))]
+
 #[cfg(unix)]
 use crate::locale::{Utf8LocaleOverridePlan, preferred_utf8_locale, utf8_locale_override_plan};
 #[cfg(unix)]

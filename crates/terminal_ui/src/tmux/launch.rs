@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 #[cfg(unix)]
 use anyhow::{Context, Result, anyhow};
 #[cfg(unix)]

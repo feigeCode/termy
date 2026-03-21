@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use super::super::payload::{
     is_refresh_notification, parse_exit_reason, parse_output_notification,
     strip_control_line_wrappers,

@@ -119,6 +119,7 @@ impl TmuxRuntime {
 }
 
 impl TerminalView {
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(super) fn runtime_kind_from_app_config(config: &AppConfig) -> RuntimeKind {
         RuntimeKind::from_app_config(config)
     }

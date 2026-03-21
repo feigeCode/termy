@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const SEND_INPUT_CHUNKED_HEX_BYTES: usize = 256;

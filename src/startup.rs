@@ -1,6 +1,7 @@
 /// Startup failures that should block app launch with actionable recovery guidance.
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum StartupBlocker {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     TmuxPreflight(String),
     TmuxClientLaunch(String),
     TmuxInitialSnapshot(String),

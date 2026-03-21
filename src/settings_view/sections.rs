@@ -215,7 +215,7 @@ impl SettingsWindow {
     }
 
     pub(super) fn render_terminal_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut section = div()
+        let section = div()
             .flex()
             .flex_col()
             .gap_2()

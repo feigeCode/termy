@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 pub(crate) fn strip_control_line_wrappers(mut line: &[u8]) -> &[u8] {
     // tmux control mode may wrap protocol lines in DCS passthrough sequences
     // (for example: ESC P1000p ... ESC \\). Strip wrappers so parser matching

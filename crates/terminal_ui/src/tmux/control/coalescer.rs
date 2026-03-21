@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use super::super::types::{TmuxControlError, TmuxNotification};
 use flume::{Sender, TrySendError};
 use std::collections::VecDeque;

@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use super::super::types::TmuxControlError;
 #[cfg(test)]
 use super::super::types::TmuxControlErrorKind;

@@ -36,6 +36,7 @@ fn desaturate_rgb(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
 
 const COMMAND_PALETTE_BACKDROP_STRENGTH: f32 = 1.0;
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct UpdateBannerLayout {
     overlay_top: f32,
@@ -438,6 +439,7 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
+    #[cfg(any(target_os = "macos", test))]
     fn update_banner_layout_for(
         show_update_banner: bool,
         vertical_tabs: bool,
@@ -473,6 +475,7 @@ impl TerminalView {
         })
     }
 
+    #[cfg(target_os = "macos")]
     fn update_banner_layout(&self) -> Option<UpdateBannerLayout> {
         Self::update_banner_layout_for(
             self.update_banner_visible(),

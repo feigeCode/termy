@@ -28,14 +28,42 @@ Run the automated real-window render benchmark compare on macOS:
 
 ```sh
 cargo run -p xtask -- benchmark-compare \
+  --baseline termy:/path/to/termy/worktree \
+  --candidate ghostty:/Applications/Ghostty.app \
+  --output /tmp/termy-benchmark-compare
+```
+
+This builds the release `termy` binary for any Termy target, launches real app
+windows with deterministic benchmark scenarios, records an Activity Monitor
+trace with `xctrace`, and writes a comparison report.
+
+Target specs use `kind:/path`:
+
+- `termy:/path/to/worktree`
+- `ghostty:/path/to/ghostty`
+- `ghostty:/Applications/Ghostty.app`
+
+Legacy Termy-only compare syntax still works:
+
+```sh
+cargo run -p xtask -- benchmark-compare \
   --baseline-root /path/to/baseline/worktree \
   --candidate-root /path/to/candidate/worktree \
   --output /tmp/termy-benchmark-compare
 ```
 
-This builds release binaries in both worktrees, launches real Termy windows with
-deterministic benchmark scenarios, records an Activity Monitor trace with
-`xctrace`, and writes a comparison report.
+Notes:
+
+- Shared report tables use external Activity Monitor data so mixed-app runs stay
+  comparable.
+- Shared frame cadence now comes from a second `Animation Hitches` trace pass,
+  so `Displayed frame p50/p95/p99`, `Displayed FPS avg`, and hitch counts work
+  for both Termy and Ghostty.
+- Termy emits additional in-app frame/redraw diagnostics; Ghostty runs do not,
+  so those appear as app-specific diagnostics rather than headline metrics.
+- Ghostty benchmark targets require Ghostty `>= 1.2.0`.
+- Ghostty runs use a generated config with `initial-command = direct:...` and
+  launch via `--config-default-files=false --config-file=...` instead of `-e`.
 
 Artifacts are written under the chosen output directory:
 
@@ -47,6 +75,11 @@ Artifacts are written under the chosen output directory:
 - `raw/<build>/<scenario>/driver/markers.ndjson`: benchmark-driver event markers
 - `energy/<build>/<scenario>/activity-monitor.trace`: raw `xctrace` recording
 - `energy/<build>/<scenario>/energy.json`: parsed Activity Monitor summary
+- `animation/<build>/<scenario>/animation-hitches.trace`: raw `Animation Hitches` recording
+- `animation/<build>/<scenario>/animation-summary.json`: parsed external frame summary
+
+For non-Termy targets, the `raw/<build>/<scenario>/app/` directory may be
+empty because no in-app diagnostics are available.
 
 Current scenarios:
 

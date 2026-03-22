@@ -26,7 +26,10 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex, atomic::AtomicU64},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
@@ -2710,24 +2713,49 @@ impl TerminalView {
         let _ = &config_change_rx;
         #[cfg(test)]
         let _ = &background_opacity_preview_rx;
+        let terminal_frame_drain_scheduled = Arc::new(AtomicBool::new(false));
+        let window_handle = window.window_handle();
 
         // Focus the terminal immediately
         focus_handle.focus(window, cx);
 
-        // Process terminal events only when runtimes signal activity.
+        // Process terminal events on the next frame so bursty PTY wakeups do not monopolize
+        // the UI executor and starve actual paints.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             while event_wakeup_rx.recv_async().await.is_ok() {
                 while event_wakeup_rx.try_recv().is_ok() {}
+                let mut should_schedule = false;
                 let result = cx.update(|cx| {
-                    this.update(cx, |view, cx| {
+                    this.update(cx, |view, _cx| {
                         view.record_benchmark_view_wakeup();
                         view.debug_overlay_stats.record_view_wake_signal();
-                        if view.process_terminal_events(cx) {
-                            cx.notify();
+                        if !terminal_frame_drain_scheduled.swap(true, Ordering::AcqRel) {
+                            should_schedule = true;
                         }
                     })
                 });
                 if result.is_err() {
+                    break;
+                }
+                if !should_schedule {
+                    continue;
+                }
+
+                let this = this.clone();
+                let terminal_frame_drain_scheduled = terminal_frame_drain_scheduled.clone();
+                if cx
+                    .update_window(window_handle, move |_, window, _| {
+                        window.on_next_frame(move |_window, cx| {
+                            terminal_frame_drain_scheduled.store(false, Ordering::Release);
+                            let _ = this.update(cx, |view, cx| {
+                                if view.process_terminal_events(cx) {
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }

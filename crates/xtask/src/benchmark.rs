@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     env,
     ffi::OsStr,
@@ -14,7 +16,9 @@ use std::{
 use termy_terminal_ui::terminal_ui_monotonic_now_ns;
 
 const DEFAULT_DURATION_SECS: u64 = 13;
-const TRACE_PADDING_SECS: u64 = 2;
+// Give launched apps enough room to finish the benchmark command, flush metrics,
+// and quit before xctrace force-terminates them at the trace time limit.
+const TRACE_PADDING_SECS: u64 = 5;
 const BENCHMARK_EVENTS_PATH_ENV: &str = "TERMY_BENCHMARK_EVENTS_PATH";
 const IDLE_BURST_PRE_IDLE: Duration = Duration::from_millis(1500);
 const IDLE_BURST_POST_IDLE: Duration = Duration::from_millis(1000);
@@ -62,6 +66,8 @@ fn run_driver(mut args: impl Iterator<Item = String>) -> Result<()> {
 }
 
 fn run_compare(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let mut baseline_spec = None;
+    let mut candidate_spec = None;
     let mut baseline_root = None;
     let mut candidate_root = None;
     let mut output_root = None;
@@ -69,6 +75,14 @@ fn run_compare(mut args: impl Iterator<Item = String>) -> Result<()> {
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--baseline" => {
+                let value = args.next().context("missing value for --baseline")?;
+                baseline_spec = Some(value);
+            }
+            "--candidate" => {
+                let value = args.next().context("missing value for --candidate")?;
+                candidate_spec = Some(value);
+            }
             "--baseline-root" => {
                 baseline_root = Some(PathBuf::from(
                     args.next().context("missing value for --baseline-root")?,
@@ -91,13 +105,30 @@ fn run_compare(mut args: impl Iterator<Item = String>) -> Result<()> {
                     .with_context(|| format!("invalid --duration-secs `{value}`"))?;
             }
             other => bail!(
-                "unknown benchmark-compare argument `{other}`; expected --baseline-root, --candidate-root, --output, or --duration-secs"
+                "unknown benchmark-compare argument `{other}`; expected --baseline, --candidate, --baseline-root, --candidate-root, --output, or --duration-secs"
             ),
         }
     }
 
-    let baseline_root = canonicalize_root(baseline_root.context("missing --baseline-root")?)?;
-    let candidate_root = canonicalize_root(candidate_root.context("missing --candidate-root")?)?;
+    if baseline_spec.is_some() && baseline_root.is_some() {
+        bail!("use either --baseline or --baseline-root, not both");
+    }
+    if candidate_spec.is_some() && candidate_root.is_some() {
+        bail!("use either --candidate or --candidate-root, not both");
+    }
+
+    let baseline = match (baseline_spec, baseline_root) {
+        (Some(spec), None) => BenchmarkTargetSpec::parse("baseline", &spec)?,
+        (None, Some(root)) => BenchmarkTargetSpec::from_termy_root("baseline", root)?,
+        (None, None) => bail!("missing --baseline or --baseline-root"),
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let candidate = match (candidate_spec, candidate_root) {
+        (Some(spec), None) => BenchmarkTargetSpec::parse("candidate", &spec)?,
+        (None, Some(root)) => BenchmarkTargetSpec::from_termy_root("candidate", root)?,
+        (None, None) => bail!("missing --candidate or --candidate-root"),
+        (Some(_), Some(_)) => unreachable!(),
+    };
     let output_root = output_root.context("missing --output")?;
     if output_root.exists() {
         fs::remove_dir_all(&output_root)
@@ -106,11 +137,10 @@ fn run_compare(mut args: impl Iterator<Item = String>) -> Result<()> {
     fs::create_dir_all(&output_root)
         .with_context(|| format!("failed to create {}", output_root.display()))?;
 
-    let baseline = BuildSpec::new("baseline", baseline_root)?;
-    let candidate = BuildSpec::new("candidate", candidate_root)?;
-
-    build_release_binaries(&baseline)?;
-    build_release_binaries(&candidate)?;
+    let driver = BenchmarkDriverSpec::current()?;
+    build_release_driver(&driver)?;
+    prepare_target(&baseline)?;
+    prepare_target(&candidate)?;
 
     let scenarios = Scenario::all();
     let mut runs = Vec::with_capacity(scenarios.len() * 2);
@@ -118,6 +148,7 @@ fn run_compare(mut args: impl Iterator<Item = String>) -> Result<()> {
         for scenario in scenarios {
             runs.push(run_single_benchmark(
                 build,
+                &driver,
                 *scenario,
                 duration_secs,
                 &output_root,
@@ -137,28 +168,119 @@ fn canonicalize_root(path: PathBuf) -> Result<PathBuf> {
 }
 
 #[derive(Clone, Debug)]
-struct BuildSpec {
-    label: &'static str,
+struct BenchmarkDriverSpec {
     root: PathBuf,
-    git_sha: String,
+    xtask_binary: PathBuf,
 }
 
-impl BuildSpec {
-    fn new(label: &'static str, root: PathBuf) -> Result<Self> {
+impl BenchmarkDriverSpec {
+    fn current() -> Result<Self> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .context("failed to compute xtask workspace root")?;
         Ok(Self {
-            label,
-            git_sha: git_rev_parse_short(&root)?,
+            xtask_binary: root.join("target/release/xtask"),
             root,
         })
     }
+}
 
-    fn termy_binary(&self) -> PathBuf {
-        self.root.join("target/release/termy")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchmarkTargetKind {
+    Termy,
+    Ghostty,
+}
+
+impl BenchmarkTargetKind {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "termy" => Ok(Self::Termy),
+            "ghostty" => Ok(Self::Ghostty),
+            other => bail!("unknown benchmark target kind `{other}`"),
+        }
     }
 
-    fn xtask_binary(&self) -> PathBuf {
-        self.root.join("target/release/xtask")
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Termy => "Termy",
+            Self::Ghostty => "Ghostty",
+        }
     }
+}
+
+#[derive(Clone, Debug)]
+struct BenchmarkTargetSpec {
+    label: &'static str,
+    kind: BenchmarkTargetKind,
+    source_path: PathBuf,
+    executable_path: PathBuf,
+    git_sha: Option<String>,
+}
+
+impl BenchmarkTargetSpec {
+    fn parse(label: &'static str, value: &str) -> Result<Self> {
+        let (kind, path) = value
+            .split_once(':')
+            .with_context(|| format!("invalid target spec `{value}`; expected kind:/path"))?;
+        let kind = BenchmarkTargetKind::parse(kind)?;
+        match kind {
+            BenchmarkTargetKind::Termy => Self::from_termy_root(label, PathBuf::from(path)),
+            BenchmarkTargetKind::Ghostty => Self::from_ghostty_path(label, PathBuf::from(path)),
+        }
+    }
+
+    fn from_termy_root(label: &'static str, root: PathBuf) -> Result<Self> {
+        let root = canonicalize_root(root)?;
+        Ok(Self {
+            label,
+            kind: BenchmarkTargetKind::Termy,
+            executable_path: root.join("target/release/termy"),
+            git_sha: Some(git_rev_parse_short(&root)?),
+            source_path: root,
+        })
+    }
+
+    fn from_ghostty_path(label: &'static str, path: PathBuf) -> Result<Self> {
+        let source_path = canonicalize_root(path)?;
+        let executable_path = resolve_ghostty_executable(&source_path)?;
+        Ok(Self {
+            label,
+            kind: BenchmarkTargetKind::Ghostty,
+            source_path,
+            executable_path,
+            git_sha: None,
+        })
+    }
+
+    fn display_name(&self) -> &'static str {
+        self.kind.display_name()
+    }
+
+    fn metrics_supported(&self) -> bool {
+        matches!(self.kind, BenchmarkTargetKind::Termy)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct GhosttyVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl GhosttyVersion {
+    const MIN_SUPPORTED: Self = Self {
+        major: 1,
+        minor: 2,
+        patch: 0,
+    };
+}
+
+#[derive(Clone, Debug)]
+struct GhosttyLaunchArtifacts {
+    config_path: PathBuf,
 }
 
 fn git_rev_parse_short(root: &Path) -> Result<String> {
@@ -179,18 +301,124 @@ fn git_rev_parse_short(root: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn build_release_binaries(build: &BuildSpec) -> Result<()> {
+fn resolve_ghostty_executable(path: &Path) -> Result<PathBuf> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+    {
+        let executable = path.join("Contents/MacOS/ghostty");
+        if !executable.is_file() {
+            bail!(
+                "failed to locate Ghostty executable at {}",
+                executable.display()
+            );
+        }
+        return Ok(executable);
+    }
+
+    if !path.is_file() {
+        bail!(
+            "ghostty target must point to an executable or .app bundle: {}",
+            path.display()
+        );
+    }
+    Ok(path.to_path_buf())
+}
+
+fn ghostty_version(executable_path: &Path) -> Result<GhosttyVersion> {
+    let output = Command::new(executable_path)
+        .arg("+version")
+        .output()
+        .with_context(|| format!("failed to launch Ghostty at {}", executable_path.display()))?;
+    if !output.status.success() {
+        bail!(
+            "Ghostty version probe failed for {}: {}",
+            executable_path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let mut version_output = String::from_utf8_lossy(&output.stdout).to_string();
+    if version_output.trim().is_empty() {
+        version_output = String::from_utf8_lossy(&output.stderr).to_string();
+    }
+    parse_ghostty_version(&version_output).with_context(|| {
+        format!(
+            "failed to parse Ghostty version from `{}`",
+            version_output.trim()
+        )
+    })
+}
+
+fn parse_ghostty_version(output: &str) -> Option<GhosttyVersion> {
+    output
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '-'))
+        .find_map(parse_ghostty_version_token)
+}
+
+fn parse_ghostty_version_token(token: &str) -> Option<GhosttyVersion> {
+    let token = token.trim_start_matches('v');
+    let token = token.split('-').next().unwrap_or(token);
+    let mut parts = token.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    Some(GhosttyVersion {
+        major,
+        minor,
+        patch,
+    })
+}
+
+fn build_release_driver(driver: &BenchmarkDriverSpec) -> Result<()> {
     run_command(
         Command::new("cargo")
             .arg("build")
             .arg("--release")
             .arg("-p")
-            .arg("termy")
-            .arg("-p")
             .arg("xtask")
-            .current_dir(&build.root),
-        format!("cargo build --release in {}", build.root.display()),
+            .current_dir(&driver.root),
+        format!(
+            "cargo build --release -p xtask in {}",
+            driver.root.display()
+        ),
     )
+}
+
+fn prepare_target(build: &BenchmarkTargetSpec) -> Result<()> {
+    match build.kind {
+        BenchmarkTargetKind::Termy => run_command(
+            Command::new("cargo")
+                .arg("build")
+                .arg("--release")
+                .arg("-p")
+                .arg("termy")
+                .current_dir(&build.source_path),
+            format!(
+                "cargo build --release -p termy in {}",
+                build.source_path.display()
+            ),
+        ),
+        BenchmarkTargetKind::Ghostty => {
+            let version = ghostty_version(&build.executable_path)?;
+            if version < GhosttyVersion::MIN_SUPPORTED {
+                bail!(
+                    "Ghostty {}.{}.{} is unsupported for benchmark mode; require >= {}.{}.{} because the harness uses `initial-command = direct:...`",
+                    version.major,
+                    version.minor,
+                    version.patch,
+                    GhosttyVersion::MIN_SUPPORTED.major,
+                    GhosttyVersion::MIN_SUPPORTED.minor,
+                    GhosttyVersion::MIN_SUPPORTED.patch,
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -319,13 +547,14 @@ fn sleep_for_remaining(start: Instant, total_duration: Duration, requested_sleep
 }
 
 struct BenchmarkMarkerWriter {
-    writer: io::BufWriter<fs::File>,
+    writer: Option<io::BufWriter<fs::File>>,
 }
 
 impl BenchmarkMarkerWriter {
     fn new_from_env() -> Result<Self> {
-        let path = env::var(BENCHMARK_EVENTS_PATH_ENV)
-            .context("missing TERMY_BENCHMARK_EVENTS_PATH for benchmark-driver")?;
+        let Some(path) = env::var_os(BENCHMARK_EVENTS_PATH_ENV) else {
+            return Ok(Self { writer: None });
+        };
         let path = PathBuf::from(path);
         let parent = path
             .parent()
@@ -335,28 +564,32 @@ impl BenchmarkMarkerWriter {
         let file = fs::File::create(&path)
             .with_context(|| format!("failed to create {}", path.display()))?;
         Ok(Self {
-            writer: io::BufWriter::new(file),
+            writer: Some(io::BufWriter::new(file)),
         })
     }
 
     fn record(&mut self, kind: &str, seq: Option<u64>) -> Result<()> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
         let marker = MarkerEvent {
             kind: kind.to_string(),
             seq,
             monotonic_ns: terminal_ui_monotonic_now_ns(),
         };
-        serde_json::to_writer(&mut self.writer, &marker)
+        serde_json::to_writer(&mut *writer, &marker)
             .context("failed to serialize benchmark marker")?;
-        self.writer
+        writer
             .write_all(b"\n")
             .context("failed to write benchmark marker newline")?;
         Ok(())
     }
 
     fn flush(&mut self) -> Result<()> {
-        self.writer
-            .flush()
-            .context("failed to flush benchmark marker")
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
+        writer.flush().context("failed to flush benchmark marker")
     }
 }
 
@@ -444,6 +677,8 @@ struct AppSummary {
     alt_screen_fallback_redraws: u64,
     grid_paint_count: u64,
     shape_line_calls: u64,
+    shaped_line_cache_hits: u64,
+    shaped_line_cache_misses: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -457,13 +692,39 @@ struct EnergySummary {
     disk_bytes_written: Option<u64>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FrameCaptureStatus {
+    Parsed,
+    #[default]
+    NoFrames,
+    ParserError,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct AnimationSummary {
+    trace_template: String,
+    launched_pid: Option<u32>,
+    displayed_frame_capture_status: FrameCaptureStatus,
+    displayed_frame_capture_detail: Option<String>,
+    displayed_frame_count: u64,
+    fps_avg: Option<f32>,
+    frame_p50_ms: Option<f32>,
+    frame_p95_ms: Option<f32>,
+    frame_p99_ms: Option<f32>,
+    hitch_count: u64,
+    hitch_max_ms: Option<f32>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct RunResult {
     build_label: String,
-    git_sha: String,
+    target_name: String,
+    git_sha: Option<String>,
     scenario: String,
-    app_summary: AppSummary,
+    app_summary: Option<AppSummary>,
     energy_summary: EnergySummary,
+    animation_summary: Option<AnimationSummary>,
     micro_latency: MicroLatencySummary,
 }
 
@@ -491,7 +752,8 @@ struct EchoTrainLatencySummary {
 }
 
 fn run_single_benchmark(
-    build: &BuildSpec,
+    build: &BenchmarkTargetSpec,
+    driver: &BenchmarkDriverSpec,
     scenario: Scenario,
     duration_secs: u64,
     output_root: &Path,
@@ -502,6 +764,10 @@ fn run_single_benchmark(
         .join(scenario.as_str());
     let energy_dir = output_root
         .join("energy")
+        .join(build.label)
+        .join(scenario.as_str());
+    let animation_dir = output_root
+        .join("animation")
         .join(build.label)
         .join(scenario.as_str());
     let config_root = raw_dir.join("config");
@@ -515,6 +781,10 @@ fn run_single_benchmark(
         fs::remove_dir_all(&energy_dir)
             .with_context(|| format!("failed to clear {}", energy_dir.display()))?;
     }
+    if animation_dir.exists() {
+        fs::remove_dir_all(&animation_dir)
+            .with_context(|| format!("failed to clear {}", animation_dir.display()))?;
+    }
     fs::create_dir_all(config_root.join("termy"))
         .with_context(|| format!("failed to create {}", config_root.display()))?;
     fs::create_dir_all(&metrics_dir)
@@ -523,38 +793,73 @@ fn run_single_benchmark(
         .with_context(|| format!("failed to create {}", driver_dir.display()))?;
     fs::create_dir_all(&energy_dir)
         .with_context(|| format!("failed to create {}", energy_dir.display()))?;
+    fs::create_dir_all(&animation_dir)
+        .with_context(|| format!("failed to create {}", animation_dir.display()))?;
 
     let config_path = config_root.join("termy/config.txt");
     fs::write(&config_path, benchmark_config_contents())
         .with_context(|| format!("failed to write {}", config_path.display()))?;
+    let ghostty_launch = if matches!(build.kind, BenchmarkTargetKind::Ghostty) {
+        Some(create_ghostty_launch_artifacts(
+            &config_root,
+            driver,
+            scenario,
+            duration_secs,
+        )?)
+    } else {
+        None
+    };
 
     let trace_path = energy_dir.join("activity-monitor.trace");
     let markers_path = driver_dir.join("markers.ndjson");
-    let command = benchmark_driver_command(build, scenario, duration_secs);
     let time_limit_secs = duration_secs.saturating_add(TRACE_PADDING_SECS);
-    let mut activity_command = activity_monitor_command(
-        build,
-        &trace_path,
-        &config_root,
-        &metrics_dir,
-        &markers_path,
-        scenario,
-        &command,
-        time_limit_secs,
-    );
-    run_command(
+    let mut activity_command = match build.kind {
+        BenchmarkTargetKind::Termy => {
+            let command = benchmark_driver_command(driver, scenario, duration_secs);
+            activity_monitor_termy_command(
+                build,
+                &trace_path,
+                &config_root,
+                &metrics_dir,
+                &markers_path,
+                scenario,
+                &command,
+                time_limit_secs,
+            )
+        }
+        BenchmarkTargetKind::Ghostty => activity_monitor_ghostty_command(
+            build,
+            &trace_path,
+            &markers_path,
+            ghostty_launch
+                .as_ref()
+                .expect("ghostty launch artifacts must exist"),
+            time_limit_secs,
+        ),
+    };
+    run_xctrace_record_command(
         &mut activity_command,
         format!(
-            "xctrace benchmark run for {} {}",
+            "xctrace benchmark run for {} ({}) {}",
             build.label,
+            build.display_name(),
             scenario.as_str()
         ),
+        &trace_path,
     )?;
 
-    let summary_path = metrics_dir.join("summary.json");
-    let summary: AppSummary = read_json(&summary_path)?;
-    let frames_path = metrics_dir.join("frames.ndjson");
-    let micro_latency = summarize_micro_latency(scenario, &markers_path, &frames_path)?;
+    let app_summary = if build.metrics_supported() {
+        let summary_path = metrics_dir.join("summary.json");
+        Some(read_json(&summary_path)?)
+    } else {
+        None
+    };
+    let micro_latency = if build.metrics_supported() {
+        let frames_path = metrics_dir.join("frames.ndjson");
+        summarize_micro_latency(scenario, &markers_path, &frames_path)?
+    } else {
+        MicroLatencySummary::default()
+    };
 
     let toc_path = energy_dir.join("toc.xml");
     let live_path = energy_dir.join("activity-monitor-process-live.xml");
@@ -577,12 +882,73 @@ fn run_single_benchmark(
     let energy_json_path = energy_dir.join("energy.json");
     write_json(&energy_json_path, &energy_summary)?;
 
+    let animation_trace_path = animation_dir.join("animation-hitches.trace");
+    let animation_metrics_dir = raw_dir.join("animation-app");
+    let mut animation_command = match build.kind {
+        BenchmarkTargetKind::Termy => {
+            let command = benchmark_driver_command(driver, scenario, duration_secs);
+            animation_hitches_termy_command(
+                build,
+                &animation_trace_path,
+                &config_root,
+                &animation_metrics_dir,
+                &markers_path,
+                scenario,
+                &command,
+                time_limit_secs,
+            )
+        }
+        BenchmarkTargetKind::Ghostty => animation_hitches_ghostty_command(
+            build,
+            &animation_trace_path,
+            &markers_path,
+            ghostty_launch
+                .as_ref()
+                .expect("ghostty launch artifacts must exist"),
+            time_limit_secs,
+        ),
+    };
+    run_xctrace_record_command(
+        &mut animation_command,
+        format!(
+            "xctrace Animation Hitches run for {} ({}) {}",
+            build.label,
+            build.display_name(),
+            scenario.as_str()
+        ),
+        &animation_trace_path,
+    )?;
+
+    let animation_toc_path = animation_dir.join("toc.xml");
+    export_xctrace_table(&animation_trace_path, None, &animation_toc_path)?;
+    let launched_pid = parse_trace_launched_process_pid(&animation_toc_path)?;
+    let displayed_frames_path = animation_dir.join("displayed-surfaces-interval.xml");
+    let hitches_path = animation_dir.join("hitches.xml");
+    export_xctrace_table(
+        &animation_trace_path,
+        Some("/trace-toc/run[@number=\"1\"]/data/table[@schema=\"displayed-surfaces-interval\"]"),
+        &displayed_frames_path,
+    )?;
+    export_xctrace_table(
+        &animation_trace_path,
+        Some("/trace-toc/run[@number=\"1\"]/data/table[@schema=\"hitches\"]"),
+        &hitches_path,
+    )?;
+    let animation_summary =
+        parse_animation_summary(&displayed_frames_path, &hitches_path, launched_pid)?;
+    write_json(
+        &animation_dir.join("animation-summary.json"),
+        &animation_summary,
+    )?;
+
     Ok(RunResult {
         build_label: build.label.to_string(),
+        target_name: build.display_name().to_string(),
         git_sha: build.git_sha.clone(),
         scenario: scenario.as_str().to_string(),
-        app_summary: summary,
+        app_summary,
         energy_summary,
+        animation_summary: Some(animation_summary),
         micro_latency,
     })
 }
@@ -591,17 +957,62 @@ fn benchmark_config_contents() -> &'static str {
     "tmux_enabled = false\nbackground_blur = false\nbackground_opacity = 1.0\ncursor_blink = false\nwindow_width = 1280\nwindow_height = 820\nshow_debug_overlay = false\n"
 }
 
-fn benchmark_driver_command(build: &BuildSpec, scenario: Scenario, duration_secs: u64) -> String {
+fn benchmark_driver_command(
+    driver: &BenchmarkDriverSpec,
+    scenario: Scenario,
+    duration_secs: u64,
+) -> String {
     format!(
         "{} benchmark-driver --scenario {} --duration-secs {}",
-        shell_escape_path(&build.xtask_binary()),
+        shell_escape_path(&driver.xtask_binary),
         scenario.as_str(),
         duration_secs
     )
 }
 
-fn activity_monitor_command(
-    build: &BuildSpec,
+fn create_ghostty_launch_artifacts(
+    config_root: &Path,
+    driver: &BenchmarkDriverSpec,
+    scenario: Scenario,
+    duration_secs: u64,
+) -> Result<GhosttyLaunchArtifacts> {
+    let ghostty_dir = config_root.join("ghostty");
+    fs::create_dir_all(&ghostty_dir)
+        .with_context(|| format!("failed to create {}", ghostty_dir.display()))?;
+
+    let script_path = env::temp_dir().join(format!(
+        "termy-ghostty-benchmark-{}-{}.sh",
+        scenario.as_str(),
+        terminal_ui_monotonic_now_ns()
+    ));
+    let script_contents = format!(
+        "#!/bin/sh\nexec {} benchmark-driver --scenario {} --duration-secs {}\n",
+        shell_escape_path(&driver.xtask_binary),
+        scenario.as_str(),
+        duration_secs
+    );
+    fs::write(&script_path, script_contents)
+        .with_context(|| format!("failed to write {}", script_path.display()))?;
+    #[cfg(unix)]
+    {
+        let permissions = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&script_path, permissions)
+            .with_context(|| format!("failed to chmod {}", script_path.display()))?;
+    }
+
+    let config_path = ghostty_dir.join("config");
+    let config_contents = format!(
+        "window-width = 128\nwindow-height = 48\nquit-after-last-window-closed = true\ninitial-command = direct:{}\n",
+        script_path.display()
+    );
+    fs::write(&config_path, config_contents)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    Ok(GhosttyLaunchArtifacts { config_path })
+}
+
+fn activity_monitor_termy_command(
+    build: &BenchmarkTargetSpec,
     trace_path: &Path,
     config_root: &Path,
     metrics_dir: &Path,
@@ -640,10 +1051,121 @@ fn activity_monitor_command(
         .arg("--env")
         .arg(format!("TERMY_BENCHMARK_BUILD_LABEL={}", build.label))
         .arg("--env")
-        .arg(format!("TERMY_BENCHMARK_GIT_SHA={}", build.git_sha))
+        .arg(format!(
+            "TERMY_BENCHMARK_GIT_SHA={}",
+            build.git_sha.as_deref().unwrap_or("unknown")
+        ))
         .arg("--launch")
         .arg("--")
-        .arg(build.termy_binary());
+        .arg(&build.executable_path);
+    command
+}
+
+fn activity_monitor_ghostty_command(
+    build: &BenchmarkTargetSpec,
+    trace_path: &Path,
+    markers_path: &Path,
+    launch: &GhosttyLaunchArtifacts,
+    time_limit_secs: u64,
+) -> Command {
+    let mut command = Command::new("xctrace");
+    command
+        .arg("record")
+        .arg("--template")
+        .arg("Activity Monitor")
+        .arg("--time-limit")
+        .arg(format!("{time_limit_secs}s"))
+        .arg("--output")
+        .arg(trace_path)
+        .arg("--env")
+        .arg(format!(
+            "{BENCHMARK_EVENTS_PATH_ENV}={}",
+            markers_path.display()
+        ))
+        .arg("--launch")
+        .arg("--")
+        .arg(&build.executable_path)
+        .arg("--config-default-files=false")
+        .arg(format!("--config-file={}", launch.config_path.display()));
+    command
+}
+
+fn animation_hitches_termy_command(
+    build: &BenchmarkTargetSpec,
+    trace_path: &Path,
+    config_root: &Path,
+    metrics_dir: &Path,
+    markers_path: &Path,
+    scenario: Scenario,
+    benchmark_command: &str,
+    time_limit_secs: u64,
+) -> Command {
+    let mut command = Command::new("xctrace");
+    command
+        .arg("record")
+        .arg("--template")
+        .arg("Animation Hitches")
+        .arg("--time-limit")
+        .arg(format!("{time_limit_secs}s"))
+        .arg("--output")
+        .arg(trace_path)
+        .arg("--env")
+        .arg(format!("XDG_CONFIG_HOME={}", config_root.display()))
+        .arg("--env")
+        .arg(format!("TERMY_BENCHMARK_COMMAND={benchmark_command}"))
+        .arg("--env")
+        .arg(format!("TERMY_BENCHMARK_SCENARIO={}", scenario.as_str()))
+        .arg("--env")
+        .arg(format!(
+            "TERMY_BENCHMARK_METRICS_PATH={}",
+            metrics_dir.display()
+        ))
+        .arg("--env")
+        .arg(format!(
+            "{BENCHMARK_EVENTS_PATH_ENV}={}",
+            markers_path.display()
+        ))
+        .arg("--env")
+        .arg("TERMY_BENCHMARK_EXIT_ON_COMPLETE=1")
+        .arg("--env")
+        .arg(format!("TERMY_BENCHMARK_BUILD_LABEL={}", build.label))
+        .arg("--env")
+        .arg(format!(
+            "TERMY_BENCHMARK_GIT_SHA={}",
+            build.git_sha.as_deref().unwrap_or("unknown")
+        ))
+        .arg("--launch")
+        .arg("--")
+        .arg(&build.executable_path);
+    command
+}
+
+fn animation_hitches_ghostty_command(
+    build: &BenchmarkTargetSpec,
+    trace_path: &Path,
+    markers_path: &Path,
+    launch: &GhosttyLaunchArtifacts,
+    time_limit_secs: u64,
+) -> Command {
+    let mut command = Command::new("xctrace");
+    command
+        .arg("record")
+        .arg("--template")
+        .arg("Animation Hitches")
+        .arg("--time-limit")
+        .arg(format!("{time_limit_secs}s"))
+        .arg("--output")
+        .arg(trace_path)
+        .arg("--env")
+        .arg(format!(
+            "{BENCHMARK_EVENTS_PATH_ENV}={}",
+            markers_path.display()
+        ))
+        .arg("--launch")
+        .arg("--")
+        .arg(&build.executable_path)
+        .arg("--config-default-files=false")
+        .arg(format!("--config-file={}", launch.config_path.display()));
     command
 }
 
@@ -692,6 +1214,338 @@ fn parse_activity_monitor_summary(live_path: &Path, ledger_path: &Path) -> Resul
             .get("disk-bytes-written")
             .and_then(|value| value.parse::<u64>().ok()),
     })
+}
+
+fn parse_trace_launched_process_pid(toc_path: &Path) -> Result<u32> {
+    let toc_xml = fs::read_to_string(toc_path)
+        .with_context(|| format!("failed to read {}", toc_path.display()))?;
+    let doc = Document::parse(&toc_xml).context("failed to parse xctrace toc xml")?;
+    let launched_process = doc
+        .descendants()
+        .find(|node| {
+            node.has_tag_name("process")
+                && node
+                    .attribute("type")
+                    .is_some_and(|value| value == "launched")
+        })
+        .context("missing launched process in trace toc")?;
+    let pid = launched_process
+        .attribute("pid")
+        .context("launched process pid missing from trace toc")?;
+    pid.parse()
+        .with_context(|| format!("invalid launched process pid `{pid}`"))
+}
+
+fn parse_animation_summary(
+    displayed_frames_path: &Path,
+    hitches_path: &Path,
+    launched_pid: u32,
+) -> Result<AnimationSummary> {
+    let displayed_frames_xml = fs::read_to_string(displayed_frames_path)
+        .with_context(|| format!("failed to read {}", displayed_frames_path.display()))?;
+    let hitches_xml = fs::read_to_string(hitches_path)
+        .with_context(|| format!("failed to read {}", hitches_path.display()))?;
+
+    let (frame_starts, frame_capture_status, frame_capture_detail) =
+        match parse_displayed_frame_starts(&displayed_frames_xml, launched_pid) {
+            Ok(frame_starts) if frame_starts.is_empty() => (
+                frame_starts,
+                FrameCaptureStatus::NoFrames,
+                Some(format!(
+                    "no displayed frame rows matched launched pid {launched_pid}"
+                )),
+            ),
+            Ok(frame_starts) => (frame_starts, FrameCaptureStatus::Parsed, None),
+            Err(error) => (
+                Vec::new(),
+                FrameCaptureStatus::ParserError,
+                Some(error.to_string()),
+            ),
+        };
+    let hitch_durations = parse_hitch_durations(&hitches_xml, launched_pid)?;
+
+    let mut frame_intervals = Vec::new();
+    for window in frame_starts.windows(2) {
+        let interval = window[1].saturating_sub(window[0]);
+        if interval > 0 {
+            frame_intervals.push(interval);
+        }
+    }
+    let total_span = frame_starts
+        .first()
+        .zip(frame_starts.last())
+        .map(|(first, last)| last.saturating_sub(*first))
+        .unwrap_or(0);
+
+    let mut sorted_intervals = frame_intervals;
+    sorted_intervals.sort_unstable();
+    let mut sorted_hitches = hitch_durations;
+    sorted_hitches.sort_unstable();
+
+    Ok(AnimationSummary {
+        trace_template: "Animation Hitches".to_string(),
+        launched_pid: Some(launched_pid),
+        displayed_frame_capture_status: frame_capture_status,
+        displayed_frame_capture_detail: frame_capture_detail,
+        displayed_frame_count: frame_starts.len() as u64,
+        fps_avg: if total_span > 0 && frame_starts.len() > 1 {
+            Some(
+                (frame_starts.len().saturating_sub(1)) as f32
+                    / (total_span as f32 / 1_000_000_000.0),
+            )
+        } else {
+            None
+        },
+        frame_p50_ms: (!sorted_intervals.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted_intervals, 50, 100)),
+        frame_p95_ms: (!sorted_intervals.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted_intervals, 95, 100)),
+        frame_p99_ms: (!sorted_intervals.is_empty())
+            .then(|| percentile_nanos_to_millis(&sorted_intervals, 99, 100)),
+        hitch_count: sorted_hitches.len() as u64,
+        hitch_max_ms: sorted_hitches.last().copied().map(nanos_to_millis),
+    })
+}
+
+fn parse_displayed_frame_starts(xml: &str, launched_pid: u32) -> Result<Vec<u64>> {
+    let doc = Document::parse(xml).context("failed to parse displayed surfaces xml")?;
+    let node = doc
+        .descendants()
+        .find(|node| node.has_tag_name("node"))
+        .context("missing displayed surfaces node")?;
+    let schema = node
+        .children()
+        .find(|child| child.has_tag_name("schema"))
+        .context("missing displayed surfaces schema")?;
+    let mnemonics = schema
+        .children()
+        .filter(|child| child.has_tag_name("col"))
+        .map(schema_mnemonic)
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut numbered_frames = std::collections::BTreeMap::<u64, u64>::new();
+    let mut fallback_starts = std::collections::BTreeSet::<u64>::new();
+    let mut rows_with_start = 0usize;
+    let mut matched_rows = 0usize;
+    for row in node.children().filter(|child| child.has_tag_name("row")) {
+        let mut parsed_row = DisplayedFrameRow::default();
+        for (mnemonic, cell) in mnemonics
+            .iter()
+            .zip(row.children().filter(Node::is_element))
+        {
+            let cell_text = node_text_content(cell);
+            if !cell_text.is_empty() {
+                parsed_row.text_cells.push(cell_text.clone());
+            }
+            if parsed_row.start_ns.is_none() {
+                parsed_row.start_ns = parse_displayed_frame_start(mnemonic, cell, &cell_text);
+            }
+            if parsed_row.frame_number.is_none() {
+                parsed_row.frame_number =
+                    parse_displayed_frame_number(mnemonic, cell, &cell_text, launched_pid);
+            }
+            if parsed_row.process_pid.is_none() {
+                parsed_row.process_pid = parse_displayed_frame_pid(mnemonic, cell, &cell_text);
+            }
+        }
+
+        let Some(start_ns) = parsed_row.start_ns else {
+            continue;
+        };
+        rows_with_start = rows_with_start.saturating_add(1);
+        if !displayed_frame_row_matches_pid(&parsed_row, launched_pid) {
+            continue;
+        }
+        matched_rows = matched_rows.saturating_add(1);
+
+        if let Some(frame_number) = parsed_row.frame_number {
+            numbered_frames
+                .entry(frame_number)
+                .and_modify(|current| *current = (*current).min(start_ns))
+                .or_insert(start_ns);
+        } else {
+            fallback_starts.insert(start_ns);
+        }
+    }
+
+    if !numbered_frames.is_empty() {
+        return Ok(numbered_frames.into_values().collect());
+    }
+    if !fallback_starts.is_empty() {
+        return Ok(fallback_starts.into_iter().collect());
+    }
+    if rows_with_start == 0 {
+        bail!("displayed surfaces table did not expose a parseable frame start timestamp");
+    }
+    if matched_rows == 0 {
+        bail!(
+            "displayed surfaces rows had timestamps but none matched launched pid {launched_pid}"
+        );
+    }
+    Ok(Vec::new())
+}
+
+#[derive(Default)]
+struct DisplayedFrameRow {
+    start_ns: Option<u64>,
+    frame_number: Option<u64>,
+    process_pid: Option<u32>,
+    text_cells: Vec<String>,
+}
+
+fn parse_displayed_frame_start(mnemonic: &str, cell: Node<'_, '_>, cell_text: &str) -> Option<u64> {
+    if mnemonic == "start" || mnemonic.ends_with("-start") || mnemonic.contains("timestamp") {
+        return node_value(cell)
+            .and_then(|value| value.parse::<u64>().ok())
+            .or_else(|| cell_text.parse::<u64>().ok());
+    }
+    None
+}
+
+fn parse_displayed_frame_number(
+    mnemonic: &str,
+    cell: Node<'_, '_>,
+    cell_text: &str,
+    launched_pid: u32,
+) -> Option<u64> {
+    if mnemonic.contains("frame") {
+        if let Some(value) = node_value(cell).and_then(|value| value.parse::<u64>().ok()) {
+            return Some(value);
+        }
+        if let Some(value) = first_ascii_number(cell_text) {
+            return Some(value);
+        }
+    }
+    narrative_frame_number(cell_text, launched_pid)
+}
+
+fn parse_displayed_frame_pid(mnemonic: &str, cell: Node<'_, '_>, cell_text: &str) -> Option<u32> {
+    if mnemonic == "process" || mnemonic.contains("pid") {
+        if let Some(pid) = cell
+            .descendants()
+            .find(|child| child.has_tag_name("pid"))
+            .and_then(|pid| pid.text())
+            .and_then(|pid| pid.trim().parse::<u32>().ok())
+        {
+            return Some(pid);
+        }
+        return first_ascii_number(cell_text).and_then(|pid| u32::try_from(pid).ok());
+    }
+    None
+}
+
+fn displayed_frame_row_matches_pid(row: &DisplayedFrameRow, launched_pid: u32) -> bool {
+    if let Some(pid) = row.process_pid {
+        return pid == launched_pid;
+    }
+    if row
+        .text_cells
+        .iter()
+        .any(|text| text_mentions_pid(text, launched_pid))
+    {
+        return true;
+    }
+    true
+}
+
+fn text_mentions_pid(text: &str, pid: u32) -> bool {
+    text.contains(&format!("({pid})"))
+        || text.contains(&format!("pid {pid}"))
+        || text.contains(&format!("pid={pid}"))
+}
+
+fn narrative_frame_number(text: &str, launched_pid: u32) -> Option<u64> {
+    let candidates = [
+        format!("({launched_pid}) :Frame "),
+        format!("({launched_pid}) Frame "),
+        ":Frame ".to_string(),
+        "Frame ".to_string(),
+    ];
+    for pattern in candidates {
+        if let Some((_, suffix)) = text.split_once(pattern.as_str()) {
+            let digits: String = suffix
+                .chars()
+                .skip_while(|ch| !ch.is_ascii_digit())
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                return digits.parse().ok();
+            }
+        }
+    }
+    None
+}
+
+fn first_ascii_number(text: &str) -> Option<u64> {
+    let mut digits = String::new();
+    let mut saw_digit = false;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            saw_digit = true;
+        } else if saw_digit {
+            break;
+        }
+    }
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+}
+
+fn node_text_content(node: Node<'_, '_>) -> String {
+    node.descendants()
+        .filter_map(|child| child.text())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn parse_hitch_durations(xml: &str, launched_pid: u32) -> Result<Vec<u64>> {
+    let doc = Document::parse(xml).context("failed to parse hitches xml")?;
+    let node = doc
+        .descendants()
+        .find(|node| node.has_tag_name("node"))
+        .context("missing hitches node")?;
+    let schema = node
+        .children()
+        .find(|child| child.has_tag_name("schema"))
+        .context("missing hitches schema")?;
+    let mnemonics = schema
+        .children()
+        .filter(|child| child.has_tag_name("col"))
+        .map(schema_mnemonic)
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut durations = Vec::new();
+    for row in node.children().filter(|child| child.has_tag_name("row")) {
+        let mut duration_ns = None;
+        let mut process_pid = None;
+        for (mnemonic, cell) in mnemonics
+            .iter()
+            .zip(row.children().filter(Node::is_element))
+        {
+            match mnemonic.as_str() {
+                "duration" => {
+                    duration_ns = node_value(cell).and_then(|value| value.parse::<u64>().ok());
+                }
+                "process" => {
+                    process_pid = cell
+                        .children()
+                        .find(|child| child.has_tag_name("pid"))
+                        .and_then(|pid| pid.text())
+                        .and_then(|pid| pid.trim().parse::<u32>().ok());
+                }
+                _ => {}
+            }
+        }
+
+        if process_pid.is_some_and(|pid| pid == launched_pid) {
+            if let Some(duration_ns) = duration_ns {
+                durations.push(duration_ns);
+            }
+        }
+    }
+
+    Ok(durations)
 }
 
 fn summarize_micro_latency(
@@ -869,6 +1723,30 @@ fn run_command(command: &mut Command, description: String) -> Result<()> {
     Ok(())
 }
 
+fn run_xctrace_record_command(
+    command: &mut Command,
+    description: String,
+    trace_path: &Path,
+) -> Result<()> {
+    let status = command
+        .stdin(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to start {description}"))?;
+    if status.success() {
+        return Ok(());
+    }
+
+    if status.code() == Some(54) && trace_path.exists() {
+        eprintln!(
+            "{description} returned status 54 after writing {}; continuing",
+            trace_path.display()
+        );
+        return Ok(());
+    }
+
+    bail!("{description} failed with status {status}");
+}
+
 fn read_ndjson<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -907,15 +1785,15 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[derive(Clone, Debug, Serialize)]
 struct ComparisonSummary {
-    baseline_git_sha: String,
-    candidate_git_sha: String,
+    baseline: ComparedTargetSummary,
+    candidate: ComparedTargetSummary,
     scenarios: Vec<ScenarioComparison>,
 }
 
 impl ComparisonSummary {
     fn from_runs(
-        baseline: &BuildSpec,
-        candidate: &BuildSpec,
+        baseline: &BenchmarkTargetSpec,
+        candidate: &BenchmarkTargetSpec,
         runs: Vec<RunResult>,
     ) -> Result<Self> {
         let mut scenarios = Vec::new();
@@ -938,10 +1816,29 @@ impl ComparisonSummary {
         }
 
         Ok(Self {
-            baseline_git_sha: baseline.git_sha.clone(),
-            candidate_git_sha: candidate.git_sha.clone(),
+            baseline: ComparedTargetSummary::from_spec(baseline),
+            candidate: ComparedTargetSummary::from_spec(candidate),
             scenarios,
         })
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ComparedTargetSummary {
+    label: String,
+    name: String,
+    source_path: String,
+    git_sha: Option<String>,
+}
+
+impl ComparedTargetSummary {
+    fn from_spec(target: &BenchmarkTargetSpec) -> Self {
+        Self {
+            label: target.label.to_string(),
+            name: target.display_name().to_string(),
+            source_path: target.source_path.display().to_string(),
+            git_sha: target.git_sha.clone(),
+        }
     }
 }
 
@@ -956,13 +1853,41 @@ struct ScenarioComparison {
 impl ScenarioComparison {
     fn new(scenario: String, baseline: RunResult, candidate: RunResult) -> Self {
         let deltas = ScenarioDeltas {
-            frame_p95_ms: candidate.app_summary.frame_p95_ms - baseline.app_summary.frame_p95_ms,
-            frame_p99_ms: candidate.app_summary.frame_p99_ms - baseline.app_summary.frame_p99_ms,
-            cpu_avg_percent: candidate.app_summary.cpu_avg_percent
-                - baseline.app_summary.cpu_avg_percent,
+            frame_p50_ms: option_animation_delta(&candidate, &baseline, |summary| {
+                summary.frame_p50_ms
+            }),
+            frame_p95_ms: option_animation_delta(&candidate, &baseline, |summary| {
+                summary.frame_p95_ms
+            }),
+            frame_p99_ms: option_animation_delta(&candidate, &baseline, |summary| {
+                summary.frame_p99_ms
+            }),
+            fps_avg: option_animation_delta(&candidate, &baseline, |summary| summary.fps_avg),
+            hitch_max_ms: option_animation_delta(&candidate, &baseline, |summary| {
+                summary.hitch_max_ms
+            }),
+            activity_monitor_cpu_percent: option_f32_delta(
+                candidate.energy_summary.cpu_percent,
+                baseline.energy_summary.cpu_percent,
+            ),
             idle_wakeups: option_delta(
                 candidate.energy_summary.idle_wakeups,
                 baseline.energy_summary.idle_wakeups,
+            ),
+            hitch_count: option_animation_i64_delta(&candidate, &baseline, |summary| {
+                summary.hitch_count
+            }),
+            memory_bytes: option_i64_delta(
+                candidate.energy_summary.memory_bytes,
+                baseline.energy_summary.memory_bytes,
+            ),
+            disk_bytes_read: option_i64_delta(
+                candidate.energy_summary.disk_bytes_read,
+                baseline.energy_summary.disk_bytes_read,
+            ),
+            disk_bytes_written: option_i64_delta(
+                candidate.energy_summary.disk_bytes_written,
+                baseline.energy_summary.disk_bytes_written,
             ),
             idle_burst_first_frame_ms: option_f32_delta(
                 candidate
@@ -1048,10 +1973,17 @@ impl ScenarioComparison {
 
 #[derive(Clone, Debug, Serialize)]
 struct ScenarioDeltas {
-    frame_p95_ms: f32,
-    frame_p99_ms: f32,
-    cpu_avg_percent: f32,
+    frame_p50_ms: Option<f32>,
+    frame_p95_ms: Option<f32>,
+    frame_p99_ms: Option<f32>,
+    fps_avg: Option<f32>,
+    hitch_max_ms: Option<f32>,
+    activity_monitor_cpu_percent: Option<f32>,
     idle_wakeups: Option<i64>,
+    hitch_count: Option<i64>,
+    memory_bytes: Option<i64>,
+    disk_bytes_read: Option<i64>,
+    disk_bytes_written: Option<i64>,
     idle_burst_first_frame_ms: Option<f32>,
     idle_burst_last_frame_ms: Option<f32>,
     idle_burst_frames_until_settle: Option<i64>,
@@ -1081,6 +2013,36 @@ fn option_f32_delta(candidate: Option<f32>, baseline: Option<f32>) -> Option<f32
     }
 }
 
+fn option_animation_delta(
+    candidate: &RunResult,
+    baseline: &RunResult,
+    metric: impl Fn(&AnimationSummary) -> Option<f32>,
+) -> Option<f32> {
+    match (
+        candidate.animation_summary.as_ref(),
+        baseline.animation_summary.as_ref(),
+    ) {
+        (Some(candidate), Some(baseline)) => option_f32_delta(metric(candidate), metric(baseline)),
+        _ => None,
+    }
+}
+
+fn option_animation_i64_delta(
+    candidate: &RunResult,
+    baseline: &RunResult,
+    metric: impl Fn(&AnimationSummary) -> u64,
+) -> Option<i64> {
+    match (
+        candidate.animation_summary.as_ref(),
+        baseline.animation_summary.as_ref(),
+    ) {
+        (Some(candidate), Some(baseline)) => {
+            Some(metric(candidate) as i64 - metric(baseline) as i64)
+        }
+        _ => None,
+    }
+}
+
 fn write_report_artifacts(output_root: &Path, summary: &ComparisonSummary) -> Result<()> {
     write_json(&output_root.join("summary.json"), summary)?;
     fs::write(output_root.join("report.md"), render_report(summary)).with_context(|| {
@@ -1095,93 +2057,286 @@ fn render_report(summary: &ComparisonSummary) -> String {
     let mut report = String::new();
     report.push_str("# Termy Render Benchmark Report\n\n");
     report.push_str(&format!(
-        "Baseline `{}` vs candidate `{}`.\n\n",
-        summary.baseline_git_sha, summary.candidate_git_sha
+        "Baseline `{}` ({}) vs candidate `{}` ({}).\n\n",
+        summary.baseline.name,
+        summary.baseline.label,
+        summary.candidate.name,
+        summary.candidate.label
+    ));
+    report.push_str(&format!(
+        "- Baseline source: `{}`{}\n",
+        summary.baseline.source_path,
+        summary
+            .baseline
+            .git_sha
+            .as_ref()
+            .map(|sha| format!(" (`{sha}`)"))
+            .unwrap_or_default()
+    ));
+    report.push_str(&format!(
+        "- Candidate source: `{}`{}\n\n",
+        summary.candidate.source_path,
+        summary
+            .candidate
+            .git_sha
+            .as_ref()
+            .map(|sha| format!(" (`{sha}`)"))
+            .unwrap_or_default()
     ));
 
     for scenario in &summary.scenarios {
         report.push_str(&format!("## {}\n\n", scenario.scenario));
+        report.push_str("### Shared external metrics\n\n");
         report.push_str("| Metric | Baseline | Candidate | Delta |\n");
         report.push_str("| --- | ---: | ---: | ---: |\n");
         report.push_str(&format!(
-            "| Frame p50 ms | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.frame_p50_ms,
-            scenario.candidate.app_summary.frame_p50_ms,
-            scenario.candidate.app_summary.frame_p50_ms
-                - scenario.baseline.app_summary.frame_p50_ms
+            "| Displayed frame p50 ms | {} | {} | {} |\n",
+            format_option_f32(
+                scenario
+                    .baseline
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p50_ms)
+            ),
+            format_option_f32(
+                scenario
+                    .candidate
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p50_ms)
+            ),
+            format_option_f32(scenario.deltas.frame_p50_ms),
         ));
         report.push_str(&format!(
-            "| Frame p95 ms | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.frame_p95_ms,
-            scenario.candidate.app_summary.frame_p95_ms,
-            scenario.deltas.frame_p95_ms
+            "| Displayed frame p95 ms | {} | {} | {} |\n",
+            format_option_f32(
+                scenario
+                    .baseline
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p95_ms)
+            ),
+            format_option_f32(
+                scenario
+                    .candidate
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p95_ms)
+            ),
+            format_option_f32(scenario.deltas.frame_p95_ms),
         ));
         report.push_str(&format!(
-            "| Frame p99 ms | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.frame_p99_ms,
-            scenario.candidate.app_summary.frame_p99_ms,
-            scenario.deltas.frame_p99_ms
+            "| Displayed frame p99 ms | {} | {} | {} |\n",
+            format_option_f32(
+                scenario
+                    .baseline
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p99_ms)
+            ),
+            format_option_f32(
+                scenario
+                    .candidate
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.frame_p99_ms)
+            ),
+            format_option_f32(scenario.deltas.frame_p99_ms),
         ));
         report.push_str(&format!(
-            "| FPS avg | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.fps_avg,
-            scenario.candidate.app_summary.fps_avg,
-            scenario.candidate.app_summary.fps_avg - scenario.baseline.app_summary.fps_avg
+            "| Displayed FPS avg | {} | {} | {} |\n",
+            format_option_f32(
+                scenario
+                    .baseline
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.fps_avg)
+            ),
+            format_option_f32(
+                scenario
+                    .candidate
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.fps_avg)
+            ),
+            format_option_f32(scenario.deltas.fps_avg),
         ));
         report.push_str(&format!(
-            "| CPU avg % | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.cpu_avg_percent,
-            scenario.candidate.app_summary.cpu_avg_percent,
-            scenario.deltas.cpu_avg_percent
+            "| Displayed frame capture | {} | {} | {} |\n",
+            format_animation_capture_status(scenario.baseline.animation_summary.as_ref()),
+            format_animation_capture_status(scenario.candidate.animation_summary.as_ref()),
+            "n/a",
         ));
         report.push_str(&format!(
-            "| CPU max % | {:.2} | {:.2} | {:.2} |\n",
-            scenario.baseline.app_summary.cpu_max_percent,
-            scenario.candidate.app_summary.cpu_max_percent,
-            scenario.candidate.app_summary.cpu_max_percent
-                - scenario.baseline.app_summary.cpu_max_percent
+            "| Hitches | {} | {} | {} |\n",
+            scenario
+                .baseline
+                .animation_summary
+                .as_ref()
+                .map(|summary| summary.hitch_count.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            scenario
+                .candidate
+                .animation_summary
+                .as_ref()
+                .map(|summary| summary.hitch_count.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            format_option_i64(scenario.deltas.hitch_count),
         ));
         report.push_str(&format!(
-            "| Runtime wakeups | {} | {} | {} |\n",
-            scenario.baseline.app_summary.runtime_wakeups,
-            scenario.candidate.app_summary.runtime_wakeups,
-            scenario.candidate.app_summary.runtime_wakeups as i64
-                - scenario.baseline.app_summary.runtime_wakeups as i64
+            "| Hitch max ms | {} | {} | {} |\n",
+            format_option_f32(
+                scenario
+                    .baseline
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.hitch_max_ms)
+            ),
+            format_option_f32(
+                scenario
+                    .candidate
+                    .animation_summary
+                    .as_ref()
+                    .and_then(|summary| summary.hitch_max_ms)
+            ),
+            format_option_f32(scenario.deltas.hitch_max_ms),
         ));
         report.push_str(&format!(
-            "| View wake signals | {} | {} | {} |\n",
-            scenario.baseline.app_summary.view_wake_signals,
-            scenario.candidate.app_summary.view_wake_signals,
-            scenario.candidate.app_summary.view_wake_signals as i64
-                - scenario.baseline.app_summary.view_wake_signals as i64
+            "| Activity Monitor CPU % | {} | {} | {} |\n",
+            format_option_f32(scenario.baseline.energy_summary.cpu_percent),
+            format_option_f32(scenario.candidate.energy_summary.cpu_percent),
+            format_option_f32(scenario.deltas.activity_monitor_cpu_percent),
         ));
         report.push_str(&format!(
-            "| Drain passes | {} | {} | {} |\n",
-            scenario.baseline.app_summary.terminal_event_drain_passes,
-            scenario.candidate.app_summary.terminal_event_drain_passes,
-            scenario.candidate.app_summary.terminal_event_drain_passes as i64
-                - scenario.baseline.app_summary.terminal_event_drain_passes as i64
+            "| Physical memory bytes | {} | {} | {} |\n",
+            format_option_u64(scenario.baseline.energy_summary.memory_bytes),
+            format_option_u64(scenario.candidate.energy_summary.memory_bytes),
+            format_option_i64(scenario.deltas.memory_bytes),
         ));
         report.push_str(&format!(
-            "| Redraws | {} | {} | {} |\n",
-            scenario.baseline.app_summary.terminal_redraws,
-            scenario.candidate.app_summary.terminal_redraws,
-            scenario.candidate.app_summary.terminal_redraws as i64
-                - scenario.baseline.app_summary.terminal_redraws as i64
-        ));
-        report.push_str(&format!(
-            "| Alt-screen fallback redraws | {} | {} | {} |\n",
-            scenario.baseline.app_summary.alt_screen_fallback_redraws,
-            scenario.candidate.app_summary.alt_screen_fallback_redraws,
-            scenario.candidate.app_summary.alt_screen_fallback_redraws as i64
-                - scenario.baseline.app_summary.alt_screen_fallback_redraws as i64
-        ));
-        report.push_str(&format!(
-            "| Idle wakeups | {} | {} | {} |\n\n",
+            "| Idle wakeups | {} | {} | {} |\n",
             format_option_u64(scenario.baseline.energy_summary.idle_wakeups),
             format_option_u64(scenario.candidate.energy_summary.idle_wakeups),
             format_option_i64(scenario.deltas.idle_wakeups),
         ));
+        report.push_str(&format!(
+            "| Disk bytes read | {} | {} | {} |\n",
+            format_option_u64(scenario.baseline.energy_summary.disk_bytes_read),
+            format_option_u64(scenario.candidate.energy_summary.disk_bytes_read),
+            format_option_i64(scenario.deltas.disk_bytes_read),
+        ));
+        report.push_str(&format!(
+            "| Disk bytes written | {} | {} | {} |\n\n",
+            format_option_u64(scenario.baseline.energy_summary.disk_bytes_written),
+            format_option_u64(scenario.candidate.energy_summary.disk_bytes_written),
+            format_option_i64(scenario.deltas.disk_bytes_written),
+        ));
+
+        match (
+            scenario.baseline.app_summary.as_ref(),
+            scenario.candidate.app_summary.as_ref(),
+        ) {
+            (Some(baseline), Some(candidate)) => {
+                report.push_str("### App diagnostics\n\n");
+                report.push_str("| Metric | Baseline | Candidate | Delta |\n");
+                report.push_str("| --- | ---: | ---: | ---: |\n");
+                report.push_str(&format!(
+                    "| Frame p50 ms | {:.2} | {:.2} | {:.2} |\n",
+                    baseline.frame_p50_ms,
+                    candidate.frame_p50_ms,
+                    candidate.frame_p50_ms - baseline.frame_p50_ms
+                ));
+                report.push_str(&format!(
+                    "| Frame p95 ms | {:.2} | {:.2} | {} |\n",
+                    baseline.frame_p95_ms,
+                    candidate.frame_p95_ms,
+                    format_option_f32(scenario.deltas.frame_p95_ms),
+                ));
+                report.push_str(&format!(
+                    "| Frame p99 ms | {:.2} | {:.2} | {} |\n",
+                    baseline.frame_p99_ms,
+                    candidate.frame_p99_ms,
+                    format_option_f32(scenario.deltas.frame_p99_ms),
+                ));
+                report.push_str(&format!(
+                    "| FPS avg | {:.2} | {:.2} | {} |\n",
+                    baseline.fps_avg,
+                    candidate.fps_avg,
+                    format_option_f32(scenario.deltas.fps_avg),
+                ));
+                report.push_str(&format!(
+                    "| Runtime wakeups | {} | {} | {} |\n",
+                    baseline.runtime_wakeups,
+                    candidate.runtime_wakeups,
+                    candidate.runtime_wakeups as i64 - baseline.runtime_wakeups as i64
+                ));
+                report.push_str(&format!(
+                    "| View wake signals | {} | {} | {} |\n",
+                    baseline.view_wake_signals,
+                    candidate.view_wake_signals,
+                    candidate.view_wake_signals as i64 - baseline.view_wake_signals as i64
+                ));
+                report.push_str(&format!(
+                    "| Drain passes | {} | {} | {} |\n",
+                    baseline.terminal_event_drain_passes,
+                    candidate.terminal_event_drain_passes,
+                    candidate.terminal_event_drain_passes as i64
+                        - baseline.terminal_event_drain_passes as i64
+                ));
+                report.push_str(&format!(
+                    "| Redraws | {} | {} | {} |\n",
+                    baseline.terminal_redraws,
+                    candidate.terminal_redraws,
+                    candidate.terminal_redraws as i64 - baseline.terminal_redraws as i64
+                ));
+                report.push_str(&format!(
+                    "| Grid paints | {} | {} | {} |\n",
+                    baseline.grid_paint_count,
+                    candidate.grid_paint_count,
+                    candidate.grid_paint_count as i64 - baseline.grid_paint_count as i64
+                ));
+                report.push_str(&format!(
+                    "| shape_line calls | {} | {} | {} |\n",
+                    baseline.shape_line_calls,
+                    candidate.shape_line_calls,
+                    candidate.shape_line_calls as i64 - baseline.shape_line_calls as i64
+                ));
+                report.push_str(&format!(
+                    "| Shaped-line cache hits | {} | {} | {} |\n",
+                    baseline.shaped_line_cache_hits,
+                    candidate.shaped_line_cache_hits,
+                    candidate.shaped_line_cache_hits as i64
+                        - baseline.shaped_line_cache_hits as i64
+                ));
+                report.push_str(&format!(
+                    "| Shaped-line cache misses | {} | {} | {} |\n",
+                    baseline.shaped_line_cache_misses,
+                    candidate.shaped_line_cache_misses,
+                    candidate.shaped_line_cache_misses as i64
+                        - baseline.shaped_line_cache_misses as i64
+                ));
+                report.push_str(&format!(
+                    "| Alt-screen fallback redraws | {} | {} | {} |\n\n",
+                    baseline.alt_screen_fallback_redraws,
+                    candidate.alt_screen_fallback_redraws,
+                    candidate.alt_screen_fallback_redraws as i64
+                        - baseline.alt_screen_fallback_redraws as i64
+                ));
+            }
+            (Some(summary), None) => {
+                report.push_str("### App diagnostics\n\n");
+                render_single_app_diagnostics(&mut report, "Baseline", summary);
+            }
+            (None, Some(summary)) => {
+                report.push_str("### App diagnostics\n\n");
+                render_single_app_diagnostics(&mut report, "Candidate", summary);
+            }
+            (None, None) => {
+                report.push_str(
+                    "### App diagnostics\n\nApp-internal frame and redraw metrics were unavailable for both targets in this scenario.\n\n",
+                );
+            }
+        }
 
         if let (Some(baseline), Some(candidate)) = (
             scenario.baseline.micro_latency.idle_burst.as_ref(),
@@ -1260,24 +2415,27 @@ fn render_report(summary: &ComparisonSummary) -> String {
         }
 
         report.push_str("Findings:\n");
-        report.push_str(&format!(
-            "- Candidate {} frame p95 by {:.2} ms.\n",
-            if scenario.deltas.frame_p95_ms < 0.0 {
-                "improves"
-            } else {
-                "regresses"
-            },
-            scenario.deltas.frame_p95_ms.abs()
-        ));
-        report.push_str(&format!(
-            "- Candidate {} CPU avg by {:.2}%.\n\n",
-            if scenario.deltas.cpu_avg_percent < 0.0 {
-                "reduces"
-            } else {
-                "increases"
-            },
-            scenario.deltas.cpu_avg_percent.abs()
-        ));
+        if let Some(delta) = scenario.deltas.activity_monitor_cpu_percent {
+            report.push_str(&format!(
+                "- Candidate {} Activity Monitor CPU by {:.2}%.\n",
+                if delta < 0.0 { "reduces" } else { "increases" },
+                delta.abs()
+            ));
+        }
+        if let Some(delta) = scenario.deltas.fps_avg {
+            report.push_str(&format!(
+                "- Candidate {} displayed FPS by {:.2}.\n",
+                if delta > 0.0 { "improves" } else { "regresses" },
+                delta.abs()
+            ));
+        }
+        if let Some(delta) = scenario.deltas.frame_p95_ms {
+            report.push_str(&format!(
+                "- Candidate {} displayed frame p95 by {:.2} ms.\n",
+                if delta < 0.0 { "improves" } else { "regresses" },
+                delta.abs()
+            ));
+        }
         if let Some(delta) = scenario.deltas.idle_burst_first_frame_ms {
             report.push_str(&format!(
                 "- Candidate {} idle-burst first-frame latency by {:.2} ms.\n",
@@ -1292,10 +2450,113 @@ fn render_report(summary: &ComparisonSummary) -> String {
                 delta.abs()
             ));
         }
+        if let Some(animation_summary) = scenario.baseline.animation_summary.as_ref()
+            && !matches!(
+                animation_summary.displayed_frame_capture_status,
+                FrameCaptureStatus::Parsed
+            )
+        {
+            report.push_str(&format!(
+                "- Baseline displayed-frame capture is {}{}.\n",
+                format_frame_capture_status_label(
+                    &animation_summary.displayed_frame_capture_status
+                ),
+                animation_summary
+                    .displayed_frame_capture_detail
+                    .as_ref()
+                    .map(|detail| format!(": {detail}"))
+                    .unwrap_or_default()
+            ));
+        }
+        if let Some(animation_summary) = scenario.candidate.animation_summary.as_ref()
+            && !matches!(
+                animation_summary.displayed_frame_capture_status,
+                FrameCaptureStatus::Parsed
+            )
+        {
+            report.push_str(&format!(
+                "- Candidate displayed-frame capture is {}{}.\n",
+                format_frame_capture_status_label(
+                    &animation_summary.displayed_frame_capture_status
+                ),
+                animation_summary
+                    .displayed_frame_capture_detail
+                    .as_ref()
+                    .map(|detail| format!(": {detail}"))
+                    .unwrap_or_default()
+            ));
+        }
+        if scenario.baseline.app_summary.is_some() || scenario.candidate.app_summary.is_some() {
+            report.push_str(
+                "- Termy-only redraw diagnostics are app-specific; use the shared external metrics table for apples-to-apples frame comparison, and the app diagnostics section to explain Termy-side churn.\n",
+            );
+        }
         report.push('\n');
     }
 
     report
+}
+
+fn render_single_app_diagnostics(report: &mut String, label: &str, summary: &AppSummary) {
+    report.push_str(&format!(
+        "Only `{label}` exposed in-app diagnostics for this scenario.\n\n"
+    ));
+    report.push_str(&format!("| Metric | {label} |\n"));
+    report.push_str("| --- | ---: |\n");
+    report.push_str(&format!("| Frame p50 ms | {:.2} |\n", summary.frame_p50_ms));
+    report.push_str(&format!("| Frame p95 ms | {:.2} |\n", summary.frame_p95_ms));
+    report.push_str(&format!("| Frame p99 ms | {:.2} |\n", summary.frame_p99_ms));
+    report.push_str(&format!("| FPS avg | {:.2} |\n", summary.fps_avg));
+    report.push_str(&format!(
+        "| Runtime wakeups | {} |\n",
+        summary.runtime_wakeups
+    ));
+    report.push_str(&format!(
+        "| View wake signals | {} |\n",
+        summary.view_wake_signals
+    ));
+    report.push_str(&format!(
+        "| Drain passes | {} |\n",
+        summary.terminal_event_drain_passes
+    ));
+    report.push_str(&format!("| Redraws | {} |\n", summary.terminal_redraws));
+    report.push_str(&format!("| Grid paints | {} |\n", summary.grid_paint_count));
+    report.push_str(&format!(
+        "| shape_line calls | {} |\n",
+        summary.shape_line_calls
+    ));
+    report.push_str(&format!(
+        "| Shaped-line cache hits | {} |\n",
+        summary.shaped_line_cache_hits
+    ));
+    report.push_str(&format!(
+        "| Shaped-line cache misses | {} |\n",
+        summary.shaped_line_cache_misses
+    ));
+    report.push_str(&format!(
+        "| Alt-screen fallback redraws | {} |\n\n",
+        summary.alt_screen_fallback_redraws
+    ));
+}
+
+fn format_animation_capture_status(summary: Option<&AnimationSummary>) -> String {
+    let Some(summary) = summary else {
+        return "n/a".to_string();
+    };
+    let mut label = format_frame_capture_status_label(&summary.displayed_frame_capture_status);
+    if let Some(detail) = summary.displayed_frame_capture_detail.as_ref() {
+        label.push_str(": ");
+        label.push_str(detail);
+    }
+    label
+}
+
+fn format_frame_capture_status_label(status: &FrameCaptureStatus) -> String {
+    match status {
+        FrameCaptureStatus::Parsed => "parsed".to_string(),
+        FrameCaptureStatus::NoFrames => "no_frames".to_string(),
+        FrameCaptureStatus::ParserError => "parser_error".to_string(),
+    }
 }
 
 fn format_option_u64(value: Option<u64>) -> String {
@@ -1319,15 +2580,53 @@ fn format_option_f32(value: Option<f32>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameEvent, MarkerEvent, Scenario, parse_single_row_table, render_report,
-        summarize_echo_train_latency, summarize_idle_burst_latency,
+        BenchmarkDriverSpec, FrameCaptureStatus, FrameEvent, GhosttyVersion, MarkerEvent, Scenario,
+        create_ghostty_launch_artifacts, parse_animation_summary, parse_displayed_frame_starts,
+        parse_ghostty_version, parse_single_row_table, render_report, summarize_echo_train_latency,
+        summarize_idle_burst_latency,
     };
+    use std::{fs, path::PathBuf};
 
     #[test]
     fn parses_scenario_names() {
         assert_eq!(Scenario::parse("idle-burst").unwrap(), Scenario::IdleBurst);
         assert_eq!(Scenario::parse("echo-train").unwrap(), Scenario::EchoTrain);
         assert!(Scenario::parse("nope").is_err());
+    }
+
+    #[test]
+    fn parses_ghostty_version_output() {
+        assert_eq!(
+            parse_ghostty_version("Ghostty 1.2.3\n"),
+            Some(GhosttyVersion {
+                major: 1,
+                minor: 2,
+                patch: 3,
+            })
+        );
+        assert_eq!(
+            parse_ghostty_version("v1.2.0-dev"),
+            Some(GhosttyVersion {
+                major: 1,
+                minor: 2,
+                patch: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn creates_ghostty_launch_artifacts_with_direct_initial_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let driver = BenchmarkDriverSpec {
+            root: PathBuf::from("/tmp"),
+            xtask_binary: PathBuf::from("/Users/test/bin/xtask"),
+        };
+        let artifacts =
+            create_ghostty_launch_artifacts(temp.path(), &driver, Scenario::IdleBurst, 13).unwrap();
+        let config = fs::read_to_string(&artifacts.config_path).unwrap();
+        assert!(config.contains("initial-command = direct:"));
+        assert!(config.contains("quit-after-last-window-closed = true"));
+        assert!(config.contains("window-width = 128"));
     }
 
     #[test]
@@ -1348,6 +2647,81 @@ mod tests {
         let parsed = parse_single_row_table(xml).unwrap();
         assert_eq!(parsed.get("cpu-total").unwrap(), "42");
         assert_eq!(parsed.get("idle-wakeups").unwrap(), "7");
+    }
+
+    #[test]
+    fn parse_displayed_frame_starts_accepts_process_pid_and_numeric_frame_column() {
+        let xml = r#"<?xml version="1.0"?>
+<trace-query-result>
+  <node>
+    <schema name="displayed-surfaces-interval">
+      <col><mnemonic>start</mnemonic></col>
+      <col><mnemonic>process</mnemonic></col>
+      <col><mnemonic>frame-number</mnemonic></col>
+    </schema>
+    <row>
+      <start>100</start>
+      <process><pid>42</pid></process>
+      <frame>7</frame>
+    </row>
+    <row>
+      <start>160</start>
+      <process><pid>42</pid></process>
+      <frame>8</frame>
+    </row>
+    <row>
+      <start>220</start>
+      <process><pid>99</pid></process>
+      <frame>9</frame>
+    </row>
+  </node>
+</trace-query-result>"#;
+
+        let frame_starts = parse_displayed_frame_starts(xml, 42).unwrap();
+        assert_eq!(frame_starts, vec![100, 160]);
+    }
+
+    #[test]
+    fn parse_animation_summary_preserves_hitches_when_frame_capture_parser_fails() {
+        let displayed_frames = r#"<?xml version="1.0"?>
+<trace-query-result>
+  <node>
+    <schema name="displayed-surfaces-interval">
+      <col><mnemonic>event-label</mnemonic></col>
+    </schema>
+    <row>
+      <event>(42) :Frame 7</event>
+    </row>
+  </node>
+</trace-query-result>"#;
+        let hitches = r#"<?xml version="1.0"?>
+<trace-query-result>
+  <node>
+    <schema name="hitches">
+      <col><mnemonic>duration</mnemonic></col>
+      <col><mnemonic>process</mnemonic></col>
+    </schema>
+    <row>
+      <duration>50000000</duration>
+      <process><pid>42</pid></process>
+    </row>
+  </node>
+</trace-query-result>"#;
+
+        let temp = tempfile::tempdir().unwrap();
+        let displayed_frames_path = temp.path().join("displayed.xml");
+        let hitches_path = temp.path().join("hitches.xml");
+        fs::write(&displayed_frames_path, displayed_frames).unwrap();
+        fs::write(&hitches_path, hitches).unwrap();
+
+        let summary = parse_animation_summary(&displayed_frames_path, &hitches_path, 42).unwrap();
+        assert!(matches!(
+            summary.displayed_frame_capture_status,
+            FrameCaptureStatus::ParserError
+        ));
+        assert_eq!(summary.displayed_frame_count, 0);
+        assert_eq!(summary.hitch_count, 1);
+        assert_eq!(summary.hitch_max_ms, Some(50.0));
     }
 
     #[test]
@@ -1447,15 +2821,26 @@ mod tests {
     #[test]
     fn render_report_mentions_micro_latency_tables() {
         let report = render_report(&super::ComparisonSummary {
-            baseline_git_sha: "abc".to_string(),
-            candidate_git_sha: "def".to_string(),
+            baseline: super::ComparedTargetSummary {
+                label: "baseline".to_string(),
+                name: "Termy".to_string(),
+                source_path: "/tmp/baseline".to_string(),
+                git_sha: Some("abc".to_string()),
+            },
+            candidate: super::ComparedTargetSummary {
+                label: "candidate".to_string(),
+                name: "Ghostty".to_string(),
+                source_path: "/Applications/Ghostty.app".to_string(),
+                git_sha: None,
+            },
             scenarios: vec![super::ScenarioComparison {
                 scenario: "idle-burst".to_string(),
                 baseline: super::RunResult {
                     build_label: "baseline".to_string(),
-                    git_sha: "abc".to_string(),
+                    target_name: "Termy".to_string(),
+                    git_sha: Some("abc".to_string()),
                     scenario: "idle-burst".to_string(),
-                    app_summary: super::AppSummary {
+                    app_summary: Some(super::AppSummary {
                         build_label: Some("baseline".to_string()),
                         git_sha: Some("abc".to_string()),
                         scenario: "idle-burst".to_string(),
@@ -1476,16 +2861,31 @@ mod tests {
                         alt_screen_fallback_redraws: 0,
                         grid_paint_count: 1,
                         shape_line_calls: 1,
-                    },
+                        shaped_line_cache_hits: 4,
+                        shaped_line_cache_misses: 1,
+                    }),
                     energy_summary: super::EnergySummary {
                         trace_template: "Activity Monitor".to_string(),
                         cpu_total_ns: None,
-                        cpu_percent: None,
+                        cpu_percent: Some(3.0),
                         idle_wakeups: Some(10),
-                        memory_bytes: None,
-                        disk_bytes_read: None,
-                        disk_bytes_written: None,
+                        memory_bytes: Some(100),
+                        disk_bytes_read: Some(5),
+                        disk_bytes_written: Some(6),
                     },
+                    animation_summary: Some(super::AnimationSummary {
+                        trace_template: "Animation Hitches".to_string(),
+                        launched_pid: Some(1),
+                        displayed_frame_capture_status: super::FrameCaptureStatus::Parsed,
+                        displayed_frame_capture_detail: None,
+                        displayed_frame_count: 100,
+                        fps_avg: Some(59.0),
+                        frame_p50_ms: Some(16.7),
+                        frame_p95_ms: Some(20.0),
+                        frame_p99_ms: Some(25.0),
+                        hitch_count: 2,
+                        hitch_max_ms: Some(42.0),
+                    }),
                     micro_latency: super::MicroLatencySummary {
                         idle_burst: Some(super::IdleBurstLatencySummary {
                             first_frame_after_burst_ms: Some(4.0),
@@ -1497,63 +2897,61 @@ mod tests {
                 },
                 candidate: super::RunResult {
                     build_label: "candidate".to_string(),
-                    git_sha: "def".to_string(),
+                    target_name: "Ghostty".to_string(),
+                    git_sha: None,
                     scenario: "idle-burst".to_string(),
-                    app_summary: super::AppSummary {
-                        build_label: Some("candidate".to_string()),
-                        git_sha: Some("def".to_string()),
-                        scenario: "idle-burst".to_string(),
-                        duration_ms: 3000,
-                        sample_count: 2,
-                        total_frames: 5,
-                        fps_avg: 2.0,
-                        frame_p50_ms: 8.0,
-                        frame_p95_ms: 10.0,
-                        frame_p99_ms: 12.0,
-                        cpu_avg_percent: 4.0,
-                        cpu_max_percent: 6.0,
-                        memory_max_bytes: 1,
-                        runtime_wakeups: 2,
-                        view_wake_signals: 2,
-                        terminal_event_drain_passes: 2,
-                        terminal_redraws: 2,
-                        alt_screen_fallback_redraws: 0,
-                        grid_paint_count: 2,
-                        shape_line_calls: 2,
-                    },
+                    app_summary: None,
                     energy_summary: super::EnergySummary {
                         trace_template: "Activity Monitor".to_string(),
                         cpu_total_ns: None,
-                        cpu_percent: None,
+                        cpu_percent: Some(4.0),
                         idle_wakeups: Some(11),
-                        memory_bytes: None,
-                        disk_bytes_read: None,
-                        disk_bytes_written: None,
+                        memory_bytes: Some(101),
+                        disk_bytes_read: Some(7),
+                        disk_bytes_written: Some(9),
                     },
+                    animation_summary: Some(super::AnimationSummary {
+                        trace_template: "Animation Hitches".to_string(),
+                        launched_pid: Some(2),
+                        displayed_frame_capture_status: super::FrameCaptureStatus::Parsed,
+                        displayed_frame_capture_detail: None,
+                        displayed_frame_count: 105,
+                        fps_avg: Some(61.0),
+                        frame_p50_ms: Some(15.8),
+                        frame_p95_ms: Some(18.0),
+                        frame_p99_ms: Some(21.0),
+                        hitch_count: 1,
+                        hitch_max_ms: Some(28.0),
+                    }),
                     micro_latency: super::MicroLatencySummary {
-                        idle_burst: Some(super::IdleBurstLatencySummary {
-                            first_frame_after_burst_ms: Some(2.0),
-                            last_frame_after_burst_ms: Some(8.0),
-                            frames_until_settle: Some(1),
-                        }),
+                        idle_burst: None,
                         echo_train: None,
                     },
                 },
                 deltas: super::ScenarioDeltas {
-                    frame_p95_ms: -10.0,
-                    frame_p99_ms: -13.0,
-                    cpu_avg_percent: 1.0,
+                    frame_p50_ms: Some(-0.9),
+                    frame_p95_ms: Some(-2.0),
+                    frame_p99_ms: Some(-4.0),
+                    fps_avg: Some(2.0),
+                    hitch_max_ms: Some(-14.0),
+                    activity_monitor_cpu_percent: Some(1.0),
                     idle_wakeups: Some(1),
-                    idle_burst_first_frame_ms: Some(-2.0),
-                    idle_burst_last_frame_ms: Some(-4.0),
-                    idle_burst_frames_until_settle: Some(-1),
+                    hitch_count: Some(-1),
+                    memory_bytes: Some(1),
+                    disk_bytes_read: Some(2),
+                    disk_bytes_written: Some(3),
+                    idle_burst_first_frame_ms: None,
+                    idle_burst_last_frame_ms: None,
+                    idle_burst_frames_until_settle: None,
                     echo_first_frame_ms_p95: None,
                     echo_first_frame_ms_max: None,
                     echo_missed_count: None,
                 },
             }],
         });
-        assert!(report.contains("Idle-burst metric"));
-        assert!(report.contains("First frame after burst ms"));
+        assert!(report.contains("Shared external metrics"));
+        assert!(report.contains("Displayed frame p95 ms"));
+        assert!(report.contains("Only `Baseline` exposed in-app diagnostics"));
+        assert!(report.contains("Shaped-line cache hits"));
     }
 }

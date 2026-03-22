@@ -941,7 +941,7 @@ impl TerminalView {
             .unwrap_or(0);
 
         log::info!(
-            "render_metrics dt_ms={} render={} grid_paint={} full={} partial={} reuse={} dirty_span={} patched_cell={} shape_line={} total_render={} total_grid_paint={} total_full={} total_partial={} total_reuse={} total_dirty_span={} total_patched_cell={} total_shape_line={}",
+            "render_metrics dt_ms={} render={} grid_paint={} full={} partial={} reuse={} dirty_span={} patched_cell={} shape_line={} shape_hit={} shape_miss={} total_render={} total_grid_paint={} total_full={} total_partial={} total_reuse={} total_dirty_span={} total_patched_cell={} total_shape_line={} total_shape_hit={} total_shape_miss={}",
             dt_ms,
             counters_delta.render_count,
             terminal_ui_delta.grid_paint_count,
@@ -951,6 +951,8 @@ impl TerminalView {
             counters_delta.dirty_span_count,
             counters_delta.patched_cell_count,
             terminal_ui_delta.shape_line_calls,
+            terminal_ui_delta.shaped_line_cache_hits,
+            terminal_ui_delta.shaped_line_cache_misses,
             self.render_metrics.counters.render_count,
             terminal_ui_snapshot.grid_paint_count,
             self.render_metrics.counters.cache_full_count,
@@ -959,6 +961,8 @@ impl TerminalView {
             self.render_metrics.counters.dirty_span_count,
             self.render_metrics.counters.patched_cell_count,
             terminal_ui_snapshot.shape_line_calls,
+            terminal_ui_snapshot.shaped_line_cache_hits,
+            terminal_ui_snapshot.shaped_line_cache_misses,
         );
 
         self.render_metrics.last_emit_counters = self.render_metrics.counters;

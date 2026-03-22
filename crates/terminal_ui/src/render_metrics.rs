@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct TerminalUiRenderMetricsSnapshot {
     pub grid_paint_count: u64,
     pub shape_line_calls: u64,
+    pub shaped_line_cache_hits: u64,
+    pub shaped_line_cache_misses: u64,
     pub runtime_wakeup_count: u64,
 }
 
@@ -18,6 +20,12 @@ impl TerminalUiRenderMetricsSnapshot {
             shape_line_calls: self
                 .shape_line_calls
                 .saturating_sub(previous.shape_line_calls),
+            shaped_line_cache_hits: self
+                .shaped_line_cache_hits
+                .saturating_sub(previous.shaped_line_cache_hits),
+            shaped_line_cache_misses: self
+                .shaped_line_cache_misses
+                .saturating_sub(previous.shaped_line_cache_misses),
             runtime_wakeup_count: self
                 .runtime_wakeup_count
                 .saturating_sub(previous.runtime_wakeup_count),
@@ -29,6 +37,8 @@ impl TerminalUiRenderMetricsSnapshot {
 // dormant unless the app reads them.
 static GRID_PAINT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHAPE_LINE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SHAPED_LINE_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static SHAPED_LINE_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_WAKEUP_COUNT: AtomicU64 = AtomicU64::new(0);
 
 fn increment_counter(counter: &AtomicU64) {
@@ -45,6 +55,14 @@ pub(crate) fn increment_shape_line_calls() {
     increment_counter(&SHAPE_LINE_CALLS);
 }
 
+pub(crate) fn increment_shaped_line_cache_hit() {
+    increment_counter(&SHAPED_LINE_CACHE_HITS);
+}
+
+pub(crate) fn increment_shaped_line_cache_miss() {
+    increment_counter(&SHAPED_LINE_CACHE_MISSES);
+}
+
 pub(crate) fn increment_runtime_wakeup_count() {
     increment_counter(&RUNTIME_WAKEUP_COUNT);
 }
@@ -53,6 +71,8 @@ pub fn terminal_ui_render_metrics_snapshot() -> TerminalUiRenderMetricsSnapshot 
     TerminalUiRenderMetricsSnapshot {
         grid_paint_count: GRID_PAINT_COUNT.load(Ordering::Relaxed),
         shape_line_calls: SHAPE_LINE_CALLS.load(Ordering::Relaxed),
+        shaped_line_cache_hits: SHAPED_LINE_CACHE_HITS.load(Ordering::Relaxed),
+        shaped_line_cache_misses: SHAPED_LINE_CACHE_MISSES.load(Ordering::Relaxed),
         runtime_wakeup_count: RUNTIME_WAKEUP_COUNT.load(Ordering::Relaxed),
     }
 }
@@ -60,6 +80,8 @@ pub fn terminal_ui_render_metrics_snapshot() -> TerminalUiRenderMetricsSnapshot 
 pub fn terminal_ui_render_metrics_reset() {
     GRID_PAINT_COUNT.store(0, Ordering::Relaxed);
     SHAPE_LINE_CALLS.store(0, Ordering::Relaxed);
+    SHAPED_LINE_CACHE_HITS.store(0, Ordering::Relaxed);
+    SHAPED_LINE_CACHE_MISSES.store(0, Ordering::Relaxed);
     RUNTIME_WAKEUP_COUNT.store(0, Ordering::Relaxed);
 }
 
@@ -87,6 +109,8 @@ mod tests {
         let snapshot = terminal_ui_render_metrics_snapshot();
         assert_eq!(snapshot.grid_paint_count, 1);
         assert_eq!(snapshot.shape_line_calls, 0);
+        assert_eq!(snapshot.shaped_line_cache_hits, 0);
+        assert_eq!(snapshot.shaped_line_cache_misses, 0);
         assert_eq!(snapshot.runtime_wakeup_count, 0);
     }
 
@@ -99,6 +123,23 @@ mod tests {
         let snapshot = terminal_ui_render_metrics_snapshot();
         assert_eq!(snapshot.grid_paint_count, 0);
         assert_eq!(snapshot.shape_line_calls, 2);
+        assert_eq!(snapshot.shaped_line_cache_hits, 0);
+        assert_eq!(snapshot.shaped_line_cache_misses, 0);
+        assert_eq!(snapshot.runtime_wakeup_count, 0);
+    }
+
+    #[test]
+    fn increment_shaped_line_cache_updates_snapshot() {
+        let _guard = TEST_METRICS_MUTEX.lock().unwrap();
+        terminal_ui_render_metrics_reset();
+        increment_shaped_line_cache_hit();
+        increment_shaped_line_cache_hit();
+        increment_shaped_line_cache_miss();
+        let snapshot = terminal_ui_render_metrics_snapshot();
+        assert_eq!(snapshot.grid_paint_count, 0);
+        assert_eq!(snapshot.shape_line_calls, 0);
+        assert_eq!(snapshot.shaped_line_cache_hits, 2);
+        assert_eq!(snapshot.shaped_line_cache_misses, 1);
         assert_eq!(snapshot.runtime_wakeup_count, 0);
     }
 
@@ -110,6 +151,8 @@ mod tests {
         let snapshot = terminal_ui_render_metrics_snapshot();
         assert_eq!(snapshot.grid_paint_count, 0);
         assert_eq!(snapshot.shape_line_calls, 0);
+        assert_eq!(snapshot.shaped_line_cache_hits, 0);
+        assert_eq!(snapshot.shaped_line_cache_misses, 0);
         assert_eq!(snapshot.runtime_wakeup_count, 1);
     }
 
@@ -119,6 +162,8 @@ mod tests {
         terminal_ui_render_metrics_reset();
         increment_grid_paint_count();
         increment_shape_line_calls();
+        increment_shaped_line_cache_hit();
+        increment_shaped_line_cache_miss();
         increment_runtime_wakeup_count();
         terminal_ui_render_metrics_reset();
         assert_eq!(

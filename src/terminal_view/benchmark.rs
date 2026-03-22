@@ -217,6 +217,8 @@ impl BenchmarkSession {
             alt_screen_fallback_redraws: self.counters.alt_screen_fallback_redraws,
             grid_paint_count: terminal_ui.grid_paint_count,
             shape_line_calls: terminal_ui.shape_line_calls,
+            shaped_line_cache_hits: terminal_ui.shaped_line_cache_hits,
+            shaped_line_cache_misses: terminal_ui.shaped_line_cache_misses,
         });
     }
 
@@ -364,6 +366,8 @@ impl BenchmarkSession {
             alt_screen_fallback_redraws: self.counters.alt_screen_fallback_redraws,
             grid_paint_count: terminal_ui.grid_paint_count,
             shape_line_calls: terminal_ui.shape_line_calls,
+            shaped_line_cache_hits: terminal_ui.shaped_line_cache_hits,
+            shaped_line_cache_misses: terminal_ui.shaped_line_cache_misses,
         }
     }
 }
@@ -384,6 +388,8 @@ struct BenchmarkSample {
     alt_screen_fallback_redraws: u64,
     grid_paint_count: u64,
     shape_line_calls: u64,
+    shaped_line_cache_hits: u64,
+    shaped_line_cache_misses: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -418,6 +424,8 @@ pub(super) struct BenchmarkSummary {
     pub alt_screen_fallback_redraws: u64,
     pub grid_paint_count: u64,
     pub shape_line_calls: u64,
+    pub shaped_line_cache_hits: u64,
+    pub shaped_line_cache_misses: u64,
 }
 
 fn duration_millis(duration: Duration) -> u64 {

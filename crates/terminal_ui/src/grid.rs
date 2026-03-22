@@ -1,7 +1,10 @@
-use crate::render_metrics::{increment_grid_paint_count, increment_shape_line_calls};
+use crate::render_metrics::{
+    increment_grid_paint_count, increment_shape_line_calls, increment_shaped_line_cache_hit,
+    increment_shaped_line_cache_miss,
+};
 use gpui::{
-    App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, Pixels, SharedString,
-    Size, TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
+    App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, Pixels, ShapedLine,
+    SharedString, Size, TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -187,6 +190,7 @@ struct BackgroundSpan {
 struct CachedRowPaintOps {
     background_spans: Vec<BackgroundSpan>,
     draw_ops: Vec<TextDrawOp>,
+    shaped_lines: Vec<Option<ShapedLine>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -462,6 +466,64 @@ fn sorted_dedup_rows(mut rows: Vec<usize>) -> Arc<[usize]> {
     rows.into()
 }
 
+fn text_batches_match_without_row(lhs: &TextBatch, rhs: &TextBatch) -> bool {
+    lhs.start_col == rhs.start_col
+        && lhs.text == rhs.text
+        && lhs.bold == rhs.bold
+        && lhs.fg == rhs.fg
+        && lhs.underline == rhs.underline
+        && lhs.cell_len == rhs.cell_len
+}
+
+fn block_draws_match_without_row(lhs: &BlockDraw, rhs: &BlockDraw) -> bool {
+    lhs.col == rhs.col && lhs.geometry == rhs.geometry && lhs.fg == rhs.fg
+}
+
+fn text_draw_ops_match_without_row(lhs: &TextDrawOp, rhs: &TextDrawOp) -> bool {
+    match (lhs, rhs) {
+        (TextDrawOp::Batch(lhs), TextDrawOp::Batch(rhs)) => {
+            text_batches_match_without_row(lhs, rhs)
+        }
+        (TextDrawOp::Block(lhs), TextDrawOp::Block(rhs)) => block_draws_match_without_row(lhs, rhs),
+        _ => false,
+    }
+}
+
+fn cached_row_draw_ops_match_without_row(lhs: &CachedRowPaintOps, rhs: &CachedRowPaintOps) -> bool {
+    lhs.background_spans == rhs.background_spans
+        && lhs.draw_ops.len() == rhs.draw_ops.len()
+        && lhs
+            .draw_ops
+            .iter()
+            .zip(rhs.draw_ops.iter())
+            .all(|(lhs, rhs)| text_draw_ops_match_without_row(lhs, rhs))
+}
+
+fn find_matching_previous_row_ops_index(
+    row: usize,
+    row_ops: &CachedRowPaintOps,
+    previous_row_ops: &[CachedRowPaintOps],
+) -> Option<usize> {
+    for preferred in [Some(row), row.checked_add(1), row.checked_sub(1)] {
+        let Some(index) = preferred else {
+            continue;
+        };
+        let Some(previous) = previous_row_ops.get(index) else {
+            continue;
+        };
+        if cached_row_draw_ops_match_without_row(row_ops, previous) {
+            return Some(index);
+        }
+    }
+
+    previous_row_ops.iter().enumerate().find_map(|(index, previous)| {
+        matches!(index, i if i != row && Some(i) != row.checked_add(1) && Some(i) != row.checked_sub(1))
+            .then_some(previous)
+            .filter(|previous| cached_row_draw_ops_match_without_row(row_ops, previous))
+            .map(|_| index)
+    })
+}
+
 impl Element for TerminalGrid {
     type RequestLayoutState = ();
     type PrepaintState = ();
@@ -669,9 +731,11 @@ impl TerminalGrid {
         cursor_fg: Hsla,
         highlight_fg: Hsla,
     ) -> CachedRowPaintOps {
+        let draw_ops = self.collect_row_draw_ops(row_cells, cursor_fg, highlight_fg);
         CachedRowPaintOps {
             background_spans: self.build_row_background_spans(row_cells),
-            draw_ops: self.collect_row_draw_ops(row_cells, cursor_fg, highlight_fg),
+            shaped_lines: vec![None; draw_ops.len()],
+            draw_ops,
         }
     }
 
@@ -693,7 +757,7 @@ impl TerminalGrid {
     fn paint_cached_row_ops(
         &self,
         row: usize,
-        row_ops: &CachedRowPaintOps,
+        row_ops: &mut CachedRowPaintOps,
         origin: gpui::Point<Pixels>,
         window: &mut Window,
         cx: &mut App,
@@ -734,27 +798,37 @@ impl TerminalGrid {
             self.paint_cursor_for_row(row, origin, window);
         }
 
-        for op in &row_ops.draw_ops {
+        for (index, op) in row_ops.draw_ops.iter().enumerate() {
             match op {
                 TextDrawOp::Batch(batch) => {
                     let x = origin.x + self.cell_size.width * batch.start_col as f32;
-                    let font = if batch.bold { font_bold } else { font_normal };
-                    let run = TextRun {
-                        len: batch.text.len(),
-                        font: font.clone(),
-                        color: batch.fg,
-                        background_color: None,
-                        underline: batch.underline,
-                        strikethrough: None,
+                    let line = if row_ops.shaped_lines.get(index).is_some_and(Option::is_some) {
+                        increment_shaped_line_cache_hit();
+                        row_ops.shaped_lines[index]
+                            .as_ref()
+                            .expect("cached shaped line must exist")
+                    } else {
+                        increment_shaped_line_cache_miss();
+                        increment_shape_line_calls();
+                        let font = if batch.bold { font_bold } else { font_normal };
+                        let run = TextRun {
+                            len: batch.text.len(),
+                            font: font.clone(),
+                            color: batch.fg,
+                            background_color: None,
+                            underline: batch.underline,
+                            strikethrough: None,
+                        };
+                        row_ops.shaped_lines[index] = Some(window.text_system().shape_line(
+                            batch.text.clone().into(),
+                            self.font_size,
+                            &[run],
+                            Some(self.cell_size.width),
+                        ));
+                        row_ops.shaped_lines[index]
+                            .as_ref()
+                            .expect("cached shaped line must be created")
                     };
-
-                    increment_shape_line_calls();
-                    let line = window.text_system().shape_line(
-                        batch.text.clone().into(),
-                        self.font_size,
-                        &[run],
-                        Some(self.cell_size.width),
-                    );
                     let _ = line.paint(
                         point(x, origin.y),
                         self.cell_size.height,
@@ -780,7 +854,10 @@ impl TerminalGrid {
         }
     }
 
-    fn dirty_rows_for_pass(&self, cache: &mut TerminalGridPaintCache) -> (bool, Arc<[usize]>) {
+    fn dirty_rows_for_pass(
+        &self,
+        cache: &mut TerminalGridPaintCache,
+    ) -> (bool, bool, Arc<[usize]>) {
         let style_key = self.paint_style_key();
         let style_changed = cache.style_key.as_ref() != Some(&style_key);
         cache.style_key = Some(style_key);
@@ -822,7 +899,7 @@ impl TerminalGrid {
         cache.last_cursor_cell = self.cursor_cell;
         cache.last_hovered_link_range = self.hovered_link_range;
 
-        (full_repaint, sorted_dedup_rows(rows))
+        (full_repaint, style_changed, sorted_dedup_rows(rows))
     }
 
     fn paint_cursor_for_row(&self, row: usize, origin: gpui::Point<Pixels>, window: &mut Window) {
@@ -867,10 +944,12 @@ impl TerminalGrid {
         &self,
         cache: &mut TerminalGridPaintCache,
         full_repaint: bool,
+        style_changed: bool,
         dirty_rows: &[usize],
         cursor_fg: Hsla,
         highlight_fg: Hsla,
     ) {
+        let previous_row_ops = (!style_changed).then(|| cache.row_ops.clone());
         let mut rebuild_row = |row: usize| {
             if row >= self.rows {
                 return;
@@ -884,7 +963,18 @@ impl TerminalGrid {
                 *row_slot = CachedRowPaintOps::default();
                 return;
             };
-            *row_slot = self.rebuild_cached_row_ops(row_cells.as_slice(), cursor_fg, highlight_fg);
+            let mut next_row_ops =
+                self.rebuild_cached_row_ops(row_cells.as_slice(), cursor_fg, highlight_fg);
+            if let Some(previous_row_ops) = previous_row_ops.as_ref()
+                && let Some(previous_index) =
+                    find_matching_previous_row_ops_index(row, &next_row_ops, previous_row_ops)
+            {
+                let previous = &previous_row_ops[previous_index];
+                if previous.shaped_lines.len() == next_row_ops.shaped_lines.len() {
+                    next_row_ops.shaped_lines = previous.shaped_lines.clone();
+                }
+            }
+            *row_slot = next_row_ops;
         };
 
         if full_repaint {
@@ -928,10 +1018,11 @@ impl TerminalGrid {
 
         let mut cache = self.paint_cache.0.borrow_mut();
         cache.ensure_row_capacity(self.rows);
-        let (full_repaint, dirty_rows) = self.dirty_rows_for_pass(&mut cache);
+        let (full_repaint, style_changed, dirty_rows) = self.dirty_rows_for_pass(&mut cache);
         self.rebuild_cached_rows_for_pass(
             &mut cache,
             full_repaint,
+            style_changed,
             dirty_rows.as_ref(),
             cursor_fg,
             highlight_fg,
@@ -950,7 +1041,7 @@ impl TerminalGrid {
             let row_origin = point(origin.x, origin.y + self.cell_size.height * row as f32);
             self.paint_cached_row_ops(
                 row,
-                &cache.row_ops[row],
+                &mut cache.row_ops[row],
                 row_origin,
                 window,
                 cx,
@@ -1092,16 +1183,25 @@ mod tests {
         cells: Vec<CellRenderInfo>,
         hovered: Option<(usize, usize, usize)>,
     ) -> TerminalGrid {
+        test_grid_rows(vec![cells], hovered)
+    }
+
+    fn test_grid_rows(
+        rows: Vec<Vec<CellRenderInfo>>,
+        hovered: Option<(usize, usize, usize)>,
+    ) -> TerminalGrid {
+        let row_count = rows.len();
+        let col_count = rows.iter().map(Vec::len).max().unwrap_or(0);
         TerminalGrid {
-            cells: Arc::new(vec![Arc::new(cells)]),
+            cells: Arc::new(rows.into_iter().map(Arc::new).collect()),
             paint_cache: TerminalGridPaintCacheHandle::default(),
             paint_damage: TerminalGridPaintDamage::Full,
             cell_size: Size {
                 width: px(10.0),
                 height: px(20.0),
             },
-            cols: 120,
-            rows: 40,
+            cols: col_count,
+            rows: row_count,
             clear_bg: Hsla::transparent_black(),
             terminal_surface_bg: test_color(0.0, 0.0, 0.0),
             cursor_color: test_color(0.1, 0.1, 0.1),
@@ -1465,22 +1565,25 @@ mod tests {
             last_cursor_cell: Some((0, 4)),
             ..Default::default()
         };
-        let (full, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
+        let (full, style_changed, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
         assert!(!full);
+        assert!(!style_changed);
         assert_eq!(&*dirty_rows, &[1usize, 2usize, 4usize]);
     }
 
     #[test]
     fn dirty_rows_for_pass_includes_hover_transition_rows() {
         let mut grid = test_grid(vec![test_cell(0, 0, 'a')], Some((3, 1, 2)));
+        grid.rows = 5;
         grid.paint_damage = TerminalGridPaintDamage::None;
         let mut cache = TerminalGridPaintCache {
             style_key: Some(grid.paint_style_key()),
             last_hovered_link_range: Some((1, 0, 0)),
             ..Default::default()
         };
-        let (full, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
+        let (full, style_changed, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
         assert!(!full);
+        assert!(!style_changed);
         assert_eq!(&*dirty_rows, &[1usize, 3usize]);
     }
 
@@ -1488,8 +1591,9 @@ mod tests {
     fn dirty_rows_for_pass_forces_full_repaint_when_style_changes() {
         let grid = test_grid(vec![test_cell(0, 0, 'a')], None);
         let mut cache = TerminalGridPaintCache::default();
-        let (full, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
+        let (full, style_changed, dirty_rows) = grid.dirty_rows_for_pass(&mut cache);
         assert!(full);
+        assert!(style_changed);
         assert!(dirty_rows.is_empty());
     }
 
@@ -1567,6 +1671,107 @@ mod tests {
     }
 
     #[test]
+    fn matching_previous_row_ops_ignores_row_index_for_shifted_content() {
+        let old_grid = test_grid_rows(
+            vec![vec![test_cell(0, 0, 'a')], vec![test_cell(0, 1, 'b')]],
+            None,
+        );
+        let new_grid = test_grid_rows(
+            vec![vec![test_cell(0, 0, 'b')], vec![test_cell(0, 1, 'c')]],
+            None,
+        );
+        let cursor_fg = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 1.0,
+        };
+        let highlight_fg = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.08,
+            a: 1.0,
+        };
+
+        let previous_row_ops = vec![
+            old_grid.rebuild_cached_row_ops(old_grid.cells[0].as_slice(), cursor_fg, highlight_fg),
+            old_grid.rebuild_cached_row_ops(old_grid.cells[1].as_slice(), cursor_fg, highlight_fg),
+        ];
+        let next_row_ops =
+            new_grid.rebuild_cached_row_ops(new_grid.cells[0].as_slice(), cursor_fg, highlight_fg);
+
+        assert_eq!(
+            find_matching_previous_row_ops_index(0, &next_row_ops, &previous_row_ops),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn matching_previous_row_ops_rejects_hover_style_mismatches() {
+        let previous_grid = test_grid(vec![test_cell(0, 0, 'a')], Some((0, 0, 0)));
+        let next_grid = test_grid(vec![test_cell(0, 0, 'a')], None);
+        let cursor_fg = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 1.0,
+        };
+        let highlight_fg = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.08,
+            a: 1.0,
+        };
+
+        let previous_row_ops = vec![previous_grid.rebuild_cached_row_ops(
+            previous_grid.cells[0].as_slice(),
+            cursor_fg,
+            highlight_fg,
+        )];
+        let next_row_ops = next_grid.rebuild_cached_row_ops(
+            next_grid.cells[0].as_slice(),
+            cursor_fg,
+            highlight_fg,
+        );
+
+        assert_eq!(
+            find_matching_previous_row_ops_index(0, &next_row_ops, &previous_row_ops),
+            None
+        );
+    }
+
+    #[test]
+    fn rebuild_cached_row_ops_initializes_shaped_line_slots_per_draw_op() {
+        let grid = test_grid(
+            vec![
+                test_cell(0, 0, 'a'),
+                test_cell(1, 0, '\u{2588}'),
+                test_cell(2, 0, 'b'),
+            ],
+            None,
+        );
+        let row_ops = grid.rebuild_cached_row_ops(
+            grid.cells[0].as_slice(),
+            Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: 1.0,
+            },
+            Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.08,
+                a: 1.0,
+            },
+        );
+
+        assert_eq!(row_ops.draw_ops.len(), 3);
+        assert_eq!(row_ops.shaped_lines.len(), 3);
+        assert!(row_ops.shaped_lines.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn rebuild_cached_rows_for_pass_clears_rows_missing_from_cells() {
         let mut grid = test_grid(vec![test_cell(0, 0, 'a')], None);
         grid.rows = 2;
@@ -1594,10 +1799,22 @@ mod tests {
             ..Default::default()
         };
         assert!(!cache.row_ops[1].draw_ops.is_empty());
+        assert_eq!(
+            cache.row_ops[1].shaped_lines.len(),
+            cache.row_ops[1].draw_ops.len()
+        );
 
-        grid.rebuild_cached_rows_for_pass(&mut cache, false, &[1usize], cursor_fg, highlight_fg);
+        grid.rebuild_cached_rows_for_pass(
+            &mut cache,
+            false,
+            false,
+            &[1usize],
+            cursor_fg,
+            highlight_fg,
+        );
         assert!(cache.row_ops[1].draw_ops.is_empty());
         assert!(cache.row_ops[1].background_spans.is_empty());
+        assert!(cache.row_ops[1].shaped_lines.is_empty());
     }
 
     #[test]

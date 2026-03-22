@@ -6,14 +6,8 @@ export const APPLE_ICON_PATH =
 export const WINDOWS_ICON_PATH =
   "M3 12V6.75l6-1.32v6.48L3 12zm17-9v8.75l-10 .15V5.21L20 3zM3 13l6 .09v6.81l-6-1.15V13zm17 .25V22l-10-1.91V13.1l10 .15z";
 
-interface PlatformIconProps {
-  className?: string;
-}
-
-interface LinuxIconProps {
-  className?: string;
-  imgClassName?: string;
-}
+interface PlatformIconProps { className?: string; }
+interface LinuxIconProps { className?: string; imgClassName?: string; }
 
 export function AppleIcon({ className }: PlatformIconProps): JSX.Element {
   return (
@@ -31,10 +25,7 @@ export function WindowsIcon({ className }: PlatformIconProps): JSX.Element {
   );
 }
 
-export function LinuxIcon({
-  className,
-  imgClassName,
-}: LinuxIconProps): JSX.Element {
+export function LinuxIcon({ className, imgClassName }: LinuxIconProps): JSX.Element {
   return (
     <img
       src="/linux-tux.svg"

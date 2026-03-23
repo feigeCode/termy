@@ -4,6 +4,12 @@ const MAX_THEME_SUGGESTIONS: usize = 16;
 const MAX_FONT_SUGGESTIONS: usize = 200;
 const PANE_FOCUS_MAX: f32 = 2.0;
 
+/// Format a line-height multiplier for display and persistence (two decimal
+/// places, e.g. `"1.40"`).
+fn format_line_height(value: f32) -> String {
+    format!("{value:.2}")
+}
+
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum EditableField {
@@ -11,6 +17,7 @@ pub(super) enum EditableField {
     BackgroundOpacity,
     FontFamily,
     FontSize,
+    LineHeight,
     PaddingX,
     PaddingY,
     Shell,
@@ -404,6 +411,7 @@ impl SettingsWindow {
             | EditableField::BackgroundOpacity
             | EditableField::FontFamily
             | EditableField::FontSize
+            | EditableField::LineHeight
             | EditableField::PaddingX
             | EditableField::PaddingY => Self::appearance_field_spec(field),
             EditableField::Shell
@@ -472,6 +480,16 @@ impl SettingsWindow {
                     delta: 1.0,
                     min: 1.0,
                     max: 4096.0,
+                }),
+            },
+            EditableField::LineHeight => FieldSpec {
+                root_setting: Some(RootSettingId::LineHeight),
+                codec: FieldCodec::Numeric,
+                dropdown_click_only: false,
+                numeric_step: Some(NumericStepSpec {
+                    delta: 0.05,
+                    min: termy_config_core::MIN_LINE_HEIGHT,
+                    max: termy_config_core::MAX_LINE_HEIGHT,
                 }),
             },
             EditableField::PaddingX => FieldSpec {
@@ -822,6 +840,7 @@ impl SettingsWindow {
             ),
             EditableField::FontFamily => self.config.font_family.clone(),
             EditableField::FontSize => format!("{}", self.config.font_size.round() as i32),
+            EditableField::LineHeight => format_line_height(self.config.line_height),
             EditableField::PaddingX => format!("{}", self.config.padding_x.round() as i32),
             EditableField::PaddingY => format!("{}", self.config.padding_y.round() as i32),
             EditableField::Shell => self.config.shell.clone().unwrap_or_default(),
@@ -973,6 +992,15 @@ impl SettingsWindow {
                 config::set_root_setting(
                     termy_config_core::RootSettingId::FontSize,
                     &next.to_string(),
+                )
+            }
+            EditableField::LineHeight => {
+                let next = (self.config.line_height + (delta as f32 * step.delta))
+                    .clamp(step.min, step.max);
+                self.config.line_height = next;
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::LineHeight,
+                    &format_line_height(next),
                 )
             }
             EditableField::PaddingX => {
@@ -1172,6 +1200,7 @@ mod tests {
             EditableField::BackgroundOpacity,
             EditableField::FontFamily,
             EditableField::FontSize,
+            EditableField::LineHeight,
             EditableField::PaddingX,
             EditableField::PaddingY,
             EditableField::Shell,
@@ -1238,6 +1267,7 @@ mod tests {
         let numeric_fields = [
             EditableField::BackgroundOpacity,
             EditableField::FontSize,
+            EditableField::LineHeight,
             EditableField::PaddingX,
             EditableField::PaddingY,
             EditableField::ScrollbackHistory,

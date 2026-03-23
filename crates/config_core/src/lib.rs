@@ -9,7 +9,10 @@ mod schema;
 mod types;
 
 pub use color_keys::{ColorEntryError, apply_color_entry, canonical_color_key};
-pub use constants::{SHELL_DECIDE_THEME_ID, VALID_ROOT_KEYS, VALID_SECTIONS};
+pub use constants::{
+    DEFAULT_LINE_HEIGHT, MAX_LINE_HEIGHT, MIN_LINE_HEIGHT, SHELL_DECIDE_THEME_ID, VALID_ROOT_KEYS,
+    VALID_SECTIONS,
+};
 pub use diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
 pub use document::{
     ColorSettingUpdate, apply_color_updates, remove_raw_root_key, remove_root_setting,

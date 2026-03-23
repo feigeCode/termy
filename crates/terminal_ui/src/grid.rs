@@ -717,7 +717,11 @@ impl TerminalGrid {
 
             Self::push_pending_text_batch(&mut current, &mut ops);
             current = Some(TextBatch::new(
-                cell.col, cell.row, cell.char, key, underline,
+                cell.col,
+                cell.row,
+                cell.char,
+                key,
+                underline,
             ));
         }
 
@@ -1058,11 +1062,6 @@ impl TerminalGrid {
         self.cells.iter().map(|row| row.len()).sum()
     }
 
-    #[cfg(test)]
-    fn iter_cells(&self) -> impl Iterator<Item = &CellRenderInfo> {
-        self.cells.iter().flat_map(|row| row.iter())
-    }
-
     fn cell_is_drawable_text(cell: &CellRenderInfo) -> bool {
         cell.render_text && cell.char != ' ' && cell.char != '\0' && !cell.char.is_control()
     }
@@ -1107,7 +1106,7 @@ impl TerminalGrid {
         let mut ops = Vec::with_capacity(self.cell_count());
         let mut current: Option<TextBatch> = None;
 
-        for cell in self.iter_cells() {
+        for cell in self.cells.iter().flat_map(|row| row.iter()) {
             if !Self::cell_is_drawable_text(cell) {
                 Self::push_pending_text_batch(&mut current, &mut ops);
                 continue;

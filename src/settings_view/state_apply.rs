@@ -12,6 +12,7 @@ impl SettingsWindow {
             | EditableField::BackgroundOpacity
             | EditableField::FontFamily
             | EditableField::FontSize
+            | EditableField::LineHeight
             | EditableField::PaddingX
             | EditableField::PaddingY => self.apply_appearance_field(field, value),
             EditableField::Shell
@@ -90,6 +91,28 @@ impl SettingsWindow {
                 config::set_root_setting(
                     termy_config_core::RootSettingId::FontSize,
                     &format!("{}", parsed),
+                )
+            }
+            EditableField::LineHeight => {
+                let parsed = value
+                    .parse::<f32>()
+                    .map_err(|_| "Line height must be a number".to_string())?;
+                if !parsed.is_finite() {
+                    return Err("Line height must be finite".to_string());
+                }
+                if !(termy_config_core::MIN_LINE_HEIGHT..=termy_config_core::MAX_LINE_HEIGHT)
+                    .contains(&parsed)
+                {
+                    return Err(format!(
+                        "Line height must be between {} and {}",
+                        termy_config_core::MIN_LINE_HEIGHT,
+                        termy_config_core::MAX_LINE_HEIGHT
+                    ));
+                }
+                self.config.line_height = parsed;
+                config::set_root_setting(
+                    termy_config_core::RootSettingId::LineHeight,
+                    &parsed.to_string(),
                 )
             }
             EditableField::PaddingX => {

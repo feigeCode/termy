@@ -991,11 +991,14 @@ impl SettingsWindow {
             EditableField::LineHeight => {
                 let next = (self.config.line_height + (delta as f32 * step.delta))
                     .clamp(step.min, step.max);
-                self.config.line_height = next;
-                config::set_root_setting(
+                let result = config::set_root_setting(
                     termy_config_core::RootSettingId::LineHeight,
                     &format_line_height(next),
-                )
+                );
+                if result.is_ok() {
+                    self.config.line_height = next;
+                }
+                result
             }
             EditableField::PaddingX => {
                 let next =
@@ -1278,6 +1281,14 @@ mod tests {
             assert_eq!(spec.codec, FieldCodec::Numeric);
             assert!(spec.numeric_step.is_some());
         }
+
+        let line_height_spec = SettingsWindow::field_spec(EditableField::LineHeight);
+        let step = line_height_spec
+            .numeric_step
+            .expect("missing line-height step");
+        assert!((step.delta - 0.05).abs() < f32::EPSILON);
+        assert!((step.min - termy_config_core::MIN_LINE_HEIGHT).abs() < f32::EPSILON);
+        assert!((step.max - termy_config_core::MAX_LINE_HEIGHT).abs() < f32::EPSILON);
     }
 
     #[test]

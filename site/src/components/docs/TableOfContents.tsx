@@ -13,11 +13,9 @@ export function TableOfContents({ headings }: TableOfContentsProps) {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        // Find the first heading that is intersecting
         const visibleEntries = entries.filter((entry) => entry.isIntersecting);
 
         if (visibleEntries.length > 0) {
-          // Get the topmost visible heading
           const topEntry = visibleEntries.reduce((prev, current) => {
             return prev.boundingClientRect.top < current.boundingClientRect.top
               ? prev
@@ -27,12 +25,11 @@ export function TableOfContents({ headings }: TableOfContentsProps) {
         }
       },
       {
-        rootMargin: "-80px 0px -70% 0px",
+        rootMargin: "-100px 0px -70% 0px",
         threshold: 0,
       }
     );
 
-    // Observe all heading elements
     headings.forEach((heading) => {
       const element = document.getElementById(heading.id);
       if (element) {
@@ -49,21 +46,21 @@ export function TableOfContents({ headings }: TableOfContentsProps) {
 
   return (
     <aside className="hidden xl:block w-56 shrink-0">
-      <nav className="sticky top-24 pl-4 border-l border-border/50">
-        <h4 className="text-sm font-semibold text-foreground mb-3">
+      <nav className="sticky top-24">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
           On this page
         </h4>
-        <ul className="space-y-2">
+        <ul className="space-y-2 border-l border-border/50">
           {headings.map((heading) => (
             <li key={heading.id}>
               <a
                 href={`#${heading.id}`}
-                className={`block text-sm transition-colors ${
-                  heading.level === 3 ? "pl-3" : heading.level === 4 ? "pl-6" : ""
+                className={`block text-sm py-1 transition-colors border-l-2 -ml-[2px] pl-4 ${
+                  heading.level === 3 ? "ml-3" : heading.level === 4 ? "ml-6" : ""
                 } ${
                   activeId === heading.id
-                    ? "text-primary font-medium"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? "border-primary text-primary font-medium"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                 }`}
               >
                 {heading.text}

@@ -70,8 +70,8 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
   };
 }
 
-// Import all markdown files from content directory
-const modules = import.meta.glob("/src/content/**/*.md", {
+// Import all markdown files from content directory (excluding plugins)
+const modules = import.meta.glob(["/src/content/**/*.md", "!/src/content/plugins/**"], {
   query: "?raw",
   import: "default",
   eager: true,

@@ -614,6 +614,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: 0.0,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         assert!(apply_local_tmux_pane_focus(&mut tab, "%2"));

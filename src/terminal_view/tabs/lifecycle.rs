@@ -367,6 +367,8 @@ impl TerminalView {
             self.active_tab = self.tabs.len() - 1;
         }
 
+        self.sync_agent_workspace_to_active_tab();
+
         match self.renaming_tab {
             Some(editing) if editing == index => {
                 self.reset_tab_rename_state();

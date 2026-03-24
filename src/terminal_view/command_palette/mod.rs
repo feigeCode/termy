@@ -613,15 +613,9 @@ impl TerminalView {
     }
 
     fn open_ai_agent_projects_palette_from_palette(&mut self, cx: &mut Context<Self>) {
-        let query = self.command_palette.input().text().trim().to_string();
         self.command_palette.set_agent_launch_project_id(None);
         self.set_command_palette_mode(CommandPaletteMode::AgentProjects, false, cx);
-
-        if query.is_empty() {
-            return;
-        }
-
-        self.command_palette.input_mut().set_text(query);
+        self.command_palette.input_mut().set_text(String::new());
         self.refresh_command_palette_matches(false, cx);
         self.reset_cursor_blink_phase();
         self.notify_overlay(cx);
@@ -823,6 +817,8 @@ impl TerminalView {
                     }
                     CommandPaletteEscapeAction::BackToAgentProjects => {
                         self.set_command_palette_mode(CommandPaletteMode::AgentProjects, false, cx);
+                        self.command_palette.input_mut().set_text(String::new());
+                        self.refresh_command_palette_matches(false, cx);
                     }
                     CommandPaletteEscapeAction::BackToTmuxRenameSelect => {
                         if self.command_palette.back_from_tmux_rename_input() {
@@ -1801,10 +1797,10 @@ mod tests {
             .map(|item| item.status_hint)
             .collect::<Vec<_>>();
 
-        assert_eq!(titles, ["Codex", "Claude", "OpenCode", "Pi"]);
+        assert_eq!(titles, ["Codex", "Claude", "Cursor", "OpenCode", "Pi"]);
         assert_eq!(
             commands,
-            [Some("codex"), Some("claude"), Some("opencode"), Some("pi")]
+            [Some("codex"), Some("claude"), Some("agent"), Some("opencode"), Some("pi")]
         );
     }
 

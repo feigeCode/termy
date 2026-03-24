@@ -454,6 +454,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         assert!(TerminalView::repair_native_tab_active_pane_for_resize(

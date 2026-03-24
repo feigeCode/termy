@@ -15,7 +15,8 @@ const LEGACY_AGENT_WORKSPACE_STATE_FILE: &str = "agents.json";
 const AGENT_WORKSPACE_SCHEMA_VERSION: u64 = 1;
 const LEGACY_AGENT_WORKSPACE_STATE_VERSION: u64 = 1;
 const AGENT_WORKSPACE_STATE_ROW_KEY: &str = "state";
-const AGENT_SIDEBAR_WIDTH: f32 = 252.0;
+const AGENT_SIDEBAR_MIN_WIDTH: f32 = 180.0;
+const AGENT_SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const AGENT_SIDEBAR_HEADER_HEIGHT: f32 = 36.0;
 const AGENT_SIDEBAR_SEARCH_HEIGHT: f32 = 34.0;
 const AGENT_SIDEBAR_PROJECT_ROW_HEIGHT: f32 = 30.0;
@@ -433,10 +434,14 @@ fn load_or_migrate_agent_workspace_state(
     Ok(PersistedAgentWorkspaceState::default())
 }
 
+pub(super) fn clamp_agent_sidebar_width(width: f32) -> f32 {
+    width.clamp(AGENT_SIDEBAR_MIN_WIDTH, AGENT_SIDEBAR_MAX_WIDTH)
+}
+
 impl TerminalView {
     pub(in super::super) fn agent_sidebar_width(&self) -> f32 {
         if self.should_render_agent_sidebar() {
-            AGENT_SIDEBAR_WIDTH
+            self.agent_sidebar_width
         } else {
             0.0
         }
@@ -559,6 +564,10 @@ impl TerminalView {
         }
 
         self.agent_sidebar_open = !self.agent_sidebar_open;
+        if !self.agent_sidebar_open {
+            self.agent_sidebar_search_active = false;
+            self.renaming_agent_thread_id = None;
+        }
         self.sync_persisted_agent_workspace();
         cx.notify();
     }
@@ -1099,11 +1108,11 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn confirm_agent_thread_delete(&self, thread: &AgentThread) -> bool {
-        let thread_title = thread
-            .last_seen_title
-            .as_deref()
-            .unwrap_or(thread.title.as_str());
+    fn agent_thread_delete_confirm_params(
+        thread: &AgentThread,
+        display_title: &str,
+    ) -> (String, String) {
+        let thread_title = display_title;
         let message = if thread.linked_tab_id.is_some() {
             format!(
                 "Delete the thread \"{}\" from the sidebar?\n\nThe terminal tab stays open, but it will no longer be tracked as an agent thread.",
@@ -1112,10 +1121,13 @@ impl TerminalView {
         } else {
             format!("Delete the saved thread \"{}\"?", thread_title)
         };
-        termy_native_sdk::confirm("Delete Agent Thread", &message)
+        ("Delete Agent Thread".to_string(), message)
     }
 
-    fn confirm_agent_project_delete(&self, project: &AgentProject, thread_count: usize) -> bool {
+    fn agent_project_delete_confirm_params(
+        project: &AgentProject,
+        thread_count: usize,
+    ) -> (String, String) {
         let message = if thread_count == 0 {
             format!(
                 "Delete the project \"{}\"?\n\nIts folder reference will be removed from the agent sidebar.",
@@ -1127,7 +1139,7 @@ impl TerminalView {
                 project.name, thread_count
             )
         };
-        termy_native_sdk::confirm("Delete Agent Project", &message)
+        ("Delete Agent Project".to_string(), message)
     }
 
     pub(super) fn open_ai_agents_palette_for_project_from_sidebar(
@@ -1142,36 +1154,56 @@ impl TerminalView {
     fn schedule_agent_project_context_menu(&mut self, project_id: String, cx: &mut Context<Self>) {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let action = smol::unblock(termy_native_sdk::show_agent_project_context_menu).await;
-            let _ = cx.update(|cx| {
-                this.update(cx, |view, cx| {
-                    let Some(action) = action else {
-                        return;
-                    };
-                    match action {
-                        termy_native_sdk::AgentProjectContextMenuAction::NewSession => {
+            let Some(action) = action else {
+                return;
+            };
+            match action {
+                termy_native_sdk::AgentProjectContextMenuAction::NewSession => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
                             view.open_ai_agents_palette_for_project_from_sidebar(
                                 Some(project_id.clone()),
                                 cx,
                             );
-                        }
-                        termy_native_sdk::AgentProjectContextMenuAction::DeleteProject => {
-                            let Some(project) = view
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::DeleteProject => {
+                    let confirm_params = cx.update(|cx| {
+                        this.update(cx, |view, _cx| {
+                            let project = view
                                 .agent_projects
                                 .iter()
-                                .find(|project| project.id == project_id)
-                                .cloned()
-                            else {
-                                return;
-                            };
+                                .find(|project| project.id == project_id)?;
                             let thread_count = view.project_thread_count(project_id.as_str());
-                            if !view.confirm_agent_project_delete(&project, thread_count) {
-                                return;
-                            }
+                            Some(Self::agent_project_delete_confirm_params(
+                                project,
+                                thread_count,
+                            ))
+                        })
+                        .ok()
+                        .flatten()
+                    });
+                    let Some((title, message)) = confirm_params else {
+                        return;
+                    };
+                    let confirmed =
+                        smol::unblock(move || termy_native_sdk::confirm(&title, &message)).await;
+                    if !confirmed {
+                        return;
+                    }
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            let project_name = view
+                                .agent_projects
+                                .iter()
+                                .find(|p| p.id == project_id)
+                                .map(|p| p.name.clone());
                             match view.delete_agent_project(project_id.as_str()) {
                                 Ok(_) => {
                                     termy_toast::success(format!(
                                         "Deleted project \"{}\"",
-                                        project.name
+                                        project_name.unwrap_or_default()
                                     ));
                                     view.notify_overlay(cx);
                                     cx.notify();
@@ -1181,10 +1213,10 @@ impl TerminalView {
                                     view.notify_overlay(cx);
                                 }
                             }
-                        }
-                    }
-                })
-            });
+                        })
+                    });
+                }
+            }
         })
         .detach();
     }
@@ -1192,24 +1224,34 @@ impl TerminalView {
     fn schedule_agent_thread_context_menu(&mut self, thread_id: String, cx: &mut Context<Self>) {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let action = smol::unblock(termy_native_sdk::show_agent_thread_context_menu).await;
-            let _ = cx.update(|cx| {
-                this.update(cx, |view, cx| {
-                    let Some(action) = action else {
-                        return;
-                    };
-                    match action {
-                        termy_native_sdk::AgentThreadContextMenuAction::DeleteThread => {
-                            let Some(thread) = view
-                                .agent_threads
+            let Some(action) = action else {
+                return;
+            };
+            match action {
+                termy_native_sdk::AgentThreadContextMenuAction::DeleteThread => {
+                    let confirm_params = cx.update(|cx| {
+                        this.update(cx, |view, _cx| {
+                            view.agent_threads
                                 .iter()
                                 .find(|thread| thread.id == thread_id)
-                                .cloned()
-                            else {
-                                return;
-                            };
-                            if !view.confirm_agent_thread_delete(&thread) {
-                                return;
-                            }
+                                .map(|thread| {
+                                    let display_title = view.agent_thread_display_title(thread);
+                                    Self::agent_thread_delete_confirm_params(thread, &display_title)
+                                })
+                        })
+                        .ok()
+                        .flatten()
+                    });
+                    let Some((title, message)) = confirm_params else {
+                        return;
+                    };
+                    let confirmed =
+                        smol::unblock(move || termy_native_sdk::confirm(&title, &message)).await;
+                    if !confirmed {
+                        return;
+                    }
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
                             match view.delete_agent_thread(thread_id.as_str()) {
                                 Ok(()) => {
                                     termy_toast::success("Deleted agent thread");
@@ -1221,10 +1263,10 @@ impl TerminalView {
                                     view.notify_overlay(cx);
                                 }
                             }
-                        }
-                    }
-                })
-            });
+                        })
+                    });
+                }
+            }
         })
         .detach();
     }
@@ -1319,6 +1361,17 @@ impl TerminalView {
     fn detect_generic_agent_status(lines: &[String]) -> Option<AgentThreadStatusPresentation> {
         if let Some(line) = Self::find_last_status_line(
             lines,
+            &["error", "failed", "unable to", "panic", "denied", "refused"],
+        ) {
+            return Some(AgentThreadStatusPresentation {
+                label: "error".to_string(),
+                detail: Some(line),
+                tone: AgentThreadStatusTone::Error,
+            });
+        }
+
+        if let Some(line) = Self::find_last_status_line(
+            lines,
             &[
                 "approval",
                 "approve",
@@ -1363,17 +1416,6 @@ impl TerminalView {
                 label: "tool".to_string(),
                 detail: Some(line),
                 tone: AgentThreadStatusTone::Active,
-            });
-        }
-
-        if let Some(line) = Self::find_last_status_line(
-            lines,
-            &["error", "failed", "unable to", "panic", "denied", "refused"],
-        ) {
-            return Some(AgentThreadStatusPresentation {
-                label: "error".to_string(),
-                detail: Some(line),
-                tone: AgentThreadStatusTone::Error,
             });
         }
 
@@ -1459,6 +1501,7 @@ impl TerminalView {
                     });
                 }
             }
+            command_palette::AiAgentPreset::Cursor => {}
         }
 
         if let Some(generic) = Self::detect_generic_agent_status(lines) {
@@ -1476,6 +1519,7 @@ impl TerminalView {
                 })
             }
             command_palette::AiAgentPreset::Claude => None,
+            command_palette::AiAgentPreset::Cursor => None,
             command_palette::AiAgentPreset::OpenCode => None,
             command_palette::AiAgentPreset::Codex => None,
         }
@@ -2261,7 +2305,7 @@ impl TerminalView {
         Some(
             div()
                 .id("agent-sidebar")
-                .w(px(AGENT_SIDEBAR_WIDTH))
+                .w(px(self.agent_sidebar_width))
                 .h_full()
                 .flex_none()
                 .flex()
@@ -2327,6 +2371,8 @@ impl TerminalView {
                                             MouseButton::Left,
                                             cx.listener(|view, _event, _window, cx| {
                                                 view.agent_sidebar_open = false;
+                                                view.agent_sidebar_search_active = false;
+                                                view.renaming_agent_thread_id = None;
                                                 view.sync_persisted_agent_workspace();
                                                 cx.notify();
                                                 cx.stop_propagation();

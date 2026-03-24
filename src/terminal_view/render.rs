@@ -502,7 +502,7 @@ impl TerminalView {
             self.update_banner_visible(),
             self.vertical_tabs,
             self.should_render_tab_strip_chrome(),
-            self.tab_strip_sidebar_width(),
+            self.terminal_left_sidebar_width(),
         )
     }
     fn pane_render_cache_key(

@@ -1101,6 +1101,7 @@ struct TerminalTab {
     sticky_title_width: f32,
     display_width: f32,
     running_process: bool,
+    agent_command_has_started: bool,
 }
 
 struct NativePaneZoomSnapshot {
@@ -1482,6 +1483,7 @@ pub struct TerminalView {
     vertical_tabs_width: f32,
     vertical_tabs_minimized: bool,
     agent_sidebar_enabled: bool,
+    agent_sidebar_width: f32,
     agent_sidebar_open: bool,
     active_agent_project_id: Option<String>,
     collapsed_agent_project_ids: HashSet<String>,
@@ -1996,6 +1998,7 @@ impl TerminalView {
             sticky_title_width,
             display_width,
             running_process: false,
+            agent_command_has_started: false,
         }
     }
 
@@ -2961,6 +2964,7 @@ impl TerminalView {
             ),
             vertical_tabs_minimized: config.vertical_tabs_minimized,
             agent_sidebar_enabled: config.agent_sidebar_enabled,
+            agent_sidebar_width: agents::clamp_agent_sidebar_width(config.agent_sidebar_width),
             agent_sidebar_open: false,
             active_agent_project_id: None,
             collapsed_agent_project_ids: HashSet::new(),
@@ -3246,8 +3250,10 @@ impl TerminalView {
         self.vertical_tabs_width = vertical_tabs_width;
         self.vertical_tabs_minimized = config.vertical_tabs_minimized;
         self.agent_sidebar_enabled = config.agent_sidebar_enabled;
+        self.agent_sidebar_width = agents::clamp_agent_sidebar_width(config.agent_sidebar_width);
         if !self.agent_sidebar_enabled {
             self.agent_sidebar_open = false;
+            self.renaming_agent_thread_id = None;
         } else if self.agent_projects.is_empty() && self.agent_threads.is_empty() {
             self.agent_sidebar_open = true;
         }
@@ -3550,6 +3556,7 @@ impl TerminalView {
     fn process_native_terminal_events(&mut self, cx: &mut Context<Self>) -> bool {
         let mut should_redraw = false;
         let mut should_quit = false;
+        let mut agent_tabs_to_close: Vec<TabId> = Vec::new();
         let active_tab = self.active_tab;
         let mut reply_host = GpuiClipboardReplyHost::from_cx(cx);
         self.record_benchmark_terminal_event_drain_pass();
@@ -3583,8 +3590,16 @@ impl TerminalView {
                             }
                         }
                         TerminalEvent::Title(title) => {
+                            let was_running = self.tabs[index].agent_command_has_started
+                                && self.tabs[index].running_process;
                             if pane_is_active && self.apply_terminal_title(index, &title, cx) {
                                 should_redraw = true;
+                            }
+                            if was_running
+                                && !self.tabs[index].running_process
+                                && self.tabs[index].agent_thread_id.is_some()
+                            {
+                                agent_tabs_to_close.push(self.tabs[index].id);
                             }
                         }
                         TerminalEvent::ResetTitle => {
@@ -3600,6 +3615,13 @@ impl TerminalView {
                         }
                     }
                 }
+            }
+        }
+
+        for tab_id in agent_tabs_to_close {
+            if let Some(tab_index) = self.tab_index_by_id(tab_id) {
+                self.close_tab(tab_index, cx);
+                should_redraw = true;
             }
         }
 

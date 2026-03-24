@@ -23,17 +23,19 @@ pub(in super::super) enum CommandPaletteMode {
 pub(in super::super) enum AiAgentPreset {
     Codex,
     Claude,
+    Cursor,
     OpenCode,
     Pi,
 }
 
 impl AiAgentPreset {
-    pub(super) const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::OpenCode, Self::Pi];
+    pub(super) const ALL: [Self; 5] = [Self::Codex, Self::Claude, Self::Cursor, Self::OpenCode, Self::Pi];
 
     pub(in super::super) fn title(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::Cursor => "Cursor",
             Self::OpenCode => "OpenCode",
             Self::Pi => "Pi",
         }
@@ -43,6 +45,7 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "ai agent assistant codex openai code",
             Self::Claude => "ai agent assistant claude anthropic code",
+            Self::Cursor => "ai agent assistant cursor code",
             Self::OpenCode => "ai agent assistant opencode open code",
             Self::Pi => "ai agent assistant pi",
         }
@@ -52,6 +55,7 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Cursor => "agent",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
         }
@@ -61,6 +65,7 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "CX",
             Self::Claude => "CL",
+            Self::Cursor => "CU",
             Self::OpenCode => "OC",
             Self::Pi => "PI",
         }
@@ -70,6 +75,7 @@ impl AiAgentPreset {
         match self {
             Self::Codex => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/codex.png"),
             Self::Claude => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/claude.svg"),
+            Self::Cursor => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/cursor.png"),
             Self::OpenCode if dark_surface => {
                 concat!(
                     env!("CARGO_MANIFEST_DIR"),

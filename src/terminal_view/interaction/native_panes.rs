@@ -348,6 +348,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 120, 42);
@@ -383,6 +384,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 45, 20);
@@ -419,6 +421,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 30, 10);

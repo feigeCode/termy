@@ -167,7 +167,7 @@ Termy keybindings use Ghostty-style trigger overrides via repeated `keybind` lin
 
 Notes:
 
-- `toggle_agent_sidebar` only works when `agent_sidebar_enabled = true` in `~/.config/termy/config.txt`.
+- `toggle_agent_sidebar` only works when `agent_sidebar_enabled = true`; enable it in Settings > Tabs or in `~/.config/termy/config.txt`.
 - `toggle_vertical_tab_sidebar` only works when `vertical_tabs = true`; enable it in Settings > Tabs or in `~/.config/termy/config.txt`.
 
 ## Config Syntax
@@ -232,7 +232,6 @@ Related UI option:
 - `open_config`
 - `prettify_config`
 - `open_settings`
-- `import_theme_store_auth`
 - `import_colors`
 - `switch_theme`
 - `zoom_in`
@@ -252,6 +251,7 @@ Related UI option:
 - `install_cli`
 - `toggle_tab_bar_visibility`
 - `toggle_vertical_tab_sidebar`
+- `toggle_agent_sidebar`
 
 ## Customization Examples
 

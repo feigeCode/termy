@@ -132,6 +132,7 @@ impl TerminalTab {
             sticky_title_width,
             display_width,
             running_process: false,
+            agent_command_has_started: false,
         }
     }
 }

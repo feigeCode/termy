@@ -319,10 +319,6 @@ struct TextBatch {
     fg: Hsla,
     underline: Option<UnderlineStyle>,
     cell_len: usize,
-    /// When true, this batch must not coalesce with adjacent cells. Set for
-    /// characters (e.g. emoji) whose variable glyph width would misalign
-    /// subsequent characters if they shared a single `ShapedLine`.
-    isolated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -457,12 +453,12 @@ impl TextBatch {
     fn new(
         start_col: usize,
         row: usize,
-        c: char,
+        initial_char: char,
         key: TextBatchKey,
         underline: Option<UnderlineStyle>,
     ) -> Self {
         let mut text = String::with_capacity(16);
-        text.push(c);
+        text.push(initial_char);
         Self {
             start_col,
             row,
@@ -471,7 +467,6 @@ impl TextBatch {
             fg: key.fg,
             underline,
             cell_len: 1,
-            isolated: TerminalGrid::char_requires_isolated_batch(c),
         }
     }
 
@@ -479,14 +474,11 @@ impl TextBatch {
         &self,
         col: usize,
         row: usize,
-        c: char,
         key: TextBatchKey,
         underline: &Option<UnderlineStyle>,
     ) -> bool {
         self.row == row
             && self.start_col + self.cell_len == col
-            && !self.isolated
-            && !TerminalGrid::char_requires_isolated_batch(c)
             && self.bold == key.bold
             && self.fg == key.fg
             && self.underline == *underline
@@ -1406,19 +1398,6 @@ fn text_draw_ops_match_without_row(lhs: &TextDrawOp, rhs: &TextDrawOp) -> bool {
     }
 }
 
-/// Returns the inclusive column range `(first_col, last_col)` covered by a draw op.
-fn draw_op_col_range(op: &TextDrawOp) -> (usize, usize) {
-    match op {
-        TextDrawOp::Batch(b) => (b.start_col, b.start_col + b.cell_len.saturating_sub(1)),
-        TextDrawOp::Block(b) => (b.col, b.col),
-        TextDrawOp::RoundedCorner(b) => (b.col, b.col),
-        TextDrawOp::Diagonal(b) => (b.col, b.col),
-    }
-}
-
-fn col_ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
-    a.0 <= b.1 && b.0 <= a.1
-}
 fn cached_row_draw_ops_match_without_row(lhs: &CachedRowPaintOps, rhs: &CachedRowPaintOps) -> bool {
     lhs.background_spans == rhs.background_spans
         && lhs.draw_ops.len() == rhs.draw_ops.len()
@@ -1638,11 +1617,6 @@ impl TerminalGrid {
                 continue;
             }
 
-            if Self::char_requires_isolated_batch(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                continue;
-            }
-
             let fg = self.cell_fg_color(cell, cursor_fg, highlight_fg);
             if rounded_corner_char(cell.char) {
                 Self::push_pending_text_batch(&mut current, &mut ops);
@@ -1686,7 +1660,7 @@ impl TerminalGrid {
             };
 
             let should_append = current.as_ref().is_some_and(|batch| {
-                batch.can_append(cell.col, cell.row, cell.char, key, &underline)
+                batch.can_append(cell.col, cell.row, key, &underline)
             });
             if should_append {
                 if let Some(batch) = current.as_mut() {
@@ -2143,14 +2117,6 @@ impl TerminalGrid {
         cell.render_text && cell.char != ' ' && cell.char != '\0' && !cell.char.is_control()
     }
 
-    /// Returns true for characters that must not be coalesced into a multi-cell
-    /// text batch. Covers Miscellaneous Symbols through Dingbats (U+2600..U+27BF)
-    /// and Supplemental Symbols/Pictographs (U+1F000..U+1FAFF). These ranges are
-    /// a heuristic — see `.aidocs/risks.md` for coverage gaps.
-    fn char_requires_isolated_batch(c: char) -> bool {
-        matches!(c as u32, 0x2600..=0x27BF | 0x1F000..=0x1FAFF)
-    }
-
     fn cell_fg_color(&self, cell: &CellRenderInfo, cursor_fg: Hsla, highlight_fg: Hsla) -> Hsla {
         if self.cursor_cell == Some((cell.col, cell.row))
             && self.cursor_style == TerminalCursorStyle::Block
@@ -2201,11 +2167,6 @@ impl TerminalGrid {
                 continue;
             }
 
-            if Self::char_requires_isolated_batch(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                continue;
-            }
-
             let fg = self.cell_fg_color(cell, cursor_fg, highlight_fg);
             if rounded_corner_char(cell.char) {
                 Self::push_pending_text_batch(&mut current, &mut ops);
@@ -2249,7 +2210,7 @@ impl TerminalGrid {
             };
 
             let should_append = current.as_ref().is_some_and(|batch| {
-                batch.can_append(cell.col, cell.row, cell.char, key, &underline)
+                batch.can_append(cell.col, cell.row, key, &underline)
             });
 
             if should_append {
@@ -2753,7 +2714,7 @@ mod tests {
     }
 
     #[test]
-    fn batches_split_on_emoji_boundary() {
+    fn batches_keep_emoji_in_normal_text_flow() {
         let grid = test_grid(
             vec![
                 test_cell(0, 0, 'a'),
@@ -2763,15 +2724,13 @@ mod tests {
             None,
         );
         let batches = collect_batches(&grid);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].text, "a");
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].text, "a📦b");
         assert_eq!(batches[0].start_col, 0);
-        assert_eq!(batches[1].text, "b");
-        assert_eq!(batches[1].start_col, 2);
     }
 
     #[test]
-    fn draw_ops_skip_emoji_cells() {
+    fn draw_ops_include_emoji_cells() {
         let grid = test_grid(
             vec![
                 test_cell(0, 0, 'a'),
@@ -2781,25 +2740,8 @@ mod tests {
             None,
         );
         let ops = grid.collect_draw_ops(test_color(0.0, 0.0, 1.0), test_color(0.0, 0.0, 1.0));
-        assert_eq!(ops.len(), 2);
-        match &ops[0] {
-            TextDrawOp::Batch(batch) => {
-                assert_eq!(batch.text, "a");
-                assert_eq!(batch.start_col, 0);
-            }
-            TextDrawOp::Block(_) | TextDrawOp::RoundedCorner(_) | TextDrawOp::Diagonal(_) => {
-                panic!("expected first op to be batch")
-            }
-        }
-        match &ops[1] {
-            TextDrawOp::Batch(batch) => {
-                assert_eq!(batch.text, "b");
-                assert_eq!(batch.start_col, 2);
-            }
-            TextDrawOp::Block(_) | TextDrawOp::RoundedCorner(_) | TextDrawOp::Diagonal(_) => {
-                panic!("expected second op to be batch")
-            }
-        }
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(&ops[0], TextDrawOp::Batch(batch) if batch.text == "a📦b" && batch.start_col == 0));
     }
 
     #[test]

@@ -147,20 +147,37 @@ impl TerminalView {
             && tab_title.priority.contains(&TabTitleSource::Shell)
     }
 
+    /// Returns the title candidate for a single source in the priority list.
+    ///
+    /// The caller walks sources in priority order and uses the first non-empty
+    /// candidate.  The `Explicit` source has two special deference modes that
+    /// both yield to `shell_title` when available:
+    ///
+    /// - **Prediction**: the explicit title was pre-seeded at tab creation from
+    ///   the cwd and has not yet been confirmed by a shell-integration event.
+    /// - **Smart-mode shell fallback**: shell integration is disabled in smart
+    ///   mode, so the shell's own title (set via terminal escape sequences) is
+    ///   preferred once available.
+    ///
+    /// In both cases the explicit title is kept as a fallback so the tab is
+    /// never blank.
     fn title_source_candidate<'a>(
         source: TabTitleSource,
         manual_title: Option<&'a str>,
         explicit_title: Option<&'a str>,
         explicit_title_is_prediction: bool,
+        prediction_allows_shell: bool,
         shell_title: Option<&'a str>,
         fallback_title: &'a str,
         smart_mode_shell_fallback: bool,
     ) -> Option<&'a str> {
         match source {
             TabTitleSource::Manual => manual_title,
-            TabTitleSource::Explicit if explicit_title_is_prediction => {
+            // The explicit title is speculative—prefer a live shell title.
+            TabTitleSource::Explicit if explicit_title_is_prediction && prediction_allows_shell => {
                 shell_title.or(explicit_title)
             }
+            TabTitleSource::Explicit if explicit_title_is_prediction => explicit_title,
             TabTitleSource::Explicit if smart_mode_shell_fallback => {
                 // Smart mode seeds an explicit title before the shell emits a title.
                 // When shell integration is disabled, prefer live shell titles once
@@ -218,6 +235,7 @@ impl TerminalView {
         let tab = &self.tabs[index];
         let fallback_title = self.fallback_title();
         let smart_mode_shell_fallback = Self::smart_mode_shell_fallback_enabled(&self.tab_title);
+        let prediction_allows_shell = self.tab_title.priority.contains(&TabTitleSource::Shell);
 
         for source in &self.tab_title.priority {
             let candidate = Self::title_source_candidate(
@@ -225,6 +243,7 @@ impl TerminalView {
                 tab.manual_title.as_deref(),
                 tab.explicit_title.as_deref(),
                 tab.explicit_title_is_prediction,
+                prediction_allows_shell,
                 tab.shell_title.as_deref(),
                 fallback_title,
                 smart_mode_shell_fallback,
@@ -430,6 +449,7 @@ mod tests {
             None,
             Some("explicit"),
             false,
+            false,
             Some("shell"),
             "fallback",
             true,
@@ -443,6 +463,7 @@ mod tests {
             TabTitleSource::Explicit,
             None,
             Some("explicit"),
+            false,
             false,
             None,
             "fallback",
@@ -458,11 +479,27 @@ mod tests {
             None,
             Some("predicted"),
             true,
+            true,
             Some("shell"),
             "fallback",
             false,
         );
         assert_eq!(candidate, Some("shell"));
+    }
+
+    #[test]
+    fn title_source_candidate_keeps_predicted_explicit_when_shell_source_is_disabled() {
+        let candidate = TerminalView::title_source_candidate(
+            TabTitleSource::Explicit,
+            None,
+            Some("predicted"),
+            true,
+            false,
+            Some("shell"),
+            "fallback",
+            false,
+        );
+        assert_eq!(candidate, Some("predicted"));
     }
 
     #[test]

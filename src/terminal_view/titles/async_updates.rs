@@ -11,6 +11,11 @@ impl TerminalView {
         tab.pending_command_title = None;
     }
 
+    /// Stores a confirmed explicit title for the tab at `index`, clearing the
+    /// prediction flag regardless of whether the title value actually changed.
+    ///
+    /// Receiving a real shell-integration event that sets the same string as the
+    /// prediction is still a confirmation—the title is no longer speculative.
     pub(super) fn set_explicit_title(&mut self, index: usize, explicit_title: String) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -18,8 +23,9 @@ impl TerminalView {
 
         let explicit_title = Self::truncate_tab_title(&explicit_title);
         if self.tabs[index].explicit_title.as_deref() == Some(explicit_title.as_str()) {
+            let was_prediction = self.tabs[index].explicit_title_is_prediction;
             self.tabs[index].explicit_title_is_prediction = false;
-            return false;
+            return was_prediction && self.refresh_tab_title(index);
         }
 
         self.tabs[index].explicit_title = Some(explicit_title);
@@ -90,8 +96,13 @@ impl TerminalView {
         };
 
         if tab.explicit_title.as_deref() == Some(command_title.as_str()) {
+            let was_prediction = tab.explicit_title_is_prediction;
             tab.explicit_title_is_prediction = false;
-            return false;
+            return if was_prediction {
+                self.refresh_tab_title(index)
+            } else {
+                false
+            };
         }
 
         tab.explicit_title = Some(command_title);

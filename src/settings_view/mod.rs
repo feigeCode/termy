@@ -417,24 +417,6 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    pub(crate) fn apply_theme_store_auth_session(
-        &mut self,
-        session: ThemeStoreAuthSession,
-        cx: &mut Context<Self>,
-    ) {
-        self.theme_store_auth_session = Some(session);
-        self.theme_store_auth_loading = false;
-        self.theme_store_auth_error = None;
-        cx.notify();
-    }
-
-    pub(crate) fn clear_theme_store_auth_session(&mut self, cx: &mut Context<Self>) {
-        self.theme_store_auth_session = None;
-        self.theme_store_auth_loading = false;
-        self.theme_store_auth_error = None;
-        cx.notify();
-    }
-
     fn refresh_theme_store_auth_user(&mut self, cx: &mut Context<Self>) {
         if self.theme_store_auth_loading {
             return;

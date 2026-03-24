@@ -46,7 +46,9 @@ enum InlineInputCharClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InlineInputTarget {
     CommandPalette,
+    AgentSidebarSearch,
     RenameTab,
+    RenameAgentThread,
     Search,
 }
 
@@ -880,8 +882,11 @@ impl IntoElement for InlineInputElement {
                     cx,
                 );
 
-                let line =
-                    window.with_content_mask(Some(ContentMask { bounds: prepaint.line_bounds }), |window| {
+                let line = window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: prepaint.line_bounds,
+                    }),
+                    |window| {
                         if let Some(selection) = prepaint.selection.take() {
                             window.paint_quad(selection);
                         }
@@ -909,7 +914,8 @@ impl IntoElement for InlineInputElement {
                         }
 
                         line
-                    });
+                    },
+                );
 
                 view.update(cx, |this, _cx| {
                     if let Some(state) = this.active_inline_input_state_mut() {
@@ -930,9 +936,10 @@ impl TerminalView {
     fn inline_input_notify_target_for_target(target: InlineInputTarget) -> InlineInputNotifyTarget {
         match target {
             InlineInputTarget::CommandPalette => InlineInputNotifyTarget::Overlay,
-            InlineInputTarget::RenameTab | InlineInputTarget::Search => {
-                InlineInputNotifyTarget::Parent
-            }
+            InlineInputTarget::AgentSidebarSearch
+            | InlineInputTarget::RenameTab
+            | InlineInputTarget::RenameAgentThread
+            | InlineInputTarget::Search => InlineInputNotifyTarget::Parent,
         }
     }
 
@@ -956,6 +963,10 @@ impl TerminalView {
             Some(InlineInputTarget::CommandPalette)
         } else if self.search_open {
             Some(InlineInputTarget::Search)
+        } else if self.agent_sidebar_search_active {
+            Some(InlineInputTarget::AgentSidebarSearch)
+        } else if self.renaming_agent_thread_id.is_some() {
+            Some(InlineInputTarget::RenameAgentThread)
         } else if self.renaming_tab.is_some() {
             Some(InlineInputTarget::RenameTab)
         } else {
@@ -1011,16 +1022,20 @@ impl TerminalView {
     fn active_inline_input_state(&self) -> Option<&InlineInputState> {
         match self.active_inline_input_target()? {
             InlineInputTarget::CommandPalette => Some(self.command_palette_input()),
+            InlineInputTarget::AgentSidebarSearch => Some(&self.agent_sidebar_search_input),
             InlineInputTarget::Search => Some(&self.search_input),
             InlineInputTarget::RenameTab => Some(&self.rename_input),
+            InlineInputTarget::RenameAgentThread => Some(&self.agent_thread_rename_input),
         }
     }
 
     fn active_inline_input_state_mut(&mut self) -> Option<&mut InlineInputState> {
         match self.active_inline_input_target()? {
             InlineInputTarget::CommandPalette => Some(self.command_palette_input_mut()),
+            InlineInputTarget::AgentSidebarSearch => Some(&mut self.agent_sidebar_search_input),
             InlineInputTarget::Search => Some(&mut self.search_input),
             InlineInputTarget::RenameTab => Some(&mut self.rename_input),
+            InlineInputTarget::RenameAgentThread => Some(&mut self.agent_thread_rename_input),
         }
     }
 
@@ -1044,6 +1059,21 @@ impl TerminalView {
         self.rename_input.set_text(truncated);
     }
 
+    fn enforce_agent_thread_rename_limit(&mut self) {
+        let current_chars = self.agent_thread_rename_input.text().chars().count();
+        if current_chars <= MAX_TAB_TITLE_CHARS {
+            return;
+        }
+
+        let truncated: String = self
+            .agent_thread_rename_input
+            .text()
+            .chars()
+            .take(MAX_TAB_TITLE_CHARS)
+            .collect();
+        self.agent_thread_rename_input.set_text(truncated);
+    }
+
     fn apply_inline_input_mutation(
         &mut self,
         mutate: impl FnOnce(&mut InlineInputState),
@@ -1056,6 +1086,10 @@ impl TerminalView {
                 mutate(self.command_palette_input_mut());
                 self.command_palette_query_changed(cx);
             }
+            Some(InlineInputTarget::AgentSidebarSearch) => {
+                mutate(&mut self.agent_sidebar_search_input);
+                self.notify_for_inline_input_target(InlineInputTarget::AgentSidebarSearch, cx);
+            }
             Some(InlineInputTarget::Search) => {
                 mutate(&mut self.search_input);
                 self.handle_search_input_changed(cx);
@@ -1064,6 +1098,11 @@ impl TerminalView {
                 mutate(&mut self.rename_input);
                 self.enforce_tab_rename_limit();
                 self.notify_for_inline_input_target(InlineInputTarget::RenameTab, cx);
+            }
+            Some(InlineInputTarget::RenameAgentThread) => {
+                mutate(&mut self.agent_thread_rename_input);
+                self.enforce_agent_thread_rename_limit();
+                self.notify_for_inline_input_target(InlineInputTarget::RenameAgentThread, cx);
             }
             None => {}
         }

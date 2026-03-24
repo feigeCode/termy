@@ -600,6 +600,7 @@ mod tests {
             window_index: 0,
             panes: vec![pane_one, pane_two],
             active_pane_id: "%1".to_string(),
+            agent_thread_id: None,
             pinned: false,
             manual_title: None,
             explicit_title: None,
@@ -613,6 +614,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: 0.0,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         assert!(apply_local_tmux_pane_focus(&mut tab, "%2"));

@@ -334,6 +334,7 @@ mod tests {
             window_index: 0,
             panes: vec![test_pane("%native-1", 0, 0, 40, 20)],
             active_pane_id: "%native-1".to_string(),
+            agent_thread_id: None,
             pinned: false,
             manual_title: None,
             explicit_title: None,
@@ -347,6 +348,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 120, 42);
@@ -368,6 +370,7 @@ mod tests {
                 test_pane("%native-2", 80, 0, 40, 20),
             ],
             active_pane_id: "%native-1".to_string(),
+            agent_thread_id: None,
             pinned: false,
             manual_title: None,
             explicit_title: None,
@@ -381,6 +384,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 45, 20);
@@ -403,6 +407,7 @@ mod tests {
                 test_pane("%native-2", 0, 15, 30, 5),
             ],
             active_pane_id: "%native-1".to_string(),
+            agent_thread_id: None,
             pinned: false,
             manual_title: None,
             explicit_title: None,
@@ -416,6 +421,7 @@ mod tests {
             sticky_title_width: 0.0,
             display_width: TAB_MIN_WIDTH,
             running_process: false,
+            agent_command_has_started: false,
         };
 
         TerminalView::sync_native_tab_pane_geometry(&mut tab, 30, 10);

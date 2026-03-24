@@ -191,10 +191,15 @@ impl BlockElementGeometry {
     }
 
     fn push_rect(&mut self, rect: BlockRectSpec) {
-        assert!(
+        debug_assert!(
             self.rect_count < self.rects.len(),
             "box geometry exceeded rect capacity"
         );
+        if self.rect_count >= self.rects.len() {
+            // Preserve release stability if a future mapping regression exceeds
+            // the fixed connector rect budget.
+            return;
+        }
         self.rects[self.rect_count] = rect;
         self.rect_count += 1;
     }
@@ -1200,6 +1205,7 @@ fn rounded_corner_path_spec(
     glyph: char,
     stroke_width: Pixels,
 ) -> Option<RoundedCornerPathSpec> {
+    let cell_bounds = snapped_quad_bounds(cell_bounds)?;
     let origin = cell_bounds.origin;
     let width = cell_bounds.size.width;
     let height = cell_bounds.size.height;
@@ -1284,6 +1290,7 @@ fn diagonal_path_specs(
     glyph: char,
     stroke_width: Pixels,
 ) -> Option<(DiagonalPathSpec, Option<DiagonalPathSpec>)> {
+    let cell_bounds = snapped_quad_bounds(cell_bounds)?;
     let origin = cell_bounds.origin;
     let width = cell_bounds.size.width;
     let height = cell_bounds.size.height;
@@ -2156,78 +2163,9 @@ impl TerminalGrid {
     #[cfg(test)]
     fn collect_draw_ops(&self, cursor_fg: Hsla, highlight_fg: Hsla) -> Vec<TextDrawOp> {
         let mut ops = Vec::with_capacity(self.cell_count());
-        let mut current: Option<TextBatch> = None;
-        let cell_w: f32 = self.cell_size.width.into();
-        let cell_h: f32 = self.cell_size.height.into();
-        let font_sz: f32 = self.font_size.into();
-
-        for cell in self.cells.iter().flat_map(|row| row.iter()) {
-            if !Self::cell_is_drawable_text(cell) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                continue;
-            }
-
-            let fg = self.cell_fg_color(cell, cursor_fg, highlight_fg);
-            if rounded_corner_char(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                ops.push(TextDrawOp::RoundedCorner(RoundedCornerDraw {
-                    row: cell.row,
-                    col: cell.col,
-                    glyph: cell.char,
-                    fg,
-                }));
-                continue;
-            }
-
-            if diagonal_char(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                ops.push(TextDrawOp::Diagonal(DiagonalDraw {
-                    row: cell.row,
-                    col: cell.col,
-                    glyph: cell.char,
-                    fg,
-                }));
-                continue;
-            }
-
-            if let Some(geometry) = block_element_geometry(cell.char)
-                .or_else(|| box_draw_geometry_for_char(cell.char, cell_w, cell_h, font_sz))
-            {
-                Self::push_pending_text_batch(&mut current, &mut ops);
-                ops.push(TextDrawOp::Block(BlockDraw {
-                    row: cell.row,
-                    col: cell.col,
-                    geometry,
-                    fg,
-                }));
-                continue;
-            }
-
-            let underline = self.cell_underline(cell.row, cell.col, fg);
-            let key = TextBatchKey {
-                bold: cell.bold,
-                fg,
-            };
-
-            let should_append = current.as_ref().is_some_and(|batch| {
-                batch.can_append(cell.col, cell.row, key, &underline)
-            });
-
-            if should_append {
-                if let Some(batch) = current.as_mut() {
-                    batch.append_char(cell.char);
-                }
-                continue;
-            }
-
-            Self::push_pending_text_batch(&mut current, &mut ops);
-            current = Some(TextBatch::new(
-                cell.col, cell.row, cell.char, key, underline,
-            ));
+        for row_cells in self.cells.iter() {
+            ops.extend(self.collect_row_draw_ops(row_cells.as_ref(), cursor_fg, highlight_fg));
         }
-
-        Self::push_pending_text_batch(&mut current, &mut ops);
-
         ops
     }
 }

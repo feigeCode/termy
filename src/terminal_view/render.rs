@@ -3724,7 +3724,9 @@ mod tests {
         );
         assert_eq!(
             damage,
-            TerminalGridPaintDamage::Rows(vec![1usize, 3usize].into())
+            TerminalGridPaintDamage::RowRanges(
+                vec![(1usize, 2usize, 4usize), (3usize, 0usize, 6usize)].into()
+            )
         );
     }
 

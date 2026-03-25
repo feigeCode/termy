@@ -354,6 +354,9 @@ struct VerticalTabStripResizeDragState;
 #[derive(Clone, Copy, Debug)]
 struct AgentSidebarResizeDragState;
 
+#[derive(Clone, Copy, Debug)]
+struct AgentGitPanelResizeDragState;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingCursorMoveClick {
     pane_id: String,
@@ -1486,6 +1489,8 @@ pub struct TerminalView {
     agent_sidebar_search_input: InlineInputState,
     agent_git_panel_input_mode: Option<agents::AgentGitPanelInputMode>,
     agent_git_panel_input: InlineInputState,
+    agent_git_panel_branch_dropdown_open: bool,
+    agent_git_panel_poll_task: Option<gpui::Task<()>>,
     event_wakeup_tx: Sender<()>,
     focus_handle: FocusHandle,
     theme_id: String,
@@ -1505,6 +1510,9 @@ pub struct TerminalView {
     agent_sidebar_open: bool,
     agent_sidebar_filter: agents::AgentSidebarFilter,
     agent_git_panel: agents::AgentGitPanelState,
+    agent_git_panel_width: f32,
+    agent_git_panel_resize_drag: Option<AgentGitPanelResizeDragState>,
+    last_viewport_width: f32,
     active_agent_project_id: Option<String>,
     collapsed_agent_project_ids: HashSet<String>,
     agent_projects: Vec<agents::AgentProject>,
@@ -2975,6 +2983,8 @@ impl TerminalView {
             agent_sidebar_search_input: InlineInputState::new(String::new()),
             agent_git_panel_input_mode: None,
             agent_git_panel_input: InlineInputState::new(String::new()),
+            agent_git_panel_branch_dropdown_open: false,
+            agent_git_panel_poll_task: None,
             event_wakeup_tx,
             focus_handle,
             theme_id,
@@ -3000,6 +3010,9 @@ impl TerminalView {
             agent_sidebar_open: false,
             agent_sidebar_filter: agents::AgentSidebarFilter::All,
             agent_git_panel: agents::AgentGitPanelState::default(),
+            agent_git_panel_width: agents::AGENT_GIT_PANEL_DEFAULT_WIDTH,
+            agent_git_panel_resize_drag: None,
+            last_viewport_width: 1280.0,
             active_agent_project_id: None,
             collapsed_agent_project_ids: HashSet::new(),
             agent_projects: Vec::new(),
@@ -3296,6 +3309,7 @@ impl TerminalView {
             self.agent_git_panel = agents::AgentGitPanelState::default();
             self.agent_git_panel_input_mode = None;
             self.agent_git_panel_input.clear();
+            self.agent_git_panel_branch_dropdown_open = false;
             self.renaming_agent_project_id = None;
             self.renaming_agent_thread_id = None;
         } else if self.agent_projects.is_empty() && self.agent_threads.is_empty() {

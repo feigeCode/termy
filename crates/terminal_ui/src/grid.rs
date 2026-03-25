@@ -4,9 +4,8 @@ use crate::render_metrics::{
     increment_shaped_line_cache_miss,
 };
 use gpui::{
-    App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, PathBuilder,
-    Pixels, ShapedLine, SharedString, Size, TextAlign, TextRun, UnderlineStyle, Window, point,
-    px, quad,
+    App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, PathBuilder, Pixels,
+    ShapedLine, SharedString, Size, TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
@@ -1063,7 +1062,8 @@ fn box_draw_geometry_for_char(
     cell_height: f32,
     font_size: f32,
 ) -> Option<BlockElementGeometry> {
-    box_draw_segments(c).map(|segments| box_draw_geometry(segments, cell_width, cell_height, font_size))
+    box_draw_segments(c)
+        .map(|segments| box_draw_geometry(segments, cell_width, cell_height, font_size))
 }
 
 fn snapped_block_rect_bounds(
@@ -1381,12 +1381,42 @@ fn block_draws_match_without_row(lhs: &BlockDraw, rhs: &BlockDraw) -> bool {
     lhs.col == rhs.col && lhs.geometry == rhs.geometry && lhs.fg == rhs.fg
 }
 
-fn rounded_corner_draws_match_without_row(lhs: &RoundedCornerDraw, rhs: &RoundedCornerDraw) -> bool {
+fn rounded_corner_draws_match_without_row(
+    lhs: &RoundedCornerDraw,
+    rhs: &RoundedCornerDraw,
+) -> bool {
     lhs.col == rhs.col && lhs.glyph == rhs.glyph && lhs.fg == rhs.fg
 }
 
 fn diagonal_draws_match_without_row(lhs: &DiagonalDraw, rhs: &DiagonalDraw) -> bool {
     lhs.col == rhs.col && lhs.glyph == rhs.glyph && lhs.fg == rhs.fg
+}
+
+/// Returns the inclusive column range `(start, end)` covered by a draw op.
+fn draw_op_col_range(op: &TextDrawOp) -> (usize, usize) {
+    match op {
+        TextDrawOp::Batch(batch) => {
+            let end = if batch.cell_len == 0 {
+                batch.start_col
+            } else {
+                batch.start_col + batch.cell_len - 1
+            };
+            (batch.start_col, end)
+        }
+        TextDrawOp::Block(block) => (block.col, block.col),
+        TextDrawOp::RoundedCorner(corner) => (corner.col, corner.col),
+        TextDrawOp::Diagonal(diagonal) => (diagonal.col, diagonal.col),
+    }
+}
+
+/// Returns `true` if two inclusive column ranges overlap.
+fn col_ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    let start_a = a.0.min(a.1);
+    let end_a = a.0.max(a.1);
+    let start_b = b.0.min(b.1);
+    let end_b = b.0.max(b.1);
+
+    start_a <= end_b && start_b <= end_a
 }
 
 fn text_draw_ops_match_without_row(lhs: &TextDrawOp, rhs: &TextDrawOp) -> bool {
@@ -1668,9 +1698,9 @@ impl TerminalGrid {
                 fg,
             };
 
-            let should_append = current.as_ref().is_some_and(|batch| {
-                batch.can_append(cell.col, cell.row, key, &underline)
-            });
+            let should_append = current
+                .as_ref()
+                .is_some_and(|batch| batch.can_append(cell.col, cell.row, key, &underline));
             if should_append {
                 if let Some(batch) = current.as_mut() {
                     batch.append_char(cell.char);
@@ -2679,7 +2709,9 @@ mod tests {
         );
         let ops = grid.collect_draw_ops(test_color(0.0, 0.0, 1.0), test_color(0.0, 0.0, 1.0));
         assert_eq!(ops.len(), 1);
-        assert!(matches!(&ops[0], TextDrawOp::Batch(batch) if batch.text == "a📦b" && batch.start_col == 0));
+        assert!(
+            matches!(&ops[0], TextDrawOp::Batch(batch) if batch.text == "a📦b" && batch.start_col == 0)
+        );
     }
 
     #[test]
@@ -2803,7 +2835,9 @@ mod tests {
         let ops = collect_draw_ops(&grid);
         assert_eq!(ops.len(), 3);
         assert!(matches!(&ops[0], TextDrawOp::Batch(batch) if batch.text == "a"));
-        assert!(matches!(&ops[1], TextDrawOp::RoundedCorner(corner) if corner.col == 1 && corner.glyph == '\u{256D}'));
+        assert!(
+            matches!(&ops[1], TextDrawOp::RoundedCorner(corner) if corner.col == 1 && corner.glyph == '\u{256D}')
+        );
         assert!(matches!(&ops[2], TextDrawOp::Batch(batch) if batch.text == "b"));
     }
 
@@ -2820,7 +2854,9 @@ mod tests {
         let ops = collect_draw_ops(&grid);
         assert_eq!(ops.len(), 3);
         assert!(matches!(&ops[0], TextDrawOp::Batch(batch) if batch.text == "a"));
-        assert!(matches!(&ops[1], TextDrawOp::Diagonal(diagonal) if diagonal.col == 1 && diagonal.glyph == '\u{2573}'));
+        assert!(
+            matches!(&ops[1], TextDrawOp::Diagonal(diagonal) if diagonal.col == 1 && diagonal.glyph == '\u{2573}')
+        );
         assert!(matches!(&ops[2], TextDrawOp::Batch(batch) if batch.text == "b"));
     }
 

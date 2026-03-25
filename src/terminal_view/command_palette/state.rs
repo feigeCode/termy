@@ -24,15 +24,17 @@ pub(in super::super) enum AiAgentPreset {
     Codex,
     Claude,
     Cursor,
+    Kiro,
     OpenCode,
     Pi,
 }
 
 impl AiAgentPreset {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 6] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
+        Self::Kiro,
         Self::OpenCode,
         Self::Pi,
     ];
@@ -42,6 +44,7 @@ impl AiAgentPreset {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Cursor => "Cursor",
+            Self::Kiro => "Kiro",
             Self::OpenCode => "OpenCode",
             Self::Pi => "Pi",
         }
@@ -52,6 +55,7 @@ impl AiAgentPreset {
             Self::Codex => "ai agent assistant codex openai code",
             Self::Claude => "ai agent assistant claude anthropic code",
             Self::Cursor => "ai agent assistant cursor code",
+            Self::Kiro => "ai agent assistant kiro amazon aws",
             Self::OpenCode => "ai agent assistant opencode open code",
             Self::Pi => "ai agent assistant pi",
         }
@@ -62,9 +66,19 @@ impl AiAgentPreset {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "agent",
+            Self::Kiro => "kiro-cli",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
         }
+    }
+
+    pub(in super::super) fn is_installed(self) -> bool {
+        std::process::Command::new("which")
+            .arg(self.launch_command())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 
     pub(in super::super) fn fallback_label(self) -> &'static str {
@@ -72,24 +86,29 @@ impl AiAgentPreset {
             Self::Codex => "CX",
             Self::Claude => "CL",
             Self::Cursor => "CU",
+            Self::Kiro => "KI",
             Self::OpenCode => "OC",
             Self::Pi => "PI",
         }
     }
 
-    pub(in super::super) fn image_asset_path(self, dark_surface: bool) -> &'static str {
+    pub(in super::super) fn image_asset_path(self, _dark_surface: bool) -> &'static str {
         match self {
-            Self::Codex => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/codex.png"),
-            Self::Claude => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/claude.svg"),
-            Self::Cursor => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/cursor.png"),
-            Self::OpenCode if dark_surface => {
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/assets/agents/opencode-light.png"
-                )
+            Self::Codex => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/openai.svg"),
+            Self::Claude => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/claude.svg")
             }
-            Self::OpenCode => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/opencode.png"),
-            Self::Pi => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/pi.webp"),
+            Self::Cursor => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/cursor.svg")
+            }
+            Self::Kiro => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/kiro.svg")
+            }
+            Self::OpenCode => concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/agent-icons/opencode.svg"
+            ),
+            Self::Pi => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/pi.svg"),
         }
     }
 
@@ -232,7 +251,7 @@ impl CommandPaletteItem {
             title: agent.title().to_string(),
             keywords: agent.keywords().to_string(),
             enabled: true,
-            status_hint: Some(agent.launch_command()),
+            status_hint: None,
             tmux_status_hint: None,
             kind: CommandPaletteItemKind::AiAgentSpawn(agent),
         }

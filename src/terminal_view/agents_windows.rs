@@ -5,12 +5,6 @@ const AGENT_SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const AGENT_SIDEBAR_UNAVAILABLE_MESSAGE: &str =
     "Agent sidebar is currently unavailable on Windows builds.";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum AgentSidebarFilter {
-    #[default]
-    All,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct AgentGitPanelState {
     pub(super) open: bool,
@@ -81,7 +75,6 @@ impl TerminalView {
         self.agent_git_panel_input_mode = None;
         self.agent_git_panel_input.clear();
         self.hovered_agent_thread_id = None;
-        self.agent_sidebar_filter = AgentSidebarFilter::All;
         self.agent_git_panel = AgentGitPanelState::default();
     }
 

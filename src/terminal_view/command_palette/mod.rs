@@ -234,6 +234,7 @@ impl TerminalView {
     fn command_palette_ai_agent_items() -> Vec<CommandPaletteItem> {
         AiAgentPreset::ALL
             .into_iter()
+            .filter(|agent| agent.is_installed())
             .map(CommandPaletteItem::ai_agent)
             .collect()
     }

@@ -22,7 +22,7 @@ mod workspace;
 mod workspace_db;
 
 pub(in super::super) use self::types::{
-    AgentGitPanelInputMode, AgentGitPanelState, AgentProject, AgentSidebarFilter, AgentThread,
+    AgentGitPanelInputMode, AgentGitPanelState, AgentProject, AgentThread,
 };
 use self::{types::*, workspace_db::*};
 

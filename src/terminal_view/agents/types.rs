@@ -1,30 +1,5 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum AgentSidebarFilter {
-    #[default]
-    All,
-    Live,
-    Saved,
-    Busy,
-    Pinned,
-}
-
-impl AgentSidebarFilter {
-    pub(crate) const ALL: [Self; 5] =
-        [Self::All, Self::Live, Self::Saved, Self::Busy, Self::Pinned];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Live => "Live",
-            Self::Saved => "Saved",
-            Self::Busy => "Busy",
-            Self::Pinned => "Pinned",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AgentGitPanelState {
     pub(crate) open: bool,
@@ -349,6 +324,8 @@ pub(crate) struct AgentThread {
     pub(crate) last_status_label: Option<String>,
     #[serde(default)]
     pub(crate) last_status_detail: Option<String>,
+    #[serde(default)]
+    pub(crate) last_session_id: Option<String>,
     pub(crate) created_at_ms: u64,
     pub(crate) updated_at_ms: u64,
     #[serde(skip)]

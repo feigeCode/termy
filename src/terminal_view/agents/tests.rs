@@ -42,6 +42,7 @@ fn sample_workspace_state() -> PersistedAgentWorkspaceState {
             last_seen_command: Some("cargo check".to_string()),
             last_status_label: Some("ready".to_string()),
             last_status_detail: Some("workspace synced".to_string()),
+            last_session_id: None,
             created_at_ms: 11,
             updated_at_ms: 41,
             linked_tab_id: None,

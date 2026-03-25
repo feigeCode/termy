@@ -271,44 +271,6 @@ impl TerminalView {
         true
     }
 
-    pub(in super::super) fn set_agent_sidebar_filter(
-        &mut self,
-        filter: AgentSidebarFilter,
-        cx: &mut Context<Self>,
-    ) {
-        if self.agent_sidebar_filter == filter {
-            return;
-        }
-
-        self.agent_sidebar_filter = filter;
-        cx.notify();
-    }
-
-    pub(in super::super) fn are_all_agent_projects_collapsed(&self) -> bool {
-        !self.agent_projects.is_empty()
-            && self.collapsed_agent_project_ids.len() >= self.agent_projects.len()
-    }
-
-    pub(in super::super) fn set_all_agent_projects_collapsed(
-        &mut self,
-        collapsed: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if collapsed {
-            self.collapsed_agent_project_ids = self
-                .agent_projects
-                .iter()
-                .map(|project| project.id.clone())
-                .collect();
-            self.cancel_rename_agent_project(cx);
-            self.cancel_rename_agent_thread(cx);
-        } else {
-            self.collapsed_agent_project_ids.clear();
-        }
-
-        self.sync_persisted_agent_workspace();
-        cx.notify();
-    }
 
     pub(in super::super) fn begin_rename_agent_project(
         &mut self,
@@ -412,6 +374,7 @@ impl TerminalView {
             last_seen_command: Some(agent.launch_command().to_string()),
             last_status_label: None,
             last_status_detail: None,
+            last_session_id: None,
             created_at_ms: now,
             updated_at_ms: now,
             linked_tab_id: Some(tab_id),
@@ -444,9 +407,17 @@ impl TerminalView {
             return Ok(());
         }
 
-        let command = self.agent_threads[thread_index].launch_command.clone();
-        let working_dir = self.agent_threads[thread_index].working_dir.clone();
-        let project_id = self.agent_threads[thread_index].project_id.clone();
+        let thread = &self.agent_threads[thread_index];
+        let base_command = thread.launch_command.clone();
+        let session_id = thread.last_session_id.clone();
+        let working_dir = thread.working_dir.clone();
+        let project_id = thread.project_id.clone();
+
+        let command = if let Some(ref sid) = session_id {
+            format!("{} --resume {}", base_command, sid)
+        } else {
+            base_command
+        };
         let previous_tab_count = self.tabs.len();
         self.add_tab_with_working_dir(Some(working_dir.as_str()), cx);
 
@@ -461,7 +432,7 @@ impl TerminalView {
             return Err("Failed to access the new agent terminal".to_string());
         };
 
-        let mut command_input = command.clone();
+        let mut command_input = format!("clear\n{}", command);
         if !command_input.ends_with('\n') {
             command_input.push('\n');
         }
@@ -515,7 +486,7 @@ impl TerminalView {
             return Err("Failed to access the new agent terminal".to_string());
         };
 
-        let mut command_input = agent.launch_command().to_string();
+        let mut command_input = format!("clear\n{}", agent.launch_command());
         if !command_input.ends_with('\n') {
             command_input.push('\n');
         }
@@ -621,6 +592,38 @@ impl TerminalView {
 
         self.sync_persisted_agent_workspace();
         Ok(removed_threads)
+    }
+
+    pub(in super::super) fn capture_agent_session_id_for_tab(&mut self, index: usize) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let Some(thread_id) = tab.agent_thread_id.clone() else {
+            return;
+        };
+        let Some(terminal) = tab.active_terminal() else {
+            return;
+        };
+        let Some(thread) = self
+            .agent_threads
+            .iter()
+            .find(|t| t.id == thread_id)
+        else {
+            return;
+        };
+        if thread.last_session_id.is_some() {
+            return;
+        }
+        let agent = thread.agent;
+        if let Some(session_id) = Self::detect_agent_session_id(agent, terminal) {
+            if let Some(thread) = self
+                .agent_threads
+                .iter_mut()
+                .find(|t| t.id == thread_id)
+            {
+                thread.last_session_id = Some(session_id);
+            }
+        }
     }
 
     pub(in super::super) fn agent_thread_archive_snapshot_for_tab(

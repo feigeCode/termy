@@ -125,15 +125,15 @@ impl TerminalView {
 
         div()
             .flex_none()
-            .h(px(22.0))
-            .px(px(8.0))
+            .h(px(18.0))
+            .px(px(5.0))
             .flex()
             .items_center()
             .justify_center()
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(px(12.0))
+            .text_size(px(10.0))
             .text_color(badge_text)
             .child(label.to_ascii_lowercase())
             .into_any_element()
@@ -148,15 +148,15 @@ impl TerminalView {
         let label: SharedString = label.into();
         div()
             .flex_none()
-            .h(px(22.0))
-            .px(px(8.0))
+            .h(px(18.0))
+            .px(px(5.0))
             .flex()
             .items_center()
             .justify_center()
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(px(12.0))
+            .text_size(px(10.0))
             .text_color(text)
             .child(label)
             .into_any_element()
@@ -168,94 +168,6 @@ impl TerminalView {
             .size(px(5.0))
             .rounded(px(2.5))
             .bg(color)
-            .into_any_element()
-    }
-
-    pub(in super::super) fn render_agent_sidebar_new_session_icon(
-        stroke: gpui::Rgba,
-        bg: gpui::Rgba,
-    ) -> AnyElement {
-        div()
-            .relative()
-            .flex_none()
-            .w(px(17.0))
-            .h(px(14.0))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(1.0))
-                    .top(px(2.0))
-                    .w(px(5.0))
-                    .h(px(3.0))
-                    .bg(bg)
-                    .border_1()
-                    .border_color(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(4.0))
-                    .w(px(11.0))
-                    .h(px(8.0))
-                    .bg(bg)
-                    .border_1()
-                    .border_color(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right(px(1.0))
-                    .top(px(3.0))
-                    .w(px(1.5))
-                    .h(px(7.0))
-                    .bg(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top(px(6.0))
-                    .w(px(5.0))
-                    .h(px(1.5))
-                    .bg(stroke),
-            )
-            .into_any_element()
-    }
-
-    pub(in super::super) fn render_agent_sidebar_hide_icon(stroke: gpui::Rgba) -> AnyElement {
-        div()
-            .relative()
-            .flex_none()
-            .w(px(15.0))
-            .h(px(12.0))
-            .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top(px(1.0))
-                    .w(px(12.0))
-                    .h(px(1.5))
-                    .bg(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top(px(5.0))
-                    .w(px(9.0))
-                    .h(px(1.5))
-                    .bg(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top(px(9.0))
-                    .w(px(6.0))
-                    .h(px(1.5))
-                    .bg(stroke),
-            )
             .into_any_element()
     }
 
@@ -1433,6 +1345,8 @@ impl TerminalView {
             return None;
         }
 
+        self.update_agent_session_ids();
+
         let overlay_style = self.overlay_style();
         let panel_bg = overlay_style.chrome_panel_background_with_floor(0.96, 0.88);
         let input_bg = overlay_style.chrome_panel_background_with_floor(0.74, 0.72);
@@ -1463,27 +1377,7 @@ impl TerminalView {
             .map(str::to_string);
         let search_query = self.agent_sidebar_search_input.text().trim().to_string();
         let show_filtered_history = !search_query.is_empty();
-        let has_non_default_filter = self.agent_sidebar_filter != AgentSidebarFilter::All;
         let filtered_projects = self.filtered_agent_projects_for_sidebar();
-        let filtered_thread_count = filtered_projects
-            .iter()
-            .map(|(_, threads)| threads.len())
-            .sum::<usize>();
-        let history_thread_count = self.agent_threads.len();
-        let history_summary = if show_filtered_history || has_non_default_filter {
-            format!(
-                "{} match{}",
-                filtered_thread_count,
-                if filtered_thread_count == 1 { "" } else { "es" }
-            )
-        } else {
-            format!(
-                "{} thread{}",
-                history_thread_count,
-                if history_thread_count == 1 { "" } else { "s" }
-            )
-        };
-        let all_projects_collapsed = self.are_all_agent_projects_collapsed();
         let project_groups = filtered_projects
             .into_iter()
             .enumerate()
@@ -1590,7 +1484,6 @@ impl TerminalView {
                     .into_any_element();
 
                 let thread_rows = (show_filtered_history
-                    || has_non_default_filter
                     || !is_collapsed)
                     .then_some(project_threads)
                     .unwrap_or_default()
@@ -1778,11 +1671,6 @@ impl TerminalView {
         let empty_state = project_groups.is_empty().then(|| {
             let message = if show_filtered_history {
                 format!("No history matches \"{}\".", search_query)
-            } else if has_non_default_filter {
-                format!(
-                    "No threads match the {} filter.",
-                    self.agent_sidebar_filter.label().to_lowercase()
-                )
             } else {
                 "No threads yet. Start an agent to create a project.".to_string()
             };
@@ -1867,9 +1755,9 @@ impl TerminalView {
                                             })
                                             .into()
                                         })
-                                        .child(Self::render_agent_sidebar_new_session_icon(
-                                            muted, panel_bg,
-                                        ))
+                                        .text_size(px(16.0))
+                                        .text_color(muted)
+                                        .child("+")
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|view, _event, _window, cx| {
@@ -1877,6 +1765,46 @@ impl TerminalView {
                                                     command_palette::CommandPaletteMode::AgentProjects,
                                                     cx,
                                                 );
+                                                cx.stop_propagation();
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("agent-sidebar-search-toggle")
+                                        .w(px(20.0))
+                                        .h(px(18.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .hover(move |style| style.bg(button_hover_bg))
+                                        .tooltip(move |_window, cx| {
+                                            cx.new(|_| {
+                                                AgentSidebarTooltip::new(
+                                                    "Search",
+                                                    "Toggle the search bar.",
+                                                    tooltip_bg,
+                                                    tooltip_border,
+                                                    tooltip_text,
+                                                    tooltip_muted,
+                                                )
+                                            })
+                                            .into()
+                                        })
+                                        .text_size(px(16.0))
+                                        .text_color(muted)
+                                        .child("/")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|view, _event, _window, cx| {
+                                                if view.agent_sidebar_search_active {
+                                                    view.agent_sidebar_search_active = false;
+                                                    view.agent_sidebar_search_input.clear();
+                                                    cx.notify();
+                                                } else {
+                                                    view.begin_agent_sidebar_search(cx);
+                                                }
                                                 cx.stop_propagation();
                                             }),
                                         ),
@@ -1904,7 +1832,9 @@ impl TerminalView {
                                             })
                                             .into()
                                         })
-                                        .child(Self::render_agent_sidebar_hide_icon(muted))
+                                        .text_size(px(16.0))
+                                        .text_color(muted)
+                                        .child("☰")
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|view, _event, _window, cx| {
@@ -1922,7 +1852,7 @@ impl TerminalView {
                                 ),
                         ),
                 )
-                .child(
+                .children(self.agent_sidebar_search_active.then(|| {
                     div()
                         .h(px(AGENT_SIDEBAR_SEARCH_HEIGHT))
                         .px(px(10.0))
@@ -1939,11 +1869,7 @@ impl TerminalView {
                                 .items_center()
                                 .border_1()
                                 .border_color(border)
-                                .bg(if self.agent_sidebar_search_active {
-                                    selected_bg
-                                } else {
-                                    input_bg
-                                })
+                                .bg(selected_bg)
                                 .cursor(gpui::CursorStyle::IBeam)
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -1959,140 +1885,22 @@ impl TerminalView {
                                         .h_full()
                                         .flex()
                                         .items_center()
-                                        .children(
-                                            (!self.agent_sidebar_search_active
-                                                && self
-                                                    .agent_sidebar_search_input
-                                                    .text()
-                                                    .trim()
-                                                    .is_empty())
-                                            .then(|| {
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(12.5))
-                                                    .text_color(muted)
-                                                    .child("Search history")
-                                                    .into_any_element()
-                                            }),
-                                        )
-                                        .children(
-                                            (!self.agent_sidebar_search_active
-                                                && !self
-                                                    .agent_sidebar_search_input
-                                                    .text()
-                                                    .trim()
-                                                    .is_empty())
-                                            .then(|| {
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(12.5))
-                                                    .text_color(text)
-                                                    .child(
-                                                        self.agent_sidebar_search_input
-                                                            .text()
-                                                            .to_string(),
-                                                    )
-                                                    .into_any_element()
-                                            }),
-                                        )
-                                        .children(self.agent_sidebar_search_active.then(|| {
-                                            self.render_inline_input_layer(
-                                                Font {
-                                                    family: self.font_family.clone(),
-                                                    weight: FontWeight::NORMAL,
-                                                    ..Default::default()
-                                                },
-                                                px(11.0),
-                                                text.into(),
-                                                selected_bg.into(),
-                                                InlineInputAlignment::Left,
-                                                cx,
-                                            )
-                                        })),
+                                        .child(self.render_inline_input_layer(
+                                            Font {
+                                                family: self.font_family.clone(),
+                                                weight: FontWeight::NORMAL,
+                                                ..Default::default()
+                                            },
+                                            px(11.0),
+                                            text.into(),
+                                            selected_bg.into(),
+                                            InlineInputAlignment::Left,
+                                            cx,
+                                        )),
                                 ),
-                        ),
-                )
-                .child(
-                    div()
-                        .px(px(10.0))
-                        .pb(px(2.0))
-                        .flex_none()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(4.0))
-                        .children(AgentSidebarFilter::ALL.into_iter().map(|filter| {
-                            let is_selected = self.agent_sidebar_filter == filter;
-                            div()
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |view, _event, _window, cx| {
-                                        view.set_agent_sidebar_filter(filter, cx);
-                                        cx.stop_propagation();
-                                    }),
-                                )
-                                .child(Self::render_agent_sidebar_chip(
-                                    filter.label(),
-                                    border,
-                                    if is_selected { selected_bg } else { input_bg },
-                                    if is_selected { text } else { muted },
-                                ))
-                                .into_any_element()
-                        })),
-                )
-                .child(
-                    div()
-                        .px(px(10.0))
-                        .pt(px(2.0))
-                        .pb(px(2.0))
-                        .flex_none()
-                        .flex()
-                        .justify_between()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(muted)
-                                .child(if show_filtered_history {
-                                    "Search Results"
-                                } else {
-                                    "History"
-                                }),
                         )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .children((!show_filtered_history
-                                    && !has_non_default_filter
-                                    && !self.agent_projects.is_empty())
-                                    .then(|| {
-                                    div()
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |view, _event, _window, cx| {
-                                                view.set_all_agent_projects_collapsed(!all_projects_collapsed, cx);
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .child(Self::render_agent_sidebar_chip(
-                                            if all_projects_collapsed { "expand" } else { "collapse" },
-                                            border,
-                                            input_bg,
-                                            muted,
-                                        ))
-                                        .into_any_element()
-                                }))
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(muted)
-                                        .child(history_summary),
-                                ),
-                        ),
-                )
+                        .into_any_element()
+                }))
                 .child(
                     div()
                         .id("agent-sidebar-scroll")

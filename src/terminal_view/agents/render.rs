@@ -180,46 +180,54 @@ impl TerminalView {
         preview_error: Option<&str>,
         preview_diff_lines: &[String],
         preview_history: &[AgentGitHistoryEntry],
-        border: gpui::Rgba,
-        panel_bg: gpui::Rgba,
-        input_bg: gpui::Rgba,
-        selected_bg: gpui::Rgba,
-        text: gpui::Rgba,
-        muted: gpui::Rgba,
-        success: gpui::Rgba,
-        warning: gpui::Rgba,
-        danger: gpui::Rgba,
-        info: gpui::Rgba,
+        theme: &GitPanelTheme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let t = *theme;
         let repo_path = entry.repo_path.clone();
         let row_repo_path = repo_path.clone();
-        let status_color = if entry.is_untracked() || entry.status.contains('A') {
-            success
-        } else if entry.status.contains('D') || entry.status.contains('U') {
-            danger
-        } else if entry.status.contains('R') {
-            info
+        let toggle_entry = entry.clone();
+        let status_color = entry.status_color(theme);
+
+        // Checkbox: filled = fully staged, half = partially staged, empty = unstaged/untracked
+        let is_fully_staged = entry.is_staged() && !entry.is_unstaged() && !entry.is_untracked();
+        let is_partially_staged = entry.is_staged() && entry.is_unstaged();
+        let checkbox_label = if is_fully_staged {
+            "☑"
+        } else if is_partially_staged {
+            "☐·"
         } else {
-            warning
+            "☐"
         };
 
+        // File name (last component) and directory path
+        let file_name = entry
+            .repo_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(entry.repo_path.as_str())
+            .to_string();
+        let dir_path = entry
+            .repo_path
+            .rsplit_once('/')
+            .map(|(dir, _)| format!("{}/", dir));
+
+        // Expanded preview when selected
         let preview = is_selected.then(|| {
             let open_repo_path = repo_path.clone();
             let diff_repo_path = repo_path.clone();
-            let stage_repo_path = repo_path.clone();
-            let unstage_repo_path = repo_path.clone();
             let discard_entry = entry.clone();
+
             let preview_body = if preview_loading {
                 div()
                     .text_size(px(11.5))
-                    .text_color(muted)
-                    .child("Loading diff preview...")
+                    .text_color(t.muted)
+                    .child("Loading…")
                     .into_any_element()
             } else if let Some(error) = preview_error {
                 div()
                     .text_size(px(11.5))
-                    .text_color(muted)
+                    .text_color(t.muted)
                     .child(error.to_string())
                     .into_any_element()
             } else {
@@ -227,10 +235,10 @@ impl TerminalView {
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
+                    // Action bar
                     .child(
                         div()
                             .flex()
-                            .flex_wrap()
                             .gap(px(4.0))
                             .child(
                                 div()
@@ -238,7 +246,8 @@ impl TerminalView {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |view, _event, _window, cx| {
-                                            match view.open_agent_git_file(open_repo_path.as_str())
+                                            match view
+                                                .open_agent_git_file(open_repo_path.as_str())
                                             {
                                                 Ok(()) => {
                                                     termy_toast::success("Opened file");
@@ -253,7 +262,7 @@ impl TerminalView {
                                         }),
                                     )
                                     .child(Self::render_agent_sidebar_chip(
-                                        "open", border, input_bg, text,
+                                        "open", t.border, t.input_bg, t.text,
                                     )),
                             )
                             .child(
@@ -279,59 +288,15 @@ impl TerminalView {
                                         }),
                                     )
                                     .child(Self::render_agent_sidebar_chip(
-                                        "diff", border, input_bg, text,
+                                        "diff", t.border, t.input_bg, t.text,
                                     )),
                             )
-                            .children((entry.is_untracked() || entry.is_unstaged()).then(|| {
-                                div()
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |view, _event, _window, cx| {
-                                            view.run_agent_git_mutation(
-                                                vec![
-                                                    "add".to_string(),
-                                                    "--".to_string(),
-                                                    stage_repo_path.clone(),
-                                                ],
-                                                "Staged file",
-                                                cx,
-                                            );
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .child(Self::render_agent_sidebar_chip(
-                                        "stage", border, input_bg, success,
-                                    ))
-                                    .into_any_element()
-                            }))
-                            .children(entry.is_staged().then(|| {
-                                div()
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |view, _event, _window, cx| {
-                                            view.run_agent_git_mutation(
-                                                vec![
-                                                    "restore".to_string(),
-                                                    "--staged".to_string(),
-                                                    "--".to_string(),
-                                                    unstage_repo_path.clone(),
-                                                ],
-                                                "Unstaged file",
-                                                cx,
-                                            );
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .child(Self::render_agent_sidebar_chip(
-                                        "unstage", border, input_bg, warning,
-                                    ))
-                                    .into_any_element()
-                            }))
                             .children(
-                                (entry.is_untracked() || entry.is_unstaged() || entry.is_deleted())
+                                (entry.is_untracked()
+                                    || entry.is_unstaged()
+                                    || entry.is_deleted())
                                     .then(|| {
+                                        let discard_entry = discard_entry.clone();
                                         div()
                                             .cursor_pointer()
                                             .on_mouse_down(
@@ -345,12 +310,13 @@ impl TerminalView {
                                                 }),
                                             )
                                             .child(Self::render_agent_sidebar_chip(
-                                                "discard", border, input_bg, danger,
+                                                "discard", t.border, t.input_bg, t.danger,
                                             ))
                                             .into_any_element()
                                     }),
                             ),
                     )
+                    // Diff lines
                     .children((!preview_diff_lines.is_empty()).then(|| {
                         div()
                             .flex()
@@ -358,13 +324,13 @@ impl TerminalView {
                             .gap(px(1.0))
                             .children(preview_diff_lines.iter().take(60).map(|line| {
                                 let tone = if line.starts_with('+') && !line.starts_with("+++") {
-                                    success
+                                    t.success
                                 } else if line.starts_with('-') && !line.starts_with("---") {
-                                    danger
+                                    t.danger
                                 } else if line.starts_with("@@") {
-                                    warning
+                                    t.warning
                                 } else {
-                                    muted
+                                    t.muted
                                 };
                                 div()
                                     .truncate()
@@ -375,24 +341,18 @@ impl TerminalView {
                             }))
                             .into_any_element()
                     }))
-                    .children((preview_history.is_empty()).then(|| {
-                        div()
-                            .text_size(px(11.5))
-                            .text_color(muted)
-                            .child("No file history yet.")
-                            .into_any_element()
-                    }))
+                    // File history
                     .children((!preview_history.is_empty()).then(|| {
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(3.0))
-                            .child(div().text_size(px(11.5)).text_color(muted).child("History"))
+                            .child(div().text_size(px(11.0)).text_color(t.muted).child("History"))
                             .children(preview_history.iter().take(6).map(|entry| {
                                 div()
                                     .truncate()
                                     .text_size(px(11.5))
-                                    .text_color(text)
+                                    .text_color(t.text)
                                     .child(entry.summary.clone())
                                     .into_any_element()
                             }))
@@ -403,15 +363,15 @@ impl TerminalView {
 
             div()
                 .mx(px(8.0))
-                .mb(px(8.0))
+                .mb(px(4.0))
                 .px(px(8.0))
-                .py(px(10.0))
+                .py(px(8.0))
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
                 .border_1()
-                .border_color(border)
-                .bg(selected_bg)
+                .border_color(t.border)
+                .bg(t.selected_bg)
                 .child(preview_body)
                 .into_any_element()
         });
@@ -423,14 +383,14 @@ impl TerminalView {
             .child(
                 div()
                     .w_full()
+                    .h(px(28.0))
                     .px(px(8.0))
-                    .py(px(10.0))
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .bg(if is_selected { selected_bg } else { panel_bg })
+                    .bg(if is_selected { t.selected_bg } else { t.panel_bg })
                     .cursor_pointer()
-                    .when(show_border, |this| this.border_b_1().border_color(border))
+                    .when(show_border, |this| this.border_b_1().border_color(t.border))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _event, _window, cx| {
@@ -438,35 +398,54 @@ impl TerminalView {
                             cx.stop_propagation();
                         }),
                     )
+                    // Checkbox
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(16.0))
+                            .text_size(px(12.0))
+                            .text_color(if is_fully_staged { t.success } else { t.muted })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |view, _event, _window, cx| {
+                                    view.toggle_stage_agent_git_entry(&toggle_entry, cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .child(checkbox_label),
+                    )
+                    // Badge
                     .child(Self::render_agent_sidebar_chip(
                         entry.badge_label(),
-                        border,
-                        input_bg,
+                        t.border,
+                        t.input_bg,
                         status_color,
                     ))
+                    // File name + dir
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(4.0))
                             .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(12.5))
+                                    .text_color(t.text)
+                                    .child(file_name),
+                            )
+                            .children(dir_path.map(|dir| {
                                 div()
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .truncate()
-                                    .text_size(px(12.5))
-                                    .text_color(text)
-                                    .child(entry.path.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(12.5))
-                                    .text_color(muted)
-                                    .child(entry.status.clone()),
-                            ),
+                                    .text_size(px(11.0))
+                                    .text_color(t.muted)
+                                    .child(dir)
+                            })),
                     ),
             )
             .children(preview)
@@ -482,30 +461,22 @@ impl TerminalView {
         preview_error: Option<&str>,
         preview_diff_lines: &[String],
         preview_history: &[AgentGitHistoryEntry],
-        border: gpui::Rgba,
-        panel_bg: gpui::Rgba,
-        input_bg: gpui::Rgba,
-        selected_bg: gpui::Rgba,
-        text: gpui::Rgba,
-        muted: gpui::Rgba,
-        success: gpui::Rgba,
-        warning: gpui::Rgba,
-        danger: gpui::Rgba,
-        info: gpui::Rgba,
+        theme: &GitPanelTheme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if entries.is_empty() {
             return None;
         }
 
+        let t = *theme;
         let count = entries.len();
         Some(
             div()
                 .px(px(8.0))
-                .pb(px(8.0))
+                .pb(px(4.0))
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(px(2.0))
                 .child(
                     div()
                         .px(px(2.0))
@@ -514,14 +485,14 @@ impl TerminalView {
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(11.5))
-                                .text_color(muted)
+                                .text_size(px(11.0))
+                                .text_color(t.muted)
                                 .child(title.to_string()),
                         )
                         .child(
                             div()
-                                .text_size(px(12.5))
-                                .text_color(muted)
+                                .text_size(px(11.0))
+                                .text_color(t.muted)
                                 .child(count.to_string()),
                         ),
                 )
@@ -531,8 +502,8 @@ impl TerminalView {
                         .flex()
                         .flex_col()
                         .border_1()
-                        .border_color(border)
-                        .bg(panel_bg)
+                        .border_color(t.border)
+                        .bg(t.panel_bg)
                         .children(entries.into_iter().enumerate().map(|(index, entry)| {
                             self.render_agent_git_panel_entry(
                                 entry.clone(),
@@ -542,16 +513,7 @@ impl TerminalView {
                                 preview_error,
                                 preview_diff_lines,
                                 preview_history,
-                                border,
-                                panel_bg,
-                                input_bg,
-                                selected_bg,
-                                text,
-                                muted,
-                                success,
-                                warning,
-                                danger,
-                                info,
+                                &t,
                                 cx,
                             )
                         })),
@@ -564,23 +526,15 @@ impl TerminalView {
         &mut self,
         input_mode: Option<AgentGitPanelInputMode>,
         input_text: &str,
-        border: gpui::Rgba,
-        panel_bg: gpui::Rgba,
-        input_bg: gpui::Rgba,
-        selected_bg: gpui::Rgba,
-        text: gpui::Rgba,
-        muted: gpui::Rgba,
-        info: gpui::Rgba,
+        theme: &GitPanelTheme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let t = *theme;
         let active_mode = input_mode.unwrap_or(AgentGitPanelInputMode::Commit);
         let has_value = !input_text.trim().is_empty();
         let show_cancel = input_mode.is_some() || has_value;
-        let action_color = match active_mode {
-            AgentGitPanelInputMode::Commit => text,
-            AgentGitPanelInputMode::CreateBranch => info,
-            AgentGitPanelInputMode::SaveStash => muted,
-        };
+        let just_committed = self.agent_git_panel.just_committed;
+        let last_commit = self.agent_git_panel.last_commit.clone();
 
         div()
             .flex_none()
@@ -588,16 +542,58 @@ impl TerminalView {
             .flex_col()
             .gap(px(6.0))
             .px(px(8.0))
-            .py(px(10.0))
+            .py(px(8.0))
             .border_t_1()
-            .border_color(border)
-            .bg(panel_bg)
+            .border_color(t.border)
+            .bg(t.panel_bg)
+            // Uncommit bar (shown after a commit, like Zed)
+            .children((just_committed && last_commit.is_some()).then(|| {
+                let commit_msg = last_commit.unwrap_or_default();
+                div()
+                    .w_full()
+                    .px(px(6.0))
+                    .py(px(4.0))
+                    .mb(px(2.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.input_bg)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_size(px(11.0))
+                            .text_color(t.muted)
+                            .child(commit_msg),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|view, _event, _window, cx| {
+                                    view.uncommit_agent_git_panel(cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .child(Self::render_agent_sidebar_chip(
+                                "uncommit", t.border, t.panel_bg, t.warning,
+                            )),
+                    )
+                    .into_any_element()
+            }))
+            // Mode label
             .child(
                 div()
-                    .text_size(px(11.5))
-                    .text_color(muted)
+                    .text_size(px(11.0))
+                    .text_color(t.muted)
                     .child(active_mode.title()),
             )
+            // Input area
             .child({
                 let line_count = if active_mode == AgentGitPanelInputMode::Commit {
                     input_text.lines().count().max(1)
@@ -607,14 +603,14 @@ impl TerminalView {
                 let input_height = px(8.0 + line_count as f32 * 20.0_f32);
                 div()
                     .relative()
-                    .min_h(px(36.0))
+                    .min_h(px(32.0))
                     .h(input_height)
                     .px(px(8.0))
                     .flex()
                     .items_center()
                     .border_1()
-                    .border_color(border)
-                    .bg(input_bg)
+                    .border_color(t.border)
+                    .bg(t.input_bg)
                     .cursor_text()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -629,7 +625,7 @@ impl TerminalView {
                         div()
                             .truncate()
                             .text_size(px(12.5))
-                            .text_color(muted)
+                            .text_color(t.muted)
                             .child(active_mode.placeholder())
                             .into_any_element()
                     }))
@@ -641,8 +637,8 @@ impl TerminalView {
                                 ..Default::default()
                             },
                             px(11.0),
-                            text.into(),
-                            selected_bg.into(),
+                            t.text.into(),
+                            t.selected_bg.into(),
                             InlineInputAlignment::Left,
                             cx,
                         )
@@ -653,29 +649,30 @@ impl TerminalView {
                             div()
                                 .whitespace_normal()
                                 .text_size(px(12.5))
-                                .text_color(text)
+                                .text_color(t.text)
                                 .child(input_text.to_string())
                                 .into_any_element()
                         } else {
                             div()
                                 .truncate()
                                 .text_size(px(12.5))
-                                .text_color(text)
+                                .text_color(t.text)
                                 .child(input_text.to_string())
                                 .into_any_element()
                         }
                     }))
             })
+            // Action buttons
             .child(
                 div()
                     .flex()
                     .justify_between()
                     .gap(px(6.0))
                     .child(
-                        div().flex().flex_wrap().gap(px(4.0)).children(
+                        div().flex().gap(px(4.0)).children(
                             [
-                                (AgentGitPanelInputMode::Commit, "commit", text),
-                                (AgentGitPanelInputMode::SaveStash, "stash", muted),
+                                (AgentGitPanelInputMode::Commit, "commit", t.text),
+                                (AgentGitPanelInputMode::SaveStash, "stash", t.muted),
                             ]
                             .into_iter()
                             .map(|(mode, label, color)| {
@@ -697,9 +694,9 @@ impl TerminalView {
                                     )
                                     .child(Self::render_agent_sidebar_chip(
                                         label,
-                                        border,
-                                        if is_active { selected_bg } else { input_bg },
-                                        if is_active { text } else { color },
+                                        t.border,
+                                        if is_active { t.selected_bg } else { t.input_bg },
+                                        if is_active { t.text } else { color },
                                     ))
                                     .into_any_element()
                             }),
@@ -729,9 +726,9 @@ impl TerminalView {
                                     )
                                     .child(Self::render_agent_sidebar_chip(
                                         active_mode.action_label(),
-                                        border,
-                                        input_bg,
-                                        action_color,
+                                        t.border,
+                                        t.input_bg,
+                                        t.text,
                                     )),
                             )
                             .children(show_cancel.then(|| {
@@ -745,7 +742,7 @@ impl TerminalView {
                                         }),
                                     )
                                     .child(Self::render_agent_sidebar_chip(
-                                        "cancel", border, input_bg, muted,
+                                        "cancel", t.border, t.input_bg, t.muted,
                                     ))
                                     .into_any_element()
                             })),
@@ -762,50 +759,29 @@ impl TerminalView {
             return None;
         }
 
-        let overlay_style = self.overlay_style();
-        let panel_bg = overlay_style.chrome_panel_background_with_floor(0.96, 0.88);
-        let input_bg = overlay_style.chrome_panel_background_with_floor(0.74, 0.72);
-        let selected_bg = overlay_style.panel_cursor(0.10);
-        let text = overlay_style.panel_foreground(0.94);
-        let muted = overlay_style.panel_foreground(0.62);
-        let border = resolve_chrome_stroke_color(
-            panel_bg,
-            self.colors.foreground,
-            self.chrome_contrast_profile().stroke_mix,
-        );
-        let success = self.colors.ansi[10];
-        let warning = self.colors.ansi[11];
-        let danger = self.colors.ansi[9];
-        let info = self.colors.ansi[12];
+        let t = self.git_panel_theme();
 
-        let filtered_entries = self.agent_git_entries_for_filter();
-        let tracked_entries = filtered_entries
+        let entries = &self.agent_git_panel.entries;
+        let tracked_entries = entries
             .iter()
-            .filter(|entry| !entry.is_untracked())
+            .filter(|e| !e.is_untracked())
             .cloned()
             .collect::<Vec<_>>();
-        let untracked_entries = filtered_entries
+        let untracked_entries = entries
             .iter()
-            .filter(|entry| entry.is_untracked())
+            .filter(|e| e.is_untracked())
             .cloned()
             .collect::<Vec<_>>();
-
-        let label = self
-            .agent_git_panel
-            .label
-            .clone()
-            .unwrap_or_else(|| "Git Changes".to_string());
         let repo_root = self.agent_git_panel.repo_root.clone();
         let repo_name = repo_root
             .as_deref()
-            .and_then(|path| Path::new(path).file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| label.clone());
+            .and_then(|p| Path::new(p).file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Repository".to_string());
         let current_branch = self.agent_git_panel.current_branch.clone();
         let current_branch_for_branches = current_branch.clone();
         let ahead = self.agent_git_panel.ahead;
         let behind = self.agent_git_panel.behind;
-        let dirty_count = self.agent_git_panel.dirty_count;
         let loading = self.agent_git_panel.loading;
         let error = self.agent_git_panel.error.clone();
         let selected_repo_path = self.agent_git_panel.selected_repo_path.clone();
@@ -814,7 +790,6 @@ impl TerminalView {
         let preview_diff_lines = self.agent_git_panel.preview_diff_lines.clone();
         let preview_history = self.agent_git_panel.preview_history.clone();
         let branches = self.agent_git_panel.branches.clone();
-        let branches_for_dropdown = branches.clone();
         let stashes = self.agent_git_panel.stashes.clone();
         let input_mode = self.agent_git_panel_input_mode;
         let input_text = self.agent_git_panel_input.text().to_string();
@@ -827,26 +802,21 @@ impl TerminalView {
                 .entries
                 .iter()
                 .all(AgentGitPanelEntry::is_staged);
-        let change_summary = match total_changes {
-            0 => "No Changes".to_string(),
-            1 => "1 Change".to_string(),
-            count => format!("{count} Changes"),
-        };
 
         let body = if loading {
             div()
                 .px(px(10.0))
                 .py(px(12.0))
                 .text_size(px(12.5))
-                .text_color(muted)
-                .child("Loading git changes...")
+                .text_color(t.muted)
+                .child("Loading…")
                 .into_any_element()
         } else if let Some(error) = error {
             div()
                 .px(px(10.0))
                 .py(px(12.0))
                 .text_size(px(12.5))
-                .text_color(muted)
+                .text_color(t.muted)
                 .child(error)
                 .into_any_element()
         } else {
@@ -857,29 +827,20 @@ impl TerminalView {
                         .px(px(10.0))
                         .py(px(10.0))
                         .text_size(px(12.5))
-                        .text_color(muted)
-                        .child("No files match the current filter.")
+                        .text_color(t.muted)
+                        .child("Working tree clean")
                         .into_any_element(),
                 );
             }
             if let Some(section) = self.render_agent_git_panel_section(
-                "Tracked",
+                "Changes",
                 tracked_entries,
                 selected_repo_path.as_deref(),
                 preview_loading,
                 preview_error.as_deref(),
                 &preview_diff_lines,
                 &preview_history,
-                border,
-                panel_bg,
-                input_bg,
-                selected_bg,
-                text,
-                muted,
-                success,
-                warning,
-                danger,
-                info,
+                &t,
                 cx,
             ) {
                 sections.push(section);
@@ -892,33 +853,25 @@ impl TerminalView {
                 preview_error.as_deref(),
                 &preview_diff_lines,
                 &preview_history,
-                border,
-                panel_bg,
-                input_bg,
-                selected_bg,
-                text,
-                muted,
-                success,
-                warning,
-                danger,
-                info,
+                &t,
                 cx,
             ) {
                 sections.push(section);
             }
+            // Stashes
             if !stashes.is_empty() {
                 sections.push(
                     div()
                         .px(px(8.0))
-                        .pb(px(8.0))
+                        .pb(px(4.0))
                         .flex()
                         .flex_col()
-                        .gap(px(4.0))
+                        .gap(px(2.0))
                         .child(
                             div()
                                 .px(px(2.0))
-                                .text_size(px(11.5))
-                                .text_color(muted)
+                                .text_size(px(11.0))
+                                .text_color(t.muted)
                                 .child("Stashes"),
                         )
                         .children(stashes.into_iter().take(5).map(|stash| {
@@ -926,6 +879,7 @@ impl TerminalView {
                             let pop_name = stash.name.clone();
                             div()
                                 .px(px(2.0))
+                                .h(px(24.0))
                                 .flex()
                                 .items_center()
                                 .gap(px(4.0))
@@ -935,7 +889,7 @@ impl TerminalView {
                                         .min_w(px(0.0))
                                         .truncate()
                                         .text_size(px(11.5))
-                                        .text_color(text)
+                                        .text_color(t.text)
                                         .child(format!("{} {}", stash.name, stash.summary)),
                                 )
                                 .child(
@@ -957,7 +911,7 @@ impl TerminalView {
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            "apply", border, input_bg, text,
+                                            "apply", t.border, t.input_bg, t.text,
                                         )),
                                 )
                                 .child(
@@ -979,7 +933,7 @@ impl TerminalView {
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            "pop", border, input_bg, warning,
+                                            "pop", t.border, t.input_bg, t.warning,
                                         )),
                                 )
                                 .into_any_element()
@@ -1007,9 +961,10 @@ impl TerminalView {
                 .flex_none()
                 .flex()
                 .flex_col()
-                .bg(panel_bg)
+                .bg(t.panel_bg)
                 .border_l_1()
-                .border_color(border)
+                .border_color(t.border)
+                // Resize handle
                 .child(
                     div()
                         .id("agent-git-panel-resize-handle")
@@ -1028,6 +983,7 @@ impl TerminalView {
                             }),
                         ),
                 )
+                // Header: repo name + action buttons (Zed-style)
                 .child(
                     div()
                         .px(px(8.0))
@@ -1038,15 +994,15 @@ impl TerminalView {
                         .justify_between()
                         .gap(px(6.0))
                         .border_b_1()
-                        .border_color(border)
+                        .border_color(t.border)
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .truncate()
-                                .text_size(px(12.5))
-                                .text_color(muted)
-                                .child(change_summary),
+                                .text_size(px(12.0))
+                                .text_color(t.text)
+                                .child(repo_name),
                         )
                         .child(
                             div()
@@ -1057,40 +1013,13 @@ impl TerminalView {
                                         .cursor_pointer()
                                         .on_mouse_down(
                                             MouseButton::Left,
-                                            cx.listener(move |view, _event, _window, cx| {
-                                                if view.agent_git_panel.entries.is_empty() {
-                                                    cx.stop_propagation();
-                                                    return;
-                                                }
-                                                if all_staged {
-                                                    view.run_agent_git_mutation(
-                                                        vec![
-                                                            "restore".to_string(),
-                                                            "--staged".to_string(),
-                                                            ".".to_string(),
-                                                        ],
-                                                        "Unstaged all changes",
-                                                        cx,
-                                                    );
-                                                } else {
-                                                    view.run_agent_git_mutation(
-                                                        vec!["add".to_string(), "-A".to_string()],
-                                                        "Staged all changes",
-                                                        cx,
-                                                    );
-                                                }
+                                            cx.listener(|view, _event, _window, cx| {
+                                                view.fetch_agent_git_panel(cx);
                                                 cx.stop_propagation();
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            if all_staged {
-                                                "unstage all"
-                                            } else {
-                                                "stage all"
-                                            },
-                                            border,
-                                            input_bg,
-                                            if all_staged { warning } else { success },
+                                            "fetch", t.border, t.input_bg, t.muted,
                                         )),
                                 )
                                 .child(
@@ -1099,12 +1028,12 @@ impl TerminalView {
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|view, _event, _window, cx| {
-                                                view.refresh_agent_git_panel(cx);
+                                                view.pull_agent_git_panel(cx);
                                                 cx.stop_propagation();
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            "refresh", border, input_bg, text,
+                                            "pull", t.border, t.input_bg, t.info,
                                         )),
                                 )
                                 .child(
@@ -1122,7 +1051,7 @@ impl TerminalView {
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            "push", border, input_bg, info,
+                                            "push", t.border, t.input_bg, t.info,
                                         )),
                                 )
                                 .child(
@@ -1137,11 +1066,12 @@ impl TerminalView {
                                             }),
                                         )
                                         .child(Self::render_agent_sidebar_chip(
-                                            "hide", border, input_bg, muted,
+                                            "×", t.border, t.input_bg, t.muted,
                                         )),
                                 ),
                         ),
                 )
+                // Branch bar + ahead/behind + stage all
                 .child(
                     div()
                         .px(px(8.0))
@@ -1151,21 +1081,13 @@ impl TerminalView {
                         .flex_col()
                         .gap(px(4.0))
                         .border_b_1()
-                        .border_color(border)
+                        .border_color(t.border)
+                        // Branch row
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(6.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .truncate()
-                                        .text_size(px(11.5))
-                                        .text_color(text)
-                                        .child(repo_name),
-                                )
                                 .children(current_branch.map(|branch| {
                                     div()
                                         .cursor_pointer()
@@ -1180,17 +1102,78 @@ impl TerminalView {
                                         )
                                         .child(Self::render_agent_sidebar_chip(
                                             branch,
-                                            border,
+                                            t.border,
                                             if branch_dropdown_open {
-                                                selected_bg
+                                                t.selected_bg
                                             } else {
-                                                input_bg
+                                                t.input_bg
                                             },
-                                            if branch_dropdown_open { text } else { muted },
+                                            if branch_dropdown_open { t.text } else { t.muted },
+                                        ))
+                                        .into_any_element()
+                                }))
+                                // Ahead/behind indicators
+                                .children((ahead > 0).then(|| {
+                                    Self::render_agent_sidebar_chip(
+                                        format!("↑{ahead}"),
+                                        t.border,
+                                        t.input_bg,
+                                        t.success,
+                                    )
+                                }))
+                                .children((behind > 0).then(|| {
+                                    Self::render_agent_sidebar_chip(
+                                        format!("↓{behind}"),
+                                        t.border,
+                                        t.input_bg,
+                                        t.warning,
+                                    )
+                                }))
+                                .child(div().flex_1())
+                                // Stage all / unstage all
+                                .children((total_changes > 0).then(|| {
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |view, _event, _window, cx| {
+                                                if all_staged {
+                                                    view.run_agent_git_mutation(
+                                                        vec![
+                                                            "restore".to_string(),
+                                                            "--staged".to_string(),
+                                                            ".".to_string(),
+                                                        ],
+                                                        "Unstaged all",
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    view.run_agent_git_mutation(
+                                                        vec![
+                                                            "add".to_string(),
+                                                            "-A".to_string(),
+                                                        ],
+                                                        "Staged all",
+                                                        cx,
+                                                    );
+                                                }
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            if all_staged {
+                                                "unstage all"
+                                            } else {
+                                                "stage all"
+                                            },
+                                            t.border,
+                                            t.input_bg,
+                                            if all_staged { t.warning } else { t.success },
                                         ))
                                         .into_any_element()
                                 })),
                         )
+                        // Branch dropdown
                         .children(branch_dropdown_open.then(|| {
                             div()
                                 .flex()
@@ -1214,20 +1197,20 @@ impl TerminalView {
                                         )
                                         .child(Self::render_agent_sidebar_chip(
                                             "new branch",
-                                            border,
-                                            input_bg,
-                                            info,
+                                            t.border,
+                                            t.input_bg,
+                                            t.info,
                                         )),
                                 )
-                                .children(branches_for_dropdown.into_iter().map(|branch_name| {
+                                .children(branches.into_iter().map(|branch_name| {
                                     let is_current = current_branch_for_branches.as_deref()
                                         == Some(branch_name.as_str());
                                     if is_current {
                                         Self::render_agent_sidebar_chip(
                                             branch_name,
-                                            border,
-                                            selected_bg,
-                                            text,
+                                            t.border,
+                                            t.selected_bg,
+                                            t.text,
                                         )
                                         .into_any_element()
                                     } else {
@@ -1252,85 +1235,29 @@ impl TerminalView {
                                             )
                                             .child(Self::render_agent_sidebar_chip(
                                                 branch_name,
-                                                border,
-                                                input_bg,
-                                                muted,
+                                                t.border,
+                                                t.input_bg,
+                                                t.muted,
                                             ))
                                             .into_any_element()
                                     }
                                 }))
                                 .into_any_element()
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap(px(4.0))
-                                .children((ahead > 0).then(|| {
-                                    Self::render_agent_sidebar_chip(
-                                        format!("+{ahead}"),
-                                        border,
-                                        input_bg,
-                                        success,
-                                    )
-                                    .into_any_element()
-                                }))
-                                .children((behind > 0).then(|| {
-                                    Self::render_agent_sidebar_chip(
-                                        format!("-{behind}"),
-                                        border,
-                                        input_bg,
-                                        warning,
-                                    )
-                                    .into_any_element()
-                                }))
-                                .children((dirty_count > 0).then(|| {
-                                    Self::render_agent_sidebar_chip(
-                                        format!("{dirty_count} dirty"),
-                                        border,
-                                        input_bg,
-                                        danger,
-                                    )
-                                    .into_any_element()
-                                }))
-                                .children(AgentGitPanelFilter::ALL.into_iter().map(|filter| {
-                                    let is_selected = self.agent_git_panel.filter == filter;
-                                    div()
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |view, _event, _window, cx| {
-                                                view.set_agent_git_panel_filter(filter, cx);
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .child(Self::render_agent_sidebar_chip(
-                                            filter.label(),
-                                            border,
-                                            if is_selected { selected_bg } else { input_bg },
-                                            if is_selected { text } else { muted },
-                                        ))
-                                        .into_any_element()
-                                })),
-                        ),
+                        })),
                 )
+                // Scrollable file list
                 .child(
                     div()
                         .id("agent-git-panel-scroll")
                         .flex_1()
                         .overflow_y_scroll()
-                        .child(div().w_full().py(px(8.0)).flex().flex_col().child(body)),
+                        .child(div().w_full().py(px(6.0)).flex().flex_col().child(body)),
                 )
+                // Footer: commit editor
                 .child(self.render_agent_git_panel_footer(
                     input_mode,
                     input_text.as_str(),
-                    border,
-                    panel_bg,
-                    input_bg,
-                    selected_bg,
-                    text,
-                    muted,
-                    info,
+                    &t,
                     cx,
                 ))
                 .into_any_element(),

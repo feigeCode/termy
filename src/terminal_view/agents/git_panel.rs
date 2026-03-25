@@ -1,6 +1,29 @@
 use super::*;
 
 impl TerminalView {
+    pub(in super::super) fn git_panel_theme(&self) -> GitPanelTheme {
+        let overlay_style = self.overlay_style();
+        let panel_bg = overlay_style.chrome_panel_background_with_floor(0.96, 0.88);
+        let input_bg = overlay_style.chrome_panel_background_with_floor(0.74, 0.72);
+        let border = resolve_chrome_stroke_color(
+            panel_bg,
+            self.colors.foreground,
+            self.chrome_contrast_profile().stroke_mix,
+        );
+        GitPanelTheme {
+            panel_bg,
+            input_bg,
+            selected_bg: overlay_style.panel_cursor(0.10),
+            border,
+            text: overlay_style.panel_foreground(0.94),
+            muted: overlay_style.panel_foreground(0.62),
+            success: self.colors.ansi[10],
+            warning: self.colors.ansi[11],
+            danger: self.colors.ansi[9],
+            info: self.colors.ansi[12],
+        }
+    }
+
     pub(in super::super) fn close_agent_git_panel(&mut self) {
         self.agent_git_panel = AgentGitPanelState::default();
         self.agent_git_panel_input_mode = None;
@@ -532,32 +555,6 @@ impl TerminalView {
         );
     }
 
-    pub(in super::super) fn agent_git_entries_for_filter(&self) -> Vec<AgentGitPanelEntry> {
-        self.agent_git_panel
-            .entries
-            .iter()
-            .filter(|entry| match self.agent_git_panel.filter {
-                AgentGitPanelFilter::All => true,
-                AgentGitPanelFilter::Staged => entry.is_staged(),
-                AgentGitPanelFilter::Unstaged => entry.is_unstaged(),
-                AgentGitPanelFilter::Untracked => entry.is_untracked(),
-            })
-            .cloned()
-            .collect()
-    }
-
-    pub(in super::super) fn set_agent_git_panel_filter(
-        &mut self,
-        filter: AgentGitPanelFilter,
-        cx: &mut Context<Self>,
-    ) {
-        if self.agent_git_panel.filter == filter {
-            return;
-        }
-        self.agent_git_panel.filter = filter;
-        cx.notify();
-    }
-
     pub(in super::super) fn open_agent_git_file(&self, repo_path: &str) -> Result<(), String> {
         let repo_root = self
             .agent_git_panel
@@ -636,6 +633,16 @@ impl TerminalView {
         success_message: &'static str,
         cx: &mut Context<Self>,
     ) {
+        self.run_agent_git_mutation_with_callback(args, success_message, |_| {}, cx);
+    }
+
+    pub(in super::super) fn run_agent_git_mutation_with_callback(
+        &mut self,
+        args: Vec<String>,
+        success_message: &'static str,
+        on_success: impl FnOnce(&mut Self) + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let Some(repo_root) = self.agent_git_panel.repo_root.clone() else {
             termy_toast::error("Git panel is not ready");
             self.notify_overlay(cx);
@@ -666,6 +673,7 @@ impl TerminalView {
                 this.update(cx, |view, cx| match result {
                     Ok(()) => {
                         termy_toast::success(success_message);
+                        on_success(view);
                         view.refresh_agent_git_panel(cx);
                         view.notify_overlay(cx);
                     }
@@ -677,6 +685,56 @@ impl TerminalView {
             });
         })
         .detach();
+    }
+
+    pub(in super::super) fn pull_agent_git_panel(&mut self, cx: &mut Context<Self>) {
+        self.run_agent_git_mutation(vec!["pull".to_string()], "Pulled from remote", cx);
+    }
+
+    pub(in super::super) fn fetch_agent_git_panel(&mut self, cx: &mut Context<Self>) {
+        self.run_agent_git_mutation(vec!["fetch".to_string()], "Fetched from remote", cx);
+    }
+
+    pub(in super::super) fn uncommit_agent_git_panel(&mut self, cx: &mut Context<Self>) {
+        self.agent_git_panel.just_committed = false;
+        self.run_agent_git_mutation(
+            vec![
+                "reset".to_string(),
+                "HEAD~1".to_string(),
+                "--soft".to_string(),
+            ],
+            "Uncommitted last commit",
+            cx,
+        );
+    }
+
+    pub(in super::super) fn toggle_stage_agent_git_entry(
+        &mut self,
+        entry: &AgentGitPanelEntry,
+        cx: &mut Context<Self>,
+    ) {
+        if entry.is_staged() && !entry.is_unstaged() && !entry.is_untracked() {
+            self.run_agent_git_mutation(
+                vec![
+                    "restore".to_string(),
+                    "--staged".to_string(),
+                    "--".to_string(),
+                    entry.repo_path.clone(),
+                ],
+                "Unstaged file",
+                cx,
+            );
+        } else {
+            self.run_agent_git_mutation(
+                vec![
+                    "add".to_string(),
+                    "--".to_string(),
+                    entry.repo_path.clone(),
+                ],
+                "Staged file",
+                cx,
+            );
+        }
     }
 
     pub(in super::super) fn discard_agent_git_entry(
@@ -778,9 +836,12 @@ impl TerminalView {
         self.cancel_agent_git_panel_input(cx);
         match mode {
             AgentGitPanelInputMode::Commit => {
-                self.run_agent_git_mutation(
+                self.run_agent_git_mutation_with_callback(
                     vec!["commit".to_string(), "-m".to_string(), value],
                     "Created commit",
+                    |view| {
+                        view.agent_git_panel.just_committed = true;
+                    },
                     cx,
                 );
             }

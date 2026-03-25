@@ -354,6 +354,9 @@ struct VerticalTabStripResizeDragState;
 #[derive(Clone, Copy, Debug)]
 struct AgentSidebarResizeDragState;
 
+#[derive(Clone, Copy, Debug)]
+struct AgentGitPanelResizeDragState;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingCursorMoveClick {
     pane_id: String,
@@ -1505,6 +1508,9 @@ pub struct TerminalView {
     agent_sidebar_open: bool,
     agent_sidebar_filter: agents::AgentSidebarFilter,
     agent_git_panel: agents::AgentGitPanelState,
+    agent_git_panel_width: f32,
+    agent_git_panel_resize_drag: Option<AgentGitPanelResizeDragState>,
+    last_viewport_width: f32,
     active_agent_project_id: Option<String>,
     collapsed_agent_project_ids: HashSet<String>,
     agent_projects: Vec<agents::AgentProject>,
@@ -3000,6 +3006,9 @@ impl TerminalView {
             agent_sidebar_open: false,
             agent_sidebar_filter: agents::AgentSidebarFilter::All,
             agent_git_panel: agents::AgentGitPanelState::default(),
+            agent_git_panel_width: agents::AGENT_GIT_PANEL_DEFAULT_WIDTH,
+            agent_git_panel_resize_drag: None,
+            last_viewport_width: 1280.0,
             active_agent_project_id: None,
             collapsed_agent_project_ids: HashSet::new(),
             agent_projects: Vec::new(),

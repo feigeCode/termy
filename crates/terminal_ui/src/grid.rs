@@ -1389,6 +1389,28 @@ fn diagonal_draws_match_without_row(lhs: &DiagonalDraw, rhs: &DiagonalDraw) -> b
     lhs.col == rhs.col && lhs.glyph == rhs.glyph && lhs.fg == rhs.fg
 }
 
+/// Returns the inclusive column range `(start, end)` covered by a draw op.
+fn draw_op_col_range(op: &TextDrawOp) -> (usize, usize) {
+    match op {
+        TextDrawOp::Batch(batch) => {
+            let end = if batch.cell_len == 0 {
+                batch.start_col
+            } else {
+                batch.start_col + batch.cell_len - 1
+            };
+            (batch.start_col, end)
+        }
+        TextDrawOp::Block(block) => (block.col, block.col),
+        TextDrawOp::RoundedCorner(corner) => (corner.col, corner.col),
+        TextDrawOp::Diagonal(diagonal) => (diagonal.col, diagonal.col),
+    }
+}
+
+/// Returns `true` if two inclusive column ranges overlap.
+fn col_ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1
+}
+
 fn text_draw_ops_match_without_row(lhs: &TextDrawOp, rhs: &TextDrawOp) -> bool {
     match (lhs, rhs) {
         (TextDrawOp::Batch(lhs), TextDrawOp::Batch(rhs)) => {

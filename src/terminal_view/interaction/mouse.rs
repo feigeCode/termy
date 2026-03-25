@@ -222,6 +222,33 @@ impl TerminalView {
         )
     }
 
+    fn apply_agent_sidebar_resize_drag(&mut self, position: gpui::Point<Pixels>) -> bool {
+        if self.agent_sidebar_resize_drag.is_none() {
+            return false;
+        }
+
+        let pointer_x: f32 = position.x.into();
+        let left_edge = self.tab_strip_sidebar_width();
+        let requested_width = pointer_x - left_edge;
+        let next_width = agents::clamp_agent_sidebar_width(requested_width);
+        if (self.agent_sidebar_width - next_width).abs() < f32::EPSILON {
+            return false;
+        }
+
+        self.agent_sidebar_width = next_width;
+        self.clear_pane_render_caches();
+        self.clear_terminal_scrollbar_marker_cache();
+        self.cell_size_cache.clear();
+        true
+    }
+
+    fn persist_agent_sidebar_width(&self) -> Result<(), String> {
+        config::set_root_setting(
+            termy_config_core::RootSettingId::AgentSidebarWidth,
+            &self.agent_sidebar_width.to_string(),
+        )
+    }
+
     pub(in super::super) fn set_vertical_tabs_minimized(
         &mut self,
         minimized: bool,
@@ -795,6 +822,13 @@ impl TerminalView {
             return;
         }
 
+        if self.agent_sidebar_resize_drag.is_some() && event.dragging() {
+            if self.apply_agent_sidebar_resize_drag(event.position) {
+                cx.notify();
+            }
+            return;
+        }
+
         if self.try_forward_mouse_move(event, cx) {
             return;
         }
@@ -828,6 +862,14 @@ impl TerminalView {
         if event.button == MouseButton::Left && self.vertical_tab_strip_resize_drag.take().is_some()
         {
             if let Err(error) = self.persist_vertical_tab_strip_width() {
+                termy_toast::error(error);
+            }
+            cx.notify();
+            return true;
+        }
+
+        if event.button == MouseButton::Left && self.agent_sidebar_resize_drag.take().is_some() {
+            if let Err(error) = self.persist_agent_sidebar_width() {
                 termy_toast::error(error);
             }
             cx.notify();
@@ -1017,6 +1059,20 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
+        if self.agent_sidebar_resize_drag.is_some() {
+            if event.dragging() {
+                if self.apply_agent_sidebar_resize_drag(event.position) {
+                    cx.notify();
+                }
+            } else if self.agent_sidebar_resize_drag.take().is_some() {
+                if let Err(error) = self.persist_agent_sidebar_width() {
+                    termy_toast::error(error);
+                }
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if event.dragging() && self.terminal_scrollbar_track_hold.is_some() {
             if let Some(hit) = self.terminal_scrollbar_hit_test(event.position, window) {
                 self.update_terminal_scrollbar_track_hold(hit.local_y);
@@ -1098,6 +1154,14 @@ impl TerminalView {
         if event.button == MouseButton::Left && self.vertical_tab_strip_resize_drag.take().is_some()
         {
             if let Err(error) = self.persist_vertical_tab_strip_width() {
+                termy_toast::error(error);
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if event.button == MouseButton::Left && self.agent_sidebar_resize_drag.take().is_some() {
+            if let Err(error) = self.persist_agent_sidebar_width() {
                 termy_toast::error(error);
             }
             cx.stop_propagation();

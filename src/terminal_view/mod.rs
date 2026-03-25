@@ -351,6 +351,9 @@ struct PaneResizeDragState {
 #[derive(Clone, Copy, Debug)]
 struct VerticalTabStripResizeDragState;
 
+#[derive(Clone, Copy, Debug)]
+struct AgentSidebarResizeDragState;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingCursorMoveClick {
     pane_id: String,
@@ -1475,10 +1478,14 @@ pub struct TerminalView {
     active_tab: usize,
     renaming_tab: Option<usize>,
     rename_input: InlineInputState,
+    renaming_agent_project_id: Option<String>,
+    agent_project_rename_input: InlineInputState,
     renaming_agent_thread_id: Option<String>,
     agent_thread_rename_input: InlineInputState,
     agent_sidebar_search_active: bool,
     agent_sidebar_search_input: InlineInputState,
+    agent_git_panel_input_mode: Option<agents::AgentGitPanelInputMode>,
+    agent_git_panel_input: InlineInputState,
     event_wakeup_tx: Sender<()>,
     focus_handle: FocusHandle,
     theme_id: String,
@@ -1496,10 +1503,13 @@ pub struct TerminalView {
     agent_sidebar_enabled: bool,
     agent_sidebar_width: f32,
     agent_sidebar_open: bool,
+    agent_sidebar_filter: agents::AgentSidebarFilter,
+    agent_git_panel: agents::AgentGitPanelState,
     active_agent_project_id: Option<String>,
     collapsed_agent_project_ids: HashSet<String>,
     agent_projects: Vec<agents::AgentProject>,
     agent_threads: Vec<agents::AgentThread>,
+    hovered_agent_thread_id: Option<String>,
     auto_hide_tabbar: bool,
     tab_bar_visibility: TabBarVisibility,
     new_tab_animation_tab_id: Option<TabId>,
@@ -1591,6 +1601,7 @@ pub struct TerminalView {
     terminal_scrollbar_track_hold_active: bool,
     pane_resize_drag: Option<PaneResizeDragState>,
     vertical_tab_strip_resize_drag: Option<VerticalTabStripResizeDragState>,
+    agent_sidebar_resize_drag: Option<AgentSidebarResizeDragState>,
     terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache,
     /// Cached cell dimensions keyed by font-size bits.
     cell_size_cache: HashMap<u32, Size<Pixels>>,
@@ -2956,10 +2967,14 @@ impl TerminalView {
             active_tab: 0,
             renaming_tab: None,
             rename_input: InlineInputState::new(String::new()),
+            renaming_agent_project_id: None,
+            agent_project_rename_input: InlineInputState::new(String::new()),
             renaming_agent_thread_id: None,
             agent_thread_rename_input: InlineInputState::new(String::new()),
             agent_sidebar_search_active: false,
             agent_sidebar_search_input: InlineInputState::new(String::new()),
+            agent_git_panel_input_mode: None,
+            agent_git_panel_input: InlineInputState::new(String::new()),
             event_wakeup_tx,
             focus_handle,
             theme_id,
@@ -2983,10 +2998,13 @@ impl TerminalView {
             },
             agent_sidebar_width: agents::clamp_agent_sidebar_width(config.agent_sidebar_width),
             agent_sidebar_open: false,
+            agent_sidebar_filter: agents::AgentSidebarFilter::All,
+            agent_git_panel: agents::AgentGitPanelState::default(),
             active_agent_project_id: None,
             collapsed_agent_project_ids: HashSet::new(),
             agent_projects: Vec::new(),
             agent_threads: Vec::new(),
+            hovered_agent_thread_id: None,
             auto_hide_tabbar: config.auto_hide_tabbar,
             tab_bar_visibility: TabBarVisibility::FollowConfig,
             new_tab_animation_tab_id: None,
@@ -3078,6 +3096,7 @@ impl TerminalView {
             terminal_scrollbar_track_hold_active: false,
             pane_resize_drag: None,
             vertical_tab_strip_resize_drag: None,
+            agent_sidebar_resize_drag: None,
             terminal_scrollbar_marker_cache: TerminalScrollbarMarkerCache::default(),
             cell_size_cache: HashMap::new(),
             search_open: false,
@@ -3274,6 +3293,10 @@ impl TerminalView {
         self.agent_sidebar_width = agents::clamp_agent_sidebar_width(config.agent_sidebar_width);
         if !self.agent_sidebar_enabled {
             self.agent_sidebar_open = false;
+            self.agent_git_panel = agents::AgentGitPanelState::default();
+            self.agent_git_panel_input_mode = None;
+            self.agent_git_panel_input.clear();
+            self.renaming_agent_project_id = None;
             self.renaming_agent_thread_id = None;
         } else if self.agent_projects.is_empty() && self.agent_threads.is_empty() {
             self.agent_sidebar_open = true;

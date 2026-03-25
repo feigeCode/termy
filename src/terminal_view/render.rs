@@ -2597,9 +2597,9 @@ impl Render for TerminalView {
         let tabs_row = show_horizontal_tabbar
             .then(|| self.render_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
         let hidden_titlebar_branding = Self::should_render_hidden_titlebar_branding(
-            self.effective_auto_hide_tabbar(),
+            self.auto_hide_tabbar,
             self.tabs.len(),
-            self.tab_bar_visibility,
+            self.effective_tab_bar_visibility(),
             self.show_termy_in_titlebar,
         )
         .then(|| self.render_titlebar_branding(window, &colors, &font_family, tabbar_bg, false, cx))
@@ -2607,6 +2607,7 @@ impl Render for TerminalView {
         let vertical_tab_strip = (self.vertical_tabs && show_tab_strip_chrome)
             .then(|| self.render_vertical_tab_strip(window, &colors, &font_family, tabbar_bg, cx));
         let agent_sidebar = self.render_agent_sidebar(cx);
+        let agent_git_panel = self.render_agent_git_panel(cx);
         #[cfg(target_os = "macos")]
         let update_banner_layout = self.update_banner_layout();
 
@@ -2940,7 +2941,8 @@ impl Render for TerminalView {
                                             .children(ime_preedit_overlay)
                                             .children(terminal_scrollbar_overlay),
                                     ),
-                            ),
+                            )
+                            .children(agent_git_panel),
                     ),
             )
             .child(overlay_view);

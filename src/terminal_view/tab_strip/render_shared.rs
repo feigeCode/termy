@@ -54,16 +54,28 @@ mod tests {
     }
 
     #[test]
-    fn effective_auto_hide_tabbar_disables_auto_hide_while_agent_sidebar_is_visible() {
-        assert!(!TerminalView::effective_auto_hide_tabbar_for_state(
-            true, true
-        ));
-        assert!(TerminalView::effective_auto_hide_tabbar_for_state(
-            true, false
-        ));
-        assert!(!TerminalView::effective_auto_hide_tabbar_for_state(
-            false, true
-        ));
+    fn effective_tab_bar_visibility_hides_follow_config_while_agent_sidebar_is_enabled() {
+        assert_eq!(
+            TerminalView::effective_tab_bar_visibility_for_state(
+                TabBarVisibility::FollowConfig,
+                true
+            ),
+            TabBarVisibility::ForceHidden
+        );
+        assert_eq!(
+            TerminalView::effective_tab_bar_visibility_for_state(
+                TabBarVisibility::FollowConfig,
+                false
+            ),
+            TabBarVisibility::FollowConfig
+        );
+        assert_eq!(
+            TerminalView::effective_tab_bar_visibility_for_state(
+                TabBarVisibility::ForceVisible,
+                true
+            ),
+            TabBarVisibility::ForceHidden
+        );
     }
 
     #[test]
@@ -186,17 +198,21 @@ impl TerminalView {
         }
     }
 
-    pub(crate) fn effective_auto_hide_tabbar_for_state(
-        auto_hide_tabbar: bool,
-        agent_sidebar_visible: bool,
-    ) -> bool {
-        auto_hide_tabbar && !agent_sidebar_visible
+    pub(crate) fn effective_tab_bar_visibility_for_state(
+        visibility: TabBarVisibility,
+        agent_sidebar_enabled: bool,
+    ) -> TabBarVisibility {
+        if agent_sidebar_enabled {
+            TabBarVisibility::ForceHidden
+        } else {
+            visibility
+        }
     }
 
-    pub(crate) fn effective_auto_hide_tabbar(&self) -> bool {
-        Self::effective_auto_hide_tabbar_for_state(
-            self.auto_hide_tabbar,
-            self.should_render_agent_sidebar(),
+    pub(crate) fn effective_tab_bar_visibility(&self) -> TabBarVisibility {
+        Self::effective_tab_bar_visibility_for_state(
+            self.tab_bar_visibility,
+            self.agent_sidebar_enabled,
         )
     }
 
@@ -212,9 +228,9 @@ impl TerminalView {
 
     pub(crate) fn should_render_tab_strip_chrome(&self) -> bool {
         Self::tab_strip_chrome_visible(
-            self.effective_auto_hide_tabbar(),
+            self.auto_hide_tabbar,
             self.tabs.len(),
-            self.tab_bar_visibility,
+            self.effective_tab_bar_visibility(),
         )
     }
 

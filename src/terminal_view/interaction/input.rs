@@ -152,13 +152,17 @@ fn overlay_owns_terminal_input_state(
     command_palette_open: bool,
     search_open: bool,
     agent_sidebar_search_active: bool,
+    agent_git_panel_input_active: bool,
     renaming_tab: Option<usize>,
+    renaming_agent_project_id: Option<&str>,
     renaming_agent_thread_id: Option<&str>,
 ) -> bool {
     command_palette_open
         || search_open
         || agent_sidebar_search_active
+        || agent_git_panel_input_active
         || renaming_tab.is_some()
+        || renaming_agent_project_id.is_some()
         || renaming_agent_thread_id.is_some()
 }
 
@@ -211,7 +215,9 @@ impl TerminalView {
             self.is_command_palette_open(),
             self.search_open,
             self.agent_sidebar_search_active,
+            self.agent_git_panel_input_mode.is_some(),
             self.renaming_tab,
+            self.renaming_agent_project_id.as_deref(),
             self.renaming_agent_thread_id.as_deref(),
         )
     }
@@ -658,7 +664,11 @@ impl TerminalView {
 
             match key {
                 "enter" => {
-                    if self.renaming_agent_thread_id.is_some() {
+                    if self.agent_git_panel_input_mode.is_some() {
+                        self.commit_agent_git_panel_input(cx);
+                    } else if self.renaming_agent_project_id.is_some() {
+                        self.commit_rename_agent_project(cx);
+                    } else if self.renaming_agent_thread_id.is_some() {
                         self.commit_rename_agent_thread(cx);
                     } else {
                         self.commit_rename_tab(cx);
@@ -667,7 +677,11 @@ impl TerminalView {
                     return;
                 }
                 "escape" => {
-                    if self.renaming_agent_thread_id.is_some() {
+                    if self.agent_git_panel_input_mode.is_some() {
+                        self.cancel_agent_git_panel_input(cx);
+                    } else if self.renaming_agent_project_id.is_some() {
+                        self.cancel_rename_agent_project(cx);
+                    } else if self.renaming_agent_thread_id.is_some() {
                         self.cancel_rename_agent_thread(cx);
                     } else {
                         self.cancel_rename_tab(cx);

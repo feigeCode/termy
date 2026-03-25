@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,11 +18,213 @@ const LEGACY_AGENT_WORKSPACE_STATE_VERSION: u64 = 1;
 const AGENT_WORKSPACE_STATE_ROW_KEY: &str = "state";
 const AGENT_SIDEBAR_MIN_WIDTH: f32 = 180.0;
 const AGENT_SIDEBAR_MAX_WIDTH: f32 = 500.0;
-const AGENT_SIDEBAR_HEADER_HEIGHT: f32 = 36.0;
-const AGENT_SIDEBAR_SEARCH_HEIGHT: f32 = 34.0;
-const AGENT_SIDEBAR_PROJECT_ROW_HEIGHT: f32 = 30.0;
+const AGENT_SIDEBAR_HEADER_HEIGHT: f32 = 30.0;
+const AGENT_SIDEBAR_SEARCH_HEIGHT: f32 = 28.0;
+const AGENT_SIDEBAR_PROJECT_ROW_HEIGHT: f32 = 24.0;
+const AGENT_GIT_PANEL_WIDTH: f32 = 320.0;
 const AGENT_STATUS_VISIBLE_LINE_COUNT: i32 = 6;
 static NEXT_AGENT_ENTITY_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AgentSidebarFilter {
+    #[default]
+    All,
+    Live,
+    Saved,
+    Busy,
+    Pinned,
+}
+
+impl AgentSidebarFilter {
+    const ALL: [Self; 5] = [Self::All, Self::Live, Self::Saved, Self::Busy, Self::Pinned];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Live => "Live",
+            Self::Saved => "Saved",
+            Self::Busy => "Busy",
+            Self::Pinned => "Pinned",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct AgentGitPanelState {
+    pub(super) open: bool,
+    source_path: Option<String>,
+    label: Option<String>,
+    repo_root: Option<String>,
+    branch: Option<String>,
+    current_branch: Option<String>,
+    ahead: usize,
+    behind: usize,
+    dirty_count: usize,
+    last_commit: Option<String>,
+    loading: bool,
+    error: Option<String>,
+    filter: AgentGitPanelFilter,
+    entries: Vec<AgentGitPanelEntry>,
+    selected_repo_path: Option<String>,
+    preview_loading: bool,
+    preview_error: Option<String>,
+    preview_diff_lines: Vec<String>,
+    preview_history: Vec<AgentGitHistoryEntry>,
+    project_history: Vec<AgentGitHistoryEntry>,
+    branches: Vec<String>,
+    stashes: Vec<AgentGitStashEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct AgentGitPanelEntry {
+    pub(super) status: String,
+    pub(super) path: String,
+    repo_path: String,
+}
+
+struct AgentGitPanelSnapshot {
+    repo_root: String,
+    branch: Option<String>,
+    current_branch: Option<String>,
+    ahead: usize,
+    behind: usize,
+    dirty_count: usize,
+    last_commit: Option<String>,
+    entries: Vec<AgentGitPanelEntry>,
+    project_history: Vec<AgentGitHistoryEntry>,
+    branches: Vec<String>,
+    stashes: Vec<AgentGitStashEntry>,
+}
+
+struct AgentGitPanelPreviewSnapshot {
+    diff_lines: Vec<String>,
+    history: Vec<AgentGitHistoryEntry>,
+}
+
+impl AgentGitPanelEntry {
+    fn from_status_line(status: &str, raw_path: &str) -> Self {
+        let repo_path = raw_path
+            .split(" -> ")
+            .last()
+            .unwrap_or(raw_path)
+            .to_string();
+        Self {
+            status: status.to_string(),
+            path: raw_path.to_string(),
+            repo_path,
+        }
+    }
+
+    fn is_untracked(&self) -> bool {
+        self.status == "??"
+    }
+
+    fn is_staged(&self) -> bool {
+        self.status
+            .chars()
+            .next()
+            .is_some_and(|ch| ch != ' ' && ch != '?')
+    }
+
+    fn is_unstaged(&self) -> bool {
+        self.status
+            .chars()
+            .nth(1)
+            .is_some_and(|ch| ch != ' ' && ch != '?')
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.status.contains('D')
+    }
+
+    fn badge_label(&self) -> SharedString {
+        if self.is_untracked() {
+            return "new".into();
+        }
+        if self.status.contains('R') {
+            return "ren".into();
+        }
+        if self.status.contains('A') {
+            return "add".into();
+        }
+        if self.status.contains('D') {
+            return "del".into();
+        }
+        if self.status.contains('U') {
+            return "conf".into();
+        }
+        if self.status.contains('M') {
+            return "mod".into();
+        }
+        self.status.trim().to_lowercase().into()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AgentGitPanelFilter {
+    #[default]
+    All,
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
+impl AgentGitPanelFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Staged, Self::Unstaged, Self::Untracked];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Staged => "Staged",
+            Self::Unstaged => "Unstaged",
+            Self::Untracked => "Untracked",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AgentGitPanelInputMode {
+    Commit,
+    CreateBranch,
+    SaveStash,
+}
+
+impl AgentGitPanelInputMode {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Commit => "Commit message",
+            Self::CreateBranch => "New branch",
+            Self::SaveStash => "Stash message",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Commit => "Write a commit message",
+            Self::CreateBranch => "feature/my-branch",
+            Self::SaveStash => "WIP stash",
+        }
+    }
+
+    fn action_label(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::CreateBranch => "create",
+            Self::SaveStash => "save",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentGitHistoryEntry {
+    summary: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentGitStashEntry {
+    name: String,
+    summary: String,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AgentThreadRuntimeStatus {
@@ -55,6 +258,68 @@ struct AgentThreadStatusPresentation {
     tone: AgentThreadStatusTone,
 }
 
+struct AgentSidebarTooltip {
+    title: &'static str,
+    detail: &'static str,
+    bg: gpui::Rgba,
+    border: gpui::Rgba,
+    text: gpui::Rgba,
+    muted: gpui::Rgba,
+}
+
+impl AgentSidebarTooltip {
+    fn new(
+        title: &'static str,
+        detail: &'static str,
+        bg: gpui::Rgba,
+        border: gpui::Rgba,
+        text: gpui::Rgba,
+        muted: gpui::Rgba,
+    ) -> Self {
+        Self {
+            title,
+            detail,
+            bg,
+            border,
+            text,
+            muted,
+        }
+    }
+}
+
+impl Render for AgentSidebarTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().pl(px(8.0)).pt(px(10.0)).child(
+            div()
+                .w(px(196.0))
+                .px(px(10.0))
+                .py(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .bg(self.bg)
+                .border_1()
+                .border_color(self.border)
+                .child(
+                    div()
+                        .w_full()
+                        .whitespace_normal()
+                        .text_size(px(11.0))
+                        .text_color(self.text)
+                        .child(self.title),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .whitespace_normal()
+                        .text_size(px(10.0))
+                        .text_color(self.muted)
+                        .child(self.detail),
+                ),
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct PersistedAgentWorkspaceState {
     version: u64,
@@ -84,6 +349,8 @@ pub(super) struct AgentProject {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) root_path: String,
+    #[serde(default)]
+    pub(super) pinned: bool,
     pub(super) created_at_ms: u64,
     pub(super) updated_at_ms: u64,
 }
@@ -96,6 +363,8 @@ pub(super) struct AgentThread {
     title: String,
     #[serde(default)]
     custom_title: Option<String>,
+    #[serde(default)]
+    pinned: bool,
     launch_command: String,
     working_dir: String,
     last_seen_title: Option<String>,
@@ -455,6 +724,746 @@ impl TerminalView {
         self.agent_sidebar_enabled && self.agent_sidebar_open
     }
 
+    fn close_agent_git_panel(&mut self) {
+        self.agent_git_panel = AgentGitPanelState::default();
+        self.agent_git_panel_input_mode = None;
+        self.agent_git_panel_input.clear();
+    }
+
+    pub(super) fn cancel_agent_git_panel_input(&mut self, cx: &mut Context<Self>) {
+        if self.agent_git_panel_input_mode.take().is_some()
+            || !self.agent_git_panel_input.text().is_empty()
+        {
+            self.agent_git_panel_input.clear();
+            self.inline_input_selecting = false;
+            cx.notify();
+        }
+    }
+
+    fn begin_agent_git_panel_input(
+        &mut self,
+        mode: AgentGitPanelInputMode,
+        initial_text: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.agent_git_panel_input_mode = Some(mode);
+        self.agent_git_panel_input.set_text(initial_text.into());
+        self.inline_input_selecting = true;
+        cx.notify();
+    }
+
+    fn agent_git_panel_matches_target_path(&self, path: &str) -> bool {
+        if !self.agent_git_panel.open {
+            return false;
+        }
+
+        if let Some(repo_root) = self.agent_git_panel.repo_root.as_deref() {
+            let repo_root = Path::new(repo_root);
+            let target = Path::new(path);
+            if target == repo_root || target.starts_with(repo_root) {
+                return true;
+            }
+        }
+
+        self.agent_git_panel.source_path.as_deref() == Some(path)
+    }
+
+    fn run_git_command(repo_root: &str, args: &[&str]) -> Result<String, String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(args)
+            .output()
+            .map_err(|error| {
+                format!(
+                    "Failed to run git {}: {}",
+                    args.first().copied().unwrap_or("command"),
+                    error
+                )
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                format!("git {} failed", args.first().copied().unwrap_or("command"))
+            } else {
+                stderr
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn run_git_diff_command(repo_root: &str, args: &[&str]) -> Result<String, String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(args)
+            .output()
+            .map_err(|error| format!("Failed to run git diff: {}", error))?;
+        let code = output.status.code().unwrap_or_default();
+        if !(output.status.success() || code == 1) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                "git diff failed".to_string()
+            } else {
+                stderr
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn parse_agent_git_branch_summary(branch_line: &str) -> (Option<String>, usize, usize) {
+        let current_branch = branch_line
+            .split("...")
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "HEAD (no branch)")
+            .map(str::to_string);
+        let mut ahead = 0usize;
+        let mut behind = 0usize;
+        if let Some(start) = branch_line.find('[')
+            && let Some(end_rel) = branch_line[start + 1..].find(']')
+        {
+            let details = &branch_line[start + 1..start + 1 + end_rel];
+            for part in details.split(',') {
+                let trimmed = part.trim();
+                if let Some(value) = trimmed.strip_prefix("ahead ") {
+                    ahead = value.parse::<usize>().unwrap_or_default();
+                }
+                if let Some(value) = trimmed.strip_prefix("behind ") {
+                    behind = value.parse::<usize>().unwrap_or_default();
+                }
+            }
+        }
+        (current_branch, ahead, behind)
+    }
+
+    fn parse_agent_git_history(output: &str) -> Vec<AgentGitHistoryEntry> {
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| AgentGitHistoryEntry {
+                summary: line.to_string(),
+            })
+            .collect()
+    }
+
+    fn parse_agent_git_stashes(output: &str) -> Vec<AgentGitStashEntry> {
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut parts = line.splitn(2, ' ');
+                AgentGitStashEntry {
+                    name: parts.next().unwrap_or_default().to_string(),
+                    summary: parts.next().unwrap_or_default().to_string(),
+                }
+            })
+            .collect()
+    }
+
+    fn load_agent_git_panel_snapshot(path: &str) -> Result<AgentGitPanelSnapshot, String> {
+        let repo_root = Self::run_git_command(path, &["rev-parse", "--show-toplevel"])?
+            .trim()
+            .to_string();
+        let status_output = Self::run_git_command(
+            repo_root.as_str(),
+            &[
+                "status",
+                "--porcelain=v1",
+                "--branch",
+                "--untracked-files=all",
+            ],
+        )?;
+        let mut branch = None;
+        let mut current_branch = None;
+        let mut ahead = 0usize;
+        let mut behind = 0usize;
+        let mut entries = Vec::new();
+        for line in status_output.lines() {
+            if let Some(branch_line) = line.strip_prefix("## ") {
+                branch = Some(branch_line.to_string());
+                let parsed = Self::parse_agent_git_branch_summary(branch_line);
+                current_branch = parsed.0;
+                ahead = parsed.1;
+                behind = parsed.2;
+                continue;
+            }
+            if line.len() < 3 {
+                continue;
+            }
+            entries.push(AgentGitPanelEntry::from_status_line(&line[..2], &line[3..]));
+        }
+
+        let last_commit =
+            Self::run_git_command(repo_root.as_str(), &["log", "-1", "--pretty=%h %s"])
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+        let project_history = Self::parse_agent_git_history(&Self::run_git_command(
+            repo_root.as_str(),
+            &["log", "-n", "8", "--pretty=%h %s"],
+        )?);
+        let branches = Self::run_git_command(
+            repo_root.as_str(),
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let stashes = Self::parse_agent_git_stashes(&Self::run_git_command(
+            repo_root.as_str(),
+            &["stash", "list", "--format=%gd %s"],
+        )?);
+        let dirty_count = entries.len();
+
+        Ok(AgentGitPanelSnapshot {
+            repo_root,
+            branch,
+            current_branch,
+            ahead,
+            behind,
+            dirty_count,
+            last_commit,
+            entries,
+            project_history,
+            branches,
+            stashes,
+        })
+    }
+
+    fn load_agent_git_panel_preview(
+        repo_root: &str,
+        entry: &AgentGitPanelEntry,
+    ) -> Result<AgentGitPanelPreviewSnapshot, String> {
+        let diff = if entry.is_untracked() {
+            let absolute = Path::new(repo_root).join(entry.repo_path.as_str());
+            Self::run_git_diff_command(
+                repo_root,
+                &[
+                    "diff",
+                    "--no-index",
+                    "--unified=3",
+                    "--",
+                    "/dev/null",
+                    absolute.to_string_lossy().as_ref(),
+                ],
+            )?
+        } else {
+            Self::run_git_diff_command(
+                repo_root,
+                &[
+                    "diff",
+                    "--no-ext-diff",
+                    "--unified=3",
+                    "HEAD",
+                    "--",
+                    entry.repo_path.as_str(),
+                ],
+            )?
+        };
+        let history = Self::parse_agent_git_history(&Self::run_git_command(
+            repo_root,
+            &[
+                "log",
+                "-n",
+                "8",
+                "--pretty=%h %s",
+                "--",
+                entry.repo_path.as_str(),
+            ],
+        )?);
+        Ok(AgentGitPanelPreviewSnapshot {
+            diff_lines: diff.lines().map(str::to_string).collect(),
+            history,
+        })
+    }
+
+    fn refresh_agent_git_panel(&mut self, cx: &mut Context<Self>) {
+        let (Some(source_path), Some(label)) = (
+            self.agent_git_panel.source_path.clone(),
+            self.agent_git_panel.label.clone(),
+        ) else {
+            return;
+        };
+
+        self.agent_git_panel.open = true;
+        self.agent_git_panel.loading = true;
+        self.agent_git_panel.error = None;
+        cx.notify();
+
+        let source_path_for_load = source_path.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result =
+                smol::unblock(move || Self::load_agent_git_panel_snapshot(&source_path_for_load))
+                    .await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    if !view.agent_git_panel.open
+                        || view.agent_git_panel.source_path.as_deref() != Some(source_path.as_str())
+                    {
+                        return;
+                    }
+
+                    view.agent_git_panel.loading = false;
+                    match result {
+                        Ok(snapshot) => {
+                            let selected = view.agent_git_panel.selected_repo_path.clone();
+                            view.agent_git_panel.repo_root = Some(snapshot.repo_root);
+                            view.agent_git_panel.branch = snapshot.branch;
+                            view.agent_git_panel.current_branch = snapshot.current_branch;
+                            view.agent_git_panel.ahead = snapshot.ahead;
+                            view.agent_git_panel.behind = snapshot.behind;
+                            view.agent_git_panel.dirty_count = snapshot.dirty_count;
+                            view.agent_git_panel.last_commit = snapshot.last_commit;
+                            view.agent_git_panel.project_history = snapshot.project_history;
+                            view.agent_git_panel.branches = snapshot.branches;
+                            view.agent_git_panel.stashes = snapshot.stashes;
+                            view.agent_git_panel.error = None;
+                            view.agent_git_panel.entries = snapshot.entries;
+                            if let Some(selected_path) = selected {
+                                if view
+                                    .agent_git_panel
+                                    .entries
+                                    .iter()
+                                    .any(|entry| entry.repo_path == selected_path)
+                                {
+                                    view.select_agent_git_panel_entry(selected_path.as_str(), cx);
+                                } else {
+                                    view.clear_agent_git_panel_preview();
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            view.agent_git_panel.repo_root = None;
+                            view.agent_git_panel.branch = None;
+                            view.agent_git_panel.current_branch = None;
+                            view.agent_git_panel.ahead = 0;
+                            view.agent_git_panel.behind = 0;
+                            view.agent_git_panel.dirty_count = 0;
+                            view.agent_git_panel.last_commit = None;
+                            view.agent_git_panel.project_history.clear();
+                            view.agent_git_panel.branches.clear();
+                            view.agent_git_panel.stashes.clear();
+                            view.agent_git_panel.entries.clear();
+                            view.agent_git_panel.error = Some(error);
+                            view.clear_agent_git_panel_preview();
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+        let _ = label;
+    }
+
+    fn clear_agent_git_panel_preview(&mut self) {
+        self.agent_git_panel.selected_repo_path = None;
+        self.agent_git_panel.preview_loading = false;
+        self.agent_git_panel.preview_error = None;
+        self.agent_git_panel.preview_diff_lines.clear();
+        self.agent_git_panel.preview_history.clear();
+    }
+
+    fn select_agent_git_panel_entry(&mut self, repo_path: &str, cx: &mut Context<Self>) {
+        let Some(repo_root) = self.agent_git_panel.repo_root.clone() else {
+            return;
+        };
+        let Some(entry) = self
+            .agent_git_panel
+            .entries
+            .iter()
+            .find(|entry| entry.repo_path == repo_path)
+            .cloned()
+        else {
+            return;
+        };
+
+        if self.agent_git_panel.selected_repo_path.as_deref() == Some(repo_path)
+            && !self.agent_git_panel.preview_loading
+        {
+            self.clear_agent_git_panel_preview();
+            cx.notify();
+            return;
+        }
+
+        self.agent_git_panel.selected_repo_path = Some(repo_path.to_string());
+        self.agent_git_panel.preview_loading = true;
+        self.agent_git_panel.preview_error = None;
+        self.agent_git_panel.preview_diff_lines.clear();
+        self.agent_git_panel.preview_history.clear();
+        cx.notify();
+
+        let selected_repo_path = repo_path.to_string();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result =
+                smol::unblock(move || Self::load_agent_git_panel_preview(&repo_root, &entry)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    if view.agent_git_panel.selected_repo_path.as_deref()
+                        != Some(selected_repo_path.as_str())
+                    {
+                        return;
+                    }
+                    view.agent_git_panel.preview_loading = false;
+                    match result {
+                        Ok(preview) => {
+                            view.agent_git_panel.preview_error = None;
+                            view.agent_git_panel.preview_diff_lines = preview.diff_lines;
+                            view.agent_git_panel.preview_history = preview.history;
+                        }
+                        Err(error) => {
+                            view.agent_git_panel.preview_error = Some(error);
+                            view.agent_git_panel.preview_diff_lines.clear();
+                            view.agent_git_panel.preview_history.clear();
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn open_agent_git_panel_for_path(
+        &mut self,
+        source_path: &str,
+        label: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.agent_git_panel.open = true;
+        self.agent_git_panel.source_path = Some(source_path.to_string());
+        self.agent_git_panel.label = Some(label);
+        self.agent_git_panel.selected_repo_path = None;
+        self.agent_git_panel.preview_loading = false;
+        self.agent_git_panel.preview_error = None;
+        self.agent_git_panel.preview_diff_lines.clear();
+        self.agent_git_panel.preview_history.clear();
+        self.refresh_agent_git_panel(cx);
+    }
+
+    fn toggle_agent_git_panel_for_path(
+        &mut self,
+        source_path: &str,
+        label: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_git_panel_matches_target_path(source_path) {
+            self.close_agent_git_panel();
+            cx.notify();
+            return;
+        }
+        self.open_agent_git_panel_for_path(source_path, label, cx);
+    }
+
+    fn toggle_agent_git_panel_for_project(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        let Some(project) = self
+            .agent_projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| (project.root_path.clone(), project.name.clone()))
+        else {
+            return;
+        };
+
+        self.toggle_agent_git_panel_for_path(
+            project.0.as_str(),
+            format!("Project · {}", project.1),
+            cx,
+        );
+    }
+
+    fn toggle_agent_git_panel_for_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some((working_dir, title)) = self
+            .agent_threads
+            .iter()
+            .find(|thread| thread.id == thread_id)
+            .map(|thread| {
+                (
+                    thread.working_dir.clone(),
+                    self.agent_thread_display_title(thread),
+                )
+            })
+        else {
+            return;
+        };
+
+        self.toggle_agent_git_panel_for_path(
+            working_dir.as_str(),
+            format!("Thread · {}", title),
+            cx,
+        );
+    }
+
+    fn agent_git_entries_for_filter(&self) -> Vec<AgentGitPanelEntry> {
+        self.agent_git_panel
+            .entries
+            .iter()
+            .filter(|entry| match self.agent_git_panel.filter {
+                AgentGitPanelFilter::All => true,
+                AgentGitPanelFilter::Staged => entry.is_staged(),
+                AgentGitPanelFilter::Unstaged => entry.is_unstaged(),
+                AgentGitPanelFilter::Untracked => entry.is_untracked(),
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn set_agent_git_panel_filter(&mut self, filter: AgentGitPanelFilter, cx: &mut Context<Self>) {
+        if self.agent_git_panel.filter == filter {
+            return;
+        }
+        self.agent_git_panel.filter = filter;
+        cx.notify();
+    }
+
+    fn open_agent_git_file(&self, repo_path: &str) -> Result<(), String> {
+        let repo_root = self
+            .agent_git_panel
+            .repo_root
+            .as_deref()
+            .ok_or_else(|| "Git panel is not ready".to_string())?;
+        let path = Path::new(repo_root).join(repo_path);
+
+        #[cfg(target_os = "macos")]
+        let status = Command::new("open").arg(&path).status();
+        #[cfg(target_os = "linux")]
+        let status = Command::new("xdg-open").arg(&path).status();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let status = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Opening files is unsupported on this platform",
+        ));
+
+        status
+            .map_err(|error| format!("Failed to open '{}': {}", path.display(), error))?
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("Failed to open '{}'", path.display()))
+    }
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn open_agent_git_full_diff(
+        &mut self,
+        repo_path: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let repo_root = self
+            .agent_git_panel
+            .repo_root
+            .clone()
+            .ok_or_else(|| "Git panel is not ready".to_string())?;
+        let command = if self
+            .agent_git_panel
+            .entries
+            .iter()
+            .find(|entry| entry.repo_path == repo_path)
+            .is_some_and(AgentGitPanelEntry::is_untracked)
+        {
+            let full_path = Path::new(repo_root.as_str()).join(repo_path);
+            format!(
+                "git -C {} diff --no-index --unified=20 -- /dev/null {} | less -R\n",
+                Self::shell_quote(repo_root.as_str()),
+                Self::shell_quote(full_path.to_string_lossy().as_ref())
+            )
+        } else {
+            format!(
+                "git -C {} diff --no-ext-diff --unified=20 HEAD -- {} | less -R\n",
+                Self::shell_quote(repo_root.as_str()),
+                Self::shell_quote(repo_path)
+            )
+        };
+
+        self.add_tab_with_working_dir(Some(repo_root.as_str()), cx);
+        if let Some(tab) = self.tabs.get(self.active_tab)
+            && let Some(terminal) = tab.active_terminal()
+        {
+            terminal.write_input(command.as_bytes());
+            cx.notify();
+            Ok(())
+        } else {
+            Err("Failed to open diff tab".to_string())
+        }
+    }
+
+    fn run_agent_git_mutation(
+        &mut self,
+        args: Vec<String>,
+        success_message: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo_root) = self.agent_git_panel.repo_root.clone() else {
+            termy_toast::error("Git panel is not ready");
+            self.notify_overlay(cx);
+            return;
+        };
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = smol::unblock(move || {
+                let output = Command::new("git")
+                    .arg("-C")
+                    .arg(repo_root.as_str())
+                    .args(args.iter().map(String::as_str))
+                    .output()
+                    .map_err(|error| format!("Failed to run git: {}", error))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    return Err(if stderr.is_empty() {
+                        "Git command failed".to_string()
+                    } else {
+                        stderr
+                    });
+                }
+                Ok(())
+            })
+            .await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| match result {
+                    Ok(()) => {
+                        termy_toast::success(success_message);
+                        view.refresh_agent_git_panel(cx);
+                        view.notify_overlay(cx);
+                    }
+                    Err(error) => {
+                        termy_toast::error(error);
+                        view.notify_overlay(cx);
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn discard_agent_git_entry(&mut self, entry: AgentGitPanelEntry, cx: &mut Context<Self>) {
+        let Some(repo_root) = self.agent_git_panel.repo_root.clone() else {
+            termy_toast::error("Git panel is not ready");
+            self.notify_overlay(cx);
+            return;
+        };
+
+        let repo_path = entry.repo_path.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let title = if entry.is_untracked() {
+                "Discard Untracked File".to_string()
+            } else {
+                "Discard File Changes".to_string()
+            };
+            let message = format!("Discard changes for '{}' ?", entry.path);
+            let confirmed =
+                smol::unblock(move || termy_native_sdk::confirm(&title, &message)).await;
+            if !confirmed {
+                return;
+            }
+
+            let result = smol::unblock(move || {
+                if entry.is_untracked() {
+                    let output = Command::new("git")
+                        .arg("-C")
+                        .arg(repo_root.as_str())
+                        .args(["clean", "-f", "--", repo_path.as_str()])
+                        .output()
+                        .map_err(|error| format!("Failed to run git clean: {}", error))?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        return Err(if stderr.is_empty() {
+                            "git clean failed".to_string()
+                        } else {
+                            stderr
+                        });
+                    }
+                    return Ok(());
+                }
+
+                let output = Command::new("git")
+                    .arg("-C")
+                    .arg(repo_root.as_str())
+                    .args([
+                        "restore",
+                        "--staged",
+                        "--worktree",
+                        "--source=HEAD",
+                        "--",
+                        repo_path.as_str(),
+                    ])
+                    .output()
+                    .map_err(|error| format!("Failed to run git restore: {}", error))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    return Err(if stderr.is_empty() {
+                        "git restore failed".to_string()
+                    } else {
+                        stderr
+                    });
+                }
+                Ok(())
+            })
+            .await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| match result {
+                    Ok(()) => {
+                        termy_toast::success("Discarded file changes");
+                        view.refresh_agent_git_panel(cx);
+                        view.notify_overlay(cx);
+                    }
+                    Err(error) => {
+                        termy_toast::error(error);
+                        view.notify_overlay(cx);
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn commit_agent_git_panel_input(&mut self, cx: &mut Context<Self>) {
+        let Some(mode) = self.agent_git_panel_input_mode else {
+            return;
+        };
+        let value = self.agent_git_panel_input.text().trim().to_string();
+        if value.is_empty() {
+            termy_toast::error("Input cannot be empty");
+            self.notify_overlay(cx);
+            return;
+        }
+        self.cancel_agent_git_panel_input(cx);
+        match mode {
+            AgentGitPanelInputMode::Commit => {
+                self.run_agent_git_mutation(
+                    vec!["commit".to_string(), "-m".to_string(), value],
+                    "Created commit",
+                    cx,
+                );
+            }
+            AgentGitPanelInputMode::CreateBranch => {
+                self.run_agent_git_mutation(
+                    vec!["checkout".to_string(), "-b".to_string(), value],
+                    "Created branch",
+                    cx,
+                );
+            }
+            AgentGitPanelInputMode::SaveStash => {
+                self.run_agent_git_mutation(
+                    vec![
+                        "stash".to_string(),
+                        "push".to_string(),
+                        "-m".to_string(),
+                        value,
+                    ],
+                    "Saved stash",
+                    cx,
+                );
+            }
+        }
+    }
+
     fn persisted_agent_workspace_db_path() -> Result<PathBuf, String> {
         let config_path = crate::config::ensure_config_file().map_err(|error| error.to_string())?;
         let parent = config_path
@@ -535,9 +1544,8 @@ impl TerminalView {
                     };
                 if self.active_agent_project_id.is_none() {
                     self.active_agent_project_id = self
-                        .agent_projects
-                        .iter()
-                        .max_by_key(|project| project.updated_at_ms)
+                        .sorted_agent_projects()
+                        .first()
                         .map(|project| project.id.clone());
                 }
             }
@@ -566,7 +1574,10 @@ impl TerminalView {
         self.agent_sidebar_open = !self.agent_sidebar_open;
         if !self.agent_sidebar_open {
             self.agent_sidebar_search_active = false;
-            self.renaming_agent_thread_id = None;
+            self.cancel_rename_agent_project(cx);
+            self.cancel_rename_agent_thread(cx);
+            self.hovered_agent_thread_id = None;
+            self.close_agent_git_panel();
         }
         self.sync_persisted_agent_workspace();
         cx.notify();
@@ -664,6 +1675,7 @@ impl TerminalView {
             id: project_id.clone(),
             name: Self::agent_project_name_for_path(&normalized),
             root_path: normalized,
+            pinned: false,
             created_at_ms: now,
             updated_at_ms: now,
         });
@@ -677,6 +1689,155 @@ impl TerminalView {
             .find(|project| project.id == project_id)?;
         project.updated_at_ms = now_unix_ms();
         Some(project.root_path.clone())
+    }
+
+    fn set_agent_project_pinned(
+        &mut self,
+        project_id: &str,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(project) = self
+            .agent_projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        else {
+            return false;
+        };
+
+        if project.pinned == pinned {
+            return false;
+        }
+
+        project.pinned = pinned;
+        self.sync_persisted_agent_workspace();
+        cx.notify();
+        true
+    }
+
+    fn set_agent_thread_pinned(
+        &mut self,
+        thread_id: &str,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(thread) = self
+            .agent_threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id)
+        else {
+            return false;
+        };
+
+        if thread.pinned == pinned {
+            return false;
+        }
+
+        thread.pinned = pinned;
+        thread.updated_at_ms = now_unix_ms();
+        self.sync_persisted_agent_workspace();
+        cx.notify();
+        true
+    }
+
+    fn set_agent_sidebar_filter(&mut self, filter: AgentSidebarFilter, cx: &mut Context<Self>) {
+        if self.agent_sidebar_filter == filter {
+            return;
+        }
+
+        self.agent_sidebar_filter = filter;
+        cx.notify();
+    }
+
+    fn are_all_agent_projects_collapsed(&self) -> bool {
+        !self.agent_projects.is_empty()
+            && self.collapsed_agent_project_ids.len() >= self.agent_projects.len()
+    }
+
+    fn set_all_agent_projects_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if collapsed {
+            self.collapsed_agent_project_ids = self
+                .agent_projects
+                .iter()
+                .map(|project| project.id.clone())
+                .collect();
+            self.cancel_rename_agent_project(cx);
+            self.cancel_rename_agent_thread(cx);
+        } else {
+            self.collapsed_agent_project_ids.clear();
+        }
+
+        self.sync_persisted_agent_workspace();
+        cx.notify();
+    }
+
+    pub(super) fn begin_rename_agent_project(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        let Some(initial_name) = self
+            .agent_projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.name.clone())
+        else {
+            return;
+        };
+
+        if self.is_command_palette_open() {
+            self.close_command_palette(cx);
+        }
+        if self.search_open {
+            self.close_search(cx);
+        }
+        if self.renaming_tab.is_some() {
+            self.cancel_rename_tab(cx);
+        }
+        if self.renaming_agent_project_id.is_some() {
+            self.cancel_rename_agent_project(cx);
+        }
+        if self.renaming_agent_thread_id.is_some() {
+            self.cancel_rename_agent_thread(cx);
+        }
+        self.agent_sidebar_search_active = false;
+        self.active_agent_project_id = Some(project_id.to_string());
+        self.collapsed_agent_project_ids.remove(project_id);
+        self.renaming_agent_project_id = Some(project_id.to_string());
+        self.agent_project_rename_input.set_text(initial_name);
+        self.reset_cursor_blink_phase();
+        self.inline_input_selecting = false;
+        cx.notify();
+    }
+
+    pub(super) fn commit_rename_agent_project(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.renaming_agent_project_id.clone() else {
+            return;
+        };
+        let Some(project) = self
+            .agent_projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        else {
+            self.cancel_rename_agent_project(cx);
+            return;
+        };
+
+        let trimmed = self.agent_project_rename_input.text().trim();
+        project.name = if trimmed.is_empty() {
+            Self::agent_project_name_for_path(&project.root_path)
+        } else {
+            Self::truncate_tab_title(trimmed)
+        };
+        project.updated_at_ms = now_unix_ms();
+        self.sync_persisted_agent_workspace();
+        self.cancel_rename_agent_project(cx);
+    }
+
+    pub(super) fn cancel_rename_agent_project(&mut self, cx: &mut Context<Self>) {
+        if self.renaming_agent_project_id.take().is_some()
+            || !self.agent_project_rename_input.text().is_empty()
+        {
+            self.agent_project_rename_input.clear();
+            self.inline_input_selecting = false;
+            cx.notify();
+        }
     }
 
     fn create_agent_thread_for_active_tab(
@@ -701,6 +1862,7 @@ impl TerminalView {
             agent,
             title: thread_title.clone(),
             custom_title: None,
+            pinned: false,
             launch_command: agent.launch_command().to_string(),
             working_dir: working_dir.to_string(),
             last_seen_title: Some(thread_title),
@@ -1050,6 +2212,9 @@ impl TerminalView {
         if self.search_open {
             self.close_search(cx);
         }
+        if self.renaming_agent_project_id.is_some() {
+            self.cancel_rename_agent_project(cx);
+        }
         self.agent_sidebar_search_active = false;
 
         self.renaming_agent_thread_id = Some(thread_id.to_string());
@@ -1095,6 +2260,9 @@ impl TerminalView {
         } else {
             self.collapsed_agent_project_ids
                 .insert(project_id.to_string());
+            if self.renaming_agent_project_id.as_deref() == Some(project_id) {
+                self.cancel_rename_agent_project(cx);
+            }
             if self
                 .renaming_agent_thread_id
                 .as_deref()
@@ -1152,8 +2320,31 @@ impl TerminalView {
     }
 
     fn schedule_agent_project_context_menu(&mut self, project_id: String, cx: &mut Context<Self>) {
+        let Some((project_pinned, project_is_collapsed, git_panel_visible)) = self
+            .agent_projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| {
+                (
+                    project.pinned,
+                    self.collapsed_agent_project_ids
+                        .contains(project.id.as_str()),
+                    self.agent_git_panel_matches_target_path(project.root_path.as_str()),
+                )
+            })
+        else {
+            return;
+        };
+
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let action = smol::unblock(termy_native_sdk::show_agent_project_context_menu).await;
+            let action = smol::unblock(move || {
+                termy_native_sdk::show_agent_project_context_menu(
+                    project_pinned,
+                    project_is_collapsed,
+                    git_panel_visible,
+                )
+            })
+            .await;
             let Some(action) = action else {
                 return;
             };
@@ -1165,6 +2356,84 @@ impl TerminalView {
                                 Some(project_id.clone()),
                                 cx,
                             );
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::RenameProject => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.begin_rename_agent_project(project_id.as_str(), cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::ToggleGitPanel => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.toggle_agent_git_panel_for_project(project_id.as_str(), cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::Pin => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            let _ = view.set_agent_project_pinned(project_id.as_str(), true, cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::Unpin => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            let _ = view.set_agent_project_pinned(project_id.as_str(), false, cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::RevealProject => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            match view.reveal_agent_project(project_id.as_str()) {
+                                Ok(()) => {
+                                    termy_toast::success("Revealed project folder");
+                                    view.notify_overlay(cx);
+                                }
+                                Err(error) => {
+                                    termy_toast::error(error);
+                                    view.notify_overlay(cx);
+                                }
+                            }
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::CopyPath => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            match view.copy_agent_project_path(project_id.as_str(), cx) {
+                                Ok(()) => {
+                                    termy_toast::success("Copied project path");
+                                    view.notify_overlay(cx);
+                                }
+                                Err(error) => {
+                                    termy_toast::error(error);
+                                    view.notify_overlay(cx);
+                                }
+                            }
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::CollapseProject => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.collapsed_agent_project_ids.insert(project_id.clone());
+                            view.sync_persisted_agent_workspace();
+                            cx.notify();
+                        })
+                    });
+                }
+                termy_native_sdk::AgentProjectContextMenuAction::ExpandProject => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.collapsed_agent_project_ids.remove(project_id.as_str());
+                            view.sync_persisted_agent_workspace();
+                            cx.notify();
                         })
                     });
                 }
@@ -1222,39 +2491,40 @@ impl TerminalView {
     }
 
     fn schedule_agent_thread_context_menu(&mut self, thread_id: String, cx: &mut Context<Self>) {
+        let Some((has_live_session, thread_pinned, git_panel_visible)) = self
+            .agent_threads
+            .iter()
+            .find(|thread| thread.id == thread_id)
+            .map(|thread| {
+                (
+                    self.agent_thread_has_live_session(thread),
+                    thread.pinned,
+                    self.agent_git_panel_matches_target_path(thread.working_dir.as_str()),
+                )
+            })
+        else {
+            return;
+        };
+
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let action = smol::unblock(termy_native_sdk::show_agent_thread_context_menu).await;
+            let action = smol::unblock(move || {
+                termy_native_sdk::show_agent_thread_context_menu(
+                    has_live_session,
+                    thread_pinned,
+                    git_panel_visible,
+                )
+            })
+            .await;
             let Some(action) = action else {
                 return;
             };
             match action {
-                termy_native_sdk::AgentThreadContextMenuAction::DeleteThread => {
-                    let confirm_params = cx.update(|cx| {
-                        this.update(cx, |view, _cx| {
-                            view.agent_threads
-                                .iter()
-                                .find(|thread| thread.id == thread_id)
-                                .map(|thread| {
-                                    let display_title = view.agent_thread_display_title(thread);
-                                    Self::agent_thread_delete_confirm_params(thread, &display_title)
-                                })
-                        })
-                        .ok()
-                        .flatten()
-                    });
-                    let Some((title, message)) = confirm_params else {
-                        return;
-                    };
-                    let confirmed =
-                        smol::unblock(move || termy_native_sdk::confirm(&title, &message)).await;
-                    if !confirmed {
-                        return;
-                    }
+                termy_native_sdk::AgentThreadContextMenuAction::RestartSession => {
                     let _ = cx.update(|cx| {
                         this.update(cx, |view, cx| {
-                            match view.delete_agent_thread(thread_id.as_str()) {
+                            match view.restart_agent_thread_session(thread_id.as_str(), cx) {
                                 Ok(()) => {
-                                    termy_toast::success("Deleted agent thread");
+                                    termy_toast::success("Restarted agent session");
                                     view.notify_overlay(cx);
                                     cx.notify();
                                 }
@@ -1266,9 +2536,248 @@ impl TerminalView {
                         })
                     });
                 }
+                termy_native_sdk::AgentThreadContextMenuAction::CloseSession => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            match view.close_agent_thread_session(thread_id.as_str(), cx) {
+                                Ok(()) => {
+                                    termy_toast::success("Closed agent session");
+                                    view.notify_overlay(cx);
+                                    cx.notify();
+                                }
+                                Err(error) => {
+                                    termy_toast::error(error);
+                                    view.notify_overlay(cx);
+                                }
+                            }
+                        })
+                    });
+                }
+                termy_native_sdk::AgentThreadContextMenuAction::RenameThread => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.begin_rename_agent_thread(thread_id.as_str(), cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentThreadContextMenuAction::ToggleGitPanel => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.toggle_agent_git_panel_for_thread(thread_id.as_str(), cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentThreadContextMenuAction::Pin => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            let _ = view.set_agent_thread_pinned(thread_id.as_str(), true, cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentThreadContextMenuAction::Unpin => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            let _ = view.set_agent_thread_pinned(thread_id.as_str(), false, cx);
+                        })
+                    });
+                }
+                termy_native_sdk::AgentThreadContextMenuAction::DeleteThread => {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |view, cx| {
+                            view.request_delete_agent_thread(thread_id.as_str(), cx);
+                        })
+                    });
+                }
             }
         })
         .detach();
+    }
+
+    fn request_delete_agent_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(confirm_params) = self
+            .agent_threads
+            .iter()
+            .find(|thread| thread.id == thread_id)
+            .map(|thread| {
+                let display_title = self.agent_thread_display_title(thread);
+                Self::agent_thread_delete_confirm_params(thread, &display_title)
+            })
+        else {
+            return;
+        };
+
+        let thread_id = thread_id.to_string();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (title, message) = confirm_params;
+            let confirmed =
+                smol::unblock(move || termy_native_sdk::confirm(&title, &message)).await;
+            if !confirmed {
+                return;
+            }
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    match view.delete_agent_thread(thread_id.as_str()) {
+                        Ok(()) => {
+                            termy_toast::success("Deleted agent thread");
+                            view.notify_overlay(cx);
+                            cx.notify();
+                        }
+                        Err(error) => {
+                            termy_toast::error(error);
+                            view.notify_overlay(cx);
+                        }
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn close_agent_thread_session(
+        &mut self,
+        thread_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let Some(thread) = self
+            .agent_threads
+            .iter()
+            .find(|thread| thread.id == thread_id)
+        else {
+            return Err("Agent thread no longer exists".to_string());
+        };
+
+        let Some(tab_id) = thread.linked_tab_id else {
+            return Err("This thread has no open session to close".to_string());
+        };
+
+        let Some(tab_index) = self.tab_index_by_id(tab_id) else {
+            self.detach_agent_thread_from_live_tab(thread_id);
+            self.sync_persisted_agent_workspace();
+            return Err("This thread's session is no longer open".to_string());
+        };
+
+        if self.tabs.get(tab_index).is_some_and(|tab| tab.pinned) {
+            return Err("Pinned tabs must be unpinned before closing".to_string());
+        }
+
+        if self.runtime_kind() == RuntimeKind::Native && self.tabs.len() <= 1 {
+            return Err("Can't close the only open tab".to_string());
+        }
+
+        self.close_tab(tab_index, cx);
+        Ok(())
+    }
+
+    fn restart_agent_thread_session(
+        &mut self,
+        thread_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let Some(thread_index) = self
+            .agent_threads
+            .iter()
+            .position(|thread| thread.id == thread_id)
+        else {
+            return Err("Agent thread no longer exists".to_string());
+        };
+
+        if let Some(tab_index) = self.agent_threads[thread_index]
+            .linked_tab_id
+            .and_then(|tab_id| self.tab_index_by_id(tab_id))
+        {
+            if self.tabs.get(tab_index).is_some_and(|tab| tab.pinned) {
+                return Err("Pinned tabs must be unpinned before restarting".to_string());
+            }
+
+            if self.runtime_kind() == RuntimeKind::Native && self.tabs.len() <= 1 {
+                if let Some((thread_id, title, current_command, status_label, status_detail)) =
+                    self.agent_thread_archive_snapshot_for_tab(tab_index)
+                {
+                    self.archive_agent_thread_snapshot(
+                        thread_id.as_deref(),
+                        title.as_str(),
+                        current_command.as_deref(),
+                        status_label.as_deref(),
+                        status_detail.as_deref(),
+                    );
+                }
+                if let Some(tab) = self.tabs.get_mut(tab_index)
+                    && tab.agent_thread_id.as_deref() == Some(thread_id)
+                {
+                    tab.agent_thread_id = None;
+                }
+            } else {
+                self.close_tab(tab_index, cx);
+            }
+        }
+
+        self.resume_saved_agent_thread(thread_id, cx)
+    }
+
+    fn copy_agent_project_path(
+        &mut self,
+        project_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let Some(project_path) = self
+            .agent_projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.root_path.clone())
+        else {
+            return Err("Agent project no longer exists".to_string());
+        };
+
+        cx.write_to_clipboard(ClipboardItem::new_string(project_path));
+        Ok(())
+    }
+
+    fn reveal_agent_project(&mut self, project_id: &str) -> Result<(), String> {
+        let Some(project_path) = self
+            .agent_projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.root_path.clone())
+        else {
+            return Err("Agent project no longer exists".to_string());
+        };
+
+        let path = Path::new(&project_path);
+        if !path.exists() {
+            return Err(format!("Project path '{}' no longer exists", project_path));
+        }
+
+        #[cfg(target_os = "macos")]
+        let status = Command::new("open").arg("-R").arg(path).status();
+        #[cfg(target_os = "linux")]
+        let status = Command::new("xdg-open").arg(path).status();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let status = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Reveal is unsupported on this platform",
+        ));
+
+        match status {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("Reveal command exited with status {}", status)),
+            Err(error) => Err(format!("Failed to reveal project path: {}", error)),
+        }
+    }
+
+    fn agent_thread_has_live_session(&self, thread: &AgentThread) -> bool {
+        thread
+            .linked_tab_id
+            .and_then(|tab_id| self.tab_index_by_id(tab_id))
+            .is_some()
+    }
+
+    fn agent_thread_shows_activity(&self, thread: &AgentThread, is_active: bool) -> bool {
+        !is_active
+            && matches!(
+                self.agent_thread_runtime_status(thread),
+                AgentThreadRuntimeStatus::Busy
+            )
     }
 
     fn agent_thread_runtime_status(&self, thread: &AgentThread) -> AgentThreadRuntimeStatus {
@@ -1618,7 +3127,7 @@ impl TerminalView {
 
     fn sorted_agent_projects(&self) -> Vec<&AgentProject> {
         let mut projects = self.agent_projects.iter().collect::<Vec<_>>();
-        projects.sort_by_key(|project| std::cmp::Reverse(project.updated_at_ms));
+        projects.sort_by_key(|project| (!project.pinned, std::cmp::Reverse(project.updated_at_ms)));
         projects
     }
 
@@ -1628,7 +3137,7 @@ impl TerminalView {
             .iter()
             .filter(|thread| thread.project_id == project_id)
             .collect::<Vec<_>>();
-        threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at_ms));
+        threads.sort_by_key(|thread| (!thread.pinned, std::cmp::Reverse(thread.updated_at_ms)));
         threads
     }
 
@@ -1689,6 +3198,25 @@ impl TerminalView {
         Self::agent_sidebar_query_matches_text(haystack.join("\n").as_str(), terms)
     }
 
+    fn agent_sidebar_thread_matches_filter(
+        &self,
+        project: &AgentProject,
+        thread: &AgentThread,
+    ) -> bool {
+        match self.agent_sidebar_filter {
+            AgentSidebarFilter::All => true,
+            AgentSidebarFilter::Live => self.agent_thread_has_live_session(thread),
+            AgentSidebarFilter::Saved => !self.agent_thread_has_live_session(thread),
+            AgentSidebarFilter::Busy => {
+                matches!(
+                    self.agent_thread_runtime_status(thread),
+                    AgentThreadRuntimeStatus::Busy
+                )
+            }
+            AgentSidebarFilter::Pinned => project.pinned || thread.pinned,
+        }
+    }
+
     fn filtered_agent_projects_for_sidebar(&self) -> Vec<(&AgentProject, Vec<&AgentThread>)> {
         let terms = self.agent_sidebar_search_terms();
 
@@ -1698,12 +3226,22 @@ impl TerminalView {
                 let project_matches = Self::agent_sidebar_project_matches_terms(project, &terms);
                 let mut threads = self.sorted_agent_threads_for_project(project.id.as_str());
 
+                threads.retain(|thread| self.agent_sidebar_thread_matches_filter(project, thread));
+
                 if !terms.is_empty() && !project_matches {
                     threads
                         .retain(|thread| self.agent_sidebar_thread_matches_terms(thread, &terms));
                 }
 
-                if !terms.is_empty() && !project_matches && threads.is_empty() {
+                let project_matches_filter = match self.agent_sidebar_filter {
+                    AgentSidebarFilter::Pinned => project.pinned,
+                    AgentSidebarFilter::All => true,
+                    _ => false,
+                };
+
+                if ((!terms.is_empty() && !project_matches) || !project_matches_filter)
+                    && threads.is_empty()
+                {
                     return None;
                 }
 
@@ -1782,15 +3320,15 @@ impl TerminalView {
         div()
             .relative()
             .flex_none()
-            .w(px(15.0))
-            .h(px(12.0))
+            .w(px(12.0))
+            .h(px(10.0))
             .child(
                 div()
                     .absolute()
                     .left(px(1.0))
                     .top(px(1.0))
-                    .w(px(5.0))
-                    .h(px(3.0))
+                    .w(px(4.0))
+                    .h(px(2.0))
                     .bg(bg)
                     .border_1()
                     .border_color(stroke),
@@ -1799,9 +3337,9 @@ impl TerminalView {
                 div()
                     .absolute()
                     .left_0()
-                    .top(px(3.0))
-                    .w(px(14.0))
-                    .h(px(8.0))
+                    .top(px(2.0))
+                    .w(px(11.0))
+                    .h(px(7.0))
                     .bg(bg)
                     .border_1()
                     .border_color(stroke),
@@ -1819,8 +3357,8 @@ impl TerminalView {
         let fallback_label = agent.fallback_label();
         div()
             .flex_none()
-            .size(px(16.0))
-            .p(px(1.5))
+            .size(px(14.0))
+            .p(px(1.0))
             .bg(bg)
             .border_1()
             .border_color(border)
@@ -1862,54 +3400,49 @@ impl TerminalView {
 
         div()
             .flex_none()
-            .h(px(16.0))
-            .px(px(5.0))
+            .h(px(14.0))
+            .px(px(4.0))
             .flex()
             .items_center()
             .justify_center()
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(px(9.5))
+            .text_size(px(9.0))
             .text_color(badge_text)
             .child(label.to_ascii_lowercase())
             .into_any_element()
     }
 
-    fn render_agent_sidebar_search_icon(stroke: gpui::Rgba) -> AnyElement {
+    fn render_agent_sidebar_chip(
+        label: impl Into<SharedString>,
+        border: gpui::Rgba,
+        bg: gpui::Rgba,
+        text: gpui::Rgba,
+    ) -> AnyElement {
+        let label: SharedString = label.into();
         div()
-            .relative()
             .flex_none()
-            .w(px(14.0))
             .h(px(14.0))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(9.0))
-                    .h(px(9.0))
-                    .border_1()
-                    .border_color(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(8.0))
-                    .top(px(8.0))
-                    .w(px(1.5))
-                    .h(px(4.0))
-                    .bg(stroke),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(8.0))
-                    .top(px(11.0))
-                    .w(px(4.0))
-                    .h(px(1.5))
-                    .bg(stroke),
-            )
+            .px(px(4.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .text_size(px(8.5))
+            .text_color(text)
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_agent_activity_dot(color: gpui::Rgba) -> AnyElement {
+        div()
+            .flex_none()
+            .size(px(5.0))
+            .rounded(px(2.5))
+            .bg(color)
             .into_any_element()
     }
 
@@ -1998,6 +3531,951 @@ impl TerminalView {
             .into_any_element()
     }
 
+    pub(super) fn render_agent_git_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.agent_git_panel.open {
+            return None;
+        }
+
+        let overlay_style = self.overlay_style();
+        let panel_bg = overlay_style.chrome_panel_background_with_floor(0.96, 0.88);
+        let input_bg = overlay_style.chrome_panel_background_with_floor(0.74, 0.72);
+        let selected_bg = overlay_style.panel_cursor(0.10);
+        let text = overlay_style.panel_foreground(0.94);
+        let muted = overlay_style.panel_foreground(0.62);
+        let border = resolve_chrome_stroke_color(
+            panel_bg,
+            self.colors.foreground,
+            self.chrome_contrast_profile().stroke_mix,
+        );
+        let success = self.colors.ansi[10];
+        let warning = self.colors.ansi[11];
+        let danger = self.colors.ansi[9];
+        let info = self.colors.ansi[12];
+        let entries = self.agent_git_entries_for_filter();
+        let has_entries = !entries.is_empty();
+        let label = self
+            .agent_git_panel
+            .label
+            .clone()
+            .unwrap_or_else(|| "Git Changes".to_string());
+        let repo_root = self.agent_git_panel.repo_root.clone();
+        let repo_name = repo_root
+            .as_deref()
+            .and_then(|path| Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| label.clone());
+        let branch = self.agent_git_panel.branch.clone();
+        let current_branch = self.agent_git_panel.current_branch.clone();
+        let current_branch_badge = current_branch.clone();
+        let current_branch_for_branches = current_branch.clone();
+        let ahead = self.agent_git_panel.ahead;
+        let behind = self.agent_git_panel.behind;
+        let dirty_count = self.agent_git_panel.dirty_count;
+        let last_commit = self.agent_git_panel.last_commit.clone();
+        let loading = self.agent_git_panel.loading;
+        let error = self.agent_git_panel.error.clone();
+        let selected_repo_path = self.agent_git_panel.selected_repo_path.clone();
+        let preview_loading = self.agent_git_panel.preview_loading;
+        let preview_error = self.agent_git_panel.preview_error.clone();
+        let preview_diff_lines = self.agent_git_panel.preview_diff_lines.clone();
+        let preview_history = self.agent_git_panel.preview_history.clone();
+        let project_history = self.agent_git_panel.project_history.clone();
+        let branches = self.agent_git_panel.branches.clone();
+        let stashes = self.agent_git_panel.stashes.clone();
+        let input_mode = self.agent_git_panel_input_mode;
+        let input_text = self.agent_git_panel_input.text().to_string();
+        let input_bar = input_mode.map(|mode| {
+            div()
+                .px(px(10.0))
+                .pb(px(8.0))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(muted)
+                        .child(mode.title()),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .h(px(28.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .border_1()
+                        .border_color(border)
+                        .bg(input_bg)
+                        .children((input_text.trim().is_empty()).then(|| {
+                            div()
+                                .truncate()
+                                .text_size(px(11.0))
+                                .text_color(muted)
+                                .child(mode.placeholder())
+                                .into_any_element()
+                        }))
+                        .child(self.render_inline_input_layer(
+                            Font {
+                                family: self.font_family.clone(),
+                                weight: FontWeight::NORMAL,
+                                ..Default::default()
+                            },
+                            px(11.0),
+                            text.into(),
+                            selected_bg.into(),
+                            InlineInputAlignment::Left,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.commit_agent_git_panel_input(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    mode.action_label(),
+                                    border,
+                                    input_bg,
+                                    text,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.cancel_agent_git_panel_input(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "cancel", border, input_bg, muted,
+                                )),
+                        ),
+                )
+                .into_any_element()
+        });
+
+        let body = if loading {
+            div()
+                .px(px(10.0))
+                .py(px(10.0))
+                .text_size(px(11.0))
+                .text_color(muted)
+                .child("Loading git changes...")
+                .into_any_element()
+        } else if let Some(error) = error {
+            div()
+                .px(px(10.0))
+                .py(px(10.0))
+                .text_size(px(11.0))
+                .text_color(muted)
+                .child(error)
+                .into_any_element()
+        } else {
+            let file_rows = entries
+                .into_iter()
+                .map(|entry| {
+                    let repo_path = entry.repo_path.clone();
+                    let row_repo_path = repo_path.clone();
+                    let is_selected = selected_repo_path.as_deref() == Some(repo_path.as_str());
+                    let status_color = if entry.is_untracked() || entry.status.contains('A') {
+                        success
+                    } else if entry.status.contains('D') || entry.status.contains('U') {
+                        danger
+                    } else if entry.status.contains('R') {
+                        info
+                    } else {
+                        warning
+                    };
+                    let preview = is_selected.then(|| {
+                        let open_repo_path = repo_path.clone();
+                        let diff_repo_path = repo_path.clone();
+                        let stage_repo_path = repo_path.clone();
+                        let unstage_repo_path = repo_path.clone();
+                        let discard_entry = entry.clone();
+                        let preview_body = if preview_loading {
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(muted)
+                                .child("Loading diff preview...")
+                                .into_any_element()
+                        } else if let Some(error) = preview_error.clone() {
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(muted)
+                                .child(error)
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(px(4.0))
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |view, _event, _window, cx| {
+                                                            match view.open_agent_git_file(
+                                                                open_repo_path.as_str(),
+                                                            ) {
+                                                                Ok(()) => {
+                                                                    termy_toast::success(
+                                                                        "Opened file",
+                                                                    );
+                                                                    view.notify_overlay(cx);
+                                                                }
+                                                                Err(error) => {
+                                                                    termy_toast::error(error);
+                                                                    view.notify_overlay(cx);
+                                                                }
+                                                            }
+                                                            cx.stop_propagation();
+                                                        },
+                                                    ),
+                                                )
+                                                .child(Self::render_agent_sidebar_chip(
+                                                    "open", border, input_bg, text,
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |view, _event, _window, cx| {
+                                                            match view.open_agent_git_full_diff(
+                                                                diff_repo_path.as_str(),
+                                                                cx,
+                                                            ) {
+                                                                Ok(()) => {
+                                                                    termy_toast::success(
+                                                                        "Opened diff tab",
+                                                                    );
+                                                                    view.notify_overlay(cx);
+                                                                }
+                                                                Err(error) => {
+                                                                    termy_toast::error(error);
+                                                                    view.notify_overlay(cx);
+                                                                }
+                                                            }
+                                                            cx.stop_propagation();
+                                                        },
+                                                    ),
+                                                )
+                                                .child(Self::render_agent_sidebar_chip(
+                                                    "full diff",
+                                                    border,
+                                                    input_bg,
+                                                    text,
+                                                )),
+                                        )
+                                        .children(
+                                            (entry.is_untracked() || entry.is_unstaged()).then(
+                                                || {
+                                                    div()
+                                                        .cursor_pointer()
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(
+                                                                move |view, _event, _window, cx| {
+                                                                    view.run_agent_git_mutation(
+                                                                        vec![
+                                                                            "add".to_string(),
+                                                                            "--".to_string(),
+                                                                            stage_repo_path.clone(),
+                                                                        ],
+                                                                        "Staged file",
+                                                                        cx,
+                                                                    );
+                                                                    cx.stop_propagation();
+                                                                },
+                                                            ),
+                                                        )
+                                                        .child(Self::render_agent_sidebar_chip(
+                                                            "stage", border, input_bg, success,
+                                                        ))
+                                                        .into_any_element()
+                                                },
+                                            ),
+                                        )
+                                        .children(entry.is_staged().then(|| {
+                                            div()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |view, _event, _window, cx| {
+                                                            view.run_agent_git_mutation(
+                                                                vec![
+                                                                    "restore".to_string(),
+                                                                    "--staged".to_string(),
+                                                                    "--".to_string(),
+                                                                    unstage_repo_path.clone(),
+                                                                ],
+                                                                "Unstaged file",
+                                                                cx,
+                                                            );
+                                                            cx.stop_propagation();
+                                                        },
+                                                    ),
+                                                )
+                                                .child(Self::render_agent_sidebar_chip(
+                                                    "unstage", border, input_bg, warning,
+                                                ))
+                                                .into_any_element()
+                                        }))
+                                        .children(
+                                            (entry.is_untracked()
+                                                || entry.is_unstaged()
+                                                || entry.is_deleted())
+                                            .then(|| {
+                                                div()
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |view, _event, _window, cx| {
+                                                                view.discard_agent_git_entry(
+                                                                    discard_entry.clone(),
+                                                                    cx,
+                                                                );
+                                                                cx.stop_propagation();
+                                                            },
+                                                        ),
+                                                    )
+                                                    .child(Self::render_agent_sidebar_chip(
+                                                        "discard", border, input_bg, danger,
+                                                    ))
+                                                    .into_any_element()
+                                            }),
+                                        ),
+                                )
+                                .children((!preview_diff_lines.is_empty()).then(|| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(1.0))
+                                        .children(preview_diff_lines.iter().take(60).map(|line| {
+                                            let tone = if line.starts_with('+')
+                                                && !line.starts_with("+++")
+                                            {
+                                                success
+                                            } else if line.starts_with('-')
+                                                && !line.starts_with("---")
+                                            {
+                                                danger
+                                            } else if line.starts_with("@@") {
+                                                warning
+                                            } else {
+                                                muted
+                                            };
+                                            div()
+                                                .truncate()
+                                                .text_size(px(10.0))
+                                                .text_color(tone)
+                                                .child(line.clone())
+                                                .into_any_element()
+                                        }))
+                                        .into_any_element()
+                                }))
+                                .children((preview_history.is_empty()).then(|| {
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(muted)
+                                        .child("No file history yet.")
+                                        .into_any_element()
+                                }))
+                                .children((!preview_history.is_empty()).then(|| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(3.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .text_color(muted)
+                                                .child("History"),
+                                        )
+                                        .children(preview_history.iter().take(6).map(|entry| {
+                                            div()
+                                                .truncate()
+                                                .text_size(px(10.0))
+                                                .text_color(text)
+                                                .child(entry.summary.clone())
+                                                .into_any_element()
+                                        }))
+                                        .into_any_element()
+                                }))
+                                .into_any_element()
+                        };
+
+                        div()
+                            .mx(px(10.0))
+                            .mb(px(8.0))
+                            .px(px(8.0))
+                            .py(px(8.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .border_1()
+                            .border_color(border)
+                            .bg(selected_bg)
+                            .child(preview_body)
+                            .into_any_element()
+                    });
+
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .w_full()
+                                .px(px(10.0))
+                                .py(px(6.0))
+                                .flex()
+                                .items_start()
+                                .gap(px(6.0))
+                                .bg(if is_selected { selected_bg } else { panel_bg })
+                                .cursor_pointer()
+                                .border_b_1()
+                                .border_color(border)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _event, _window, cx| {
+                                        view.select_agent_git_panel_entry(
+                                            row_repo_path.as_str(),
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    entry.badge_label(),
+                                    border,
+                                    input_bg,
+                                    status_color,
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(11.0))
+                                                .text_color(text)
+                                                .child(entry.path.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(10.0))
+                                                .text_color(muted)
+                                                .child(entry.status.clone()),
+                                        ),
+                                ),
+                        )
+                        .children(preview)
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children((!has_entries).then(|| {
+                    div()
+                        .px(px(10.0))
+                        .py(px(10.0))
+                        .text_size(px(11.0))
+                        .text_color(muted)
+                        .child("No files match the current filter.")
+                        .into_any_element()
+                }))
+                .children(file_rows)
+                .children(
+                    (selected_repo_path.is_none() && !project_history.is_empty()).then(|| {
+                        div()
+                            .px(px(10.0))
+                            .py(px(8.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(muted)
+                                    .child("Recent commits"),
+                            )
+                            .children(project_history.iter().take(8).map(|entry| {
+                                div()
+                                    .truncate()
+                                    .text_size(px(10.5))
+                                    .text_color(text)
+                                    .child(entry.summary.clone())
+                                    .into_any_element()
+                            }))
+                            .into_any_element()
+                    }),
+                )
+                .into_any_element()
+        };
+
+        Some(
+            div()
+                .id("agent-git-panel")
+                .w(px(AGENT_GIT_PANEL_WIDTH))
+                .h_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .bg(panel_bg)
+                .border_l_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(8.0))
+                        .flex_none()
+                        .flex()
+                        .justify_between()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.0))
+                                        .text_color(text)
+                                        .child("Git Changes"),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(10.0))
+                                        .text_color(muted)
+                                        .child(label),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|view, _event, _window, cx| {
+                                                view.refresh_agent_git_panel(cx);
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            "refresh", border, input_bg, text,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|view, _event, _window, cx| {
+                                                view.close_agent_git_panel();
+                                                cx.notify();
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            "hide", border, input_bg, muted,
+                                        )),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(8.0))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.0))
+                                .text_color(text)
+                                .child(repo_name),
+                        )
+                        .children(branch.map(|branch| {
+                            div()
+                                .truncate()
+                                .text_size(px(10.0))
+                                .text_color(muted)
+                                .child(branch)
+                                .into_any_element()
+                        }))
+                        .children(last_commit.map(|commit| {
+                            div()
+                                .truncate()
+                                .text_size(px(10.0))
+                                .text_color(muted)
+                                .child(commit)
+                                .into_any_element()
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(4.0))
+                                .children(current_branch_badge.map(|branch| {
+                                    Self::render_agent_sidebar_chip(branch, border, input_bg, text)
+                                        .into_any_element()
+                                }))
+                                .children((ahead > 0).then(|| {
+                                    Self::render_agent_sidebar_chip(
+                                        format!("ahead {}", ahead),
+                                        border,
+                                        input_bg,
+                                        success,
+                                    )
+                                    .into_any_element()
+                                }))
+                                .children((behind > 0).then(|| {
+                                    Self::render_agent_sidebar_chip(
+                                        format!("behind {}", behind),
+                                        border,
+                                        input_bg,
+                                        warning,
+                                    )
+                                    .into_any_element()
+                                }))
+                                .children((dirty_count > 0).then(|| {
+                                    Self::render_agent_sidebar_chip(
+                                        format!("dirty {}", dirty_count),
+                                        border,
+                                        input_bg,
+                                        danger,
+                                    )
+                                    .into_any_element()
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(6.0))
+                        .flex_none()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .children(AgentGitPanelFilter::ALL.into_iter().map(|filter| {
+                            let is_selected = self.agent_git_panel.filter == filter;
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _event, _window, cx| {
+                                        view.set_agent_git_panel_filter(filter, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    filter.label(),
+                                    border,
+                                    if is_selected { selected_bg } else { input_bg },
+                                    if is_selected { text } else { muted },
+                                ))
+                                .into_any_element()
+                        })),
+                )
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(8.0))
+                        .flex_none()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.run_agent_git_mutation(
+                                            vec!["add".to_string(), "-A".to_string()],
+                                            "Staged all changes",
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "stage all",
+                                    border,
+                                    input_bg,
+                                    success,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.run_agent_git_mutation(
+                                            vec![
+                                                "restore".to_string(),
+                                                "--staged".to_string(),
+                                                ".".to_string(),
+                                            ],
+                                            "Unstaged all changes",
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "unstage all",
+                                    border,
+                                    input_bg,
+                                    warning,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.begin_agent_git_panel_input(
+                                            AgentGitPanelInputMode::Commit,
+                                            "",
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "commit", border, input_bg, text,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.begin_agent_git_panel_input(
+                                            AgentGitPanelInputMode::CreateBranch,
+                                            "",
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "new branch",
+                                    border,
+                                    input_bg,
+                                    info,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _event, _window, cx| {
+                                        view.begin_agent_git_panel_input(
+                                            AgentGitPanelInputMode::SaveStash,
+                                            "",
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    "save stash",
+                                    border,
+                                    input_bg,
+                                    muted,
+                                )),
+                        ),
+                )
+                .children(input_bar)
+                .children((!branches.is_empty()).then(|| {
+                    div()
+                        .px(px(10.0))
+                        .pb(px(8.0))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(muted)
+                                .child("Branches"),
+                        )
+                        .child(div().flex().flex_wrap().gap(px(4.0)).children(
+                            branches.into_iter().map(|branch_name| {
+                                let is_current = current_branch_for_branches.as_deref()
+                                    == Some(branch_name.as_str());
+                                if is_current {
+                                    Self::render_agent_sidebar_chip(
+                                        branch_name,
+                                        border,
+                                        selected_bg,
+                                        text,
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    let checkout_branch = branch_name.clone();
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |view, _event, _window, cx| {
+                                                view.run_agent_git_mutation(
+                                                    vec![
+                                                        "checkout".to_string(),
+                                                        checkout_branch.clone(),
+                                                    ],
+                                                    "Switched branch",
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            branch_name,
+                                            border,
+                                            input_bg,
+                                            muted,
+                                        ))
+                                        .into_any_element()
+                                }
+                            }),
+                        ))
+                        .into_any_element()
+                }))
+                .children((!stashes.is_empty()).then(|| {
+                    div()
+                        .px(px(10.0))
+                        .pb(px(8.0))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(div().text_size(px(10.0)).text_color(muted).child("Stashes"))
+                        .children(stashes.into_iter().take(5).map(|stash| {
+                            let apply_name = stash.name.clone();
+                            let pop_name = stash.name.clone();
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .truncate()
+                                        .text_size(px(10.0))
+                                        .text_color(text)
+                                        .child(format!("{} {}", stash.name, stash.summary)),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |view, _event, _window, cx| {
+                                                view.run_agent_git_mutation(
+                                                    vec![
+                                                        "stash".to_string(),
+                                                        "apply".to_string(),
+                                                        apply_name.clone(),
+                                                    ],
+                                                    "Applied stash",
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            "apply", border, input_bg, text,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |view, _event, _window, cx| {
+                                                view.run_agent_git_mutation(
+                                                    vec![
+                                                        "stash".to_string(),
+                                                        "pop".to_string(),
+                                                        pop_name.clone(),
+                                                    ],
+                                                    "Popped stash",
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            "pop", border, input_bg, warning,
+                                        )),
+                                )
+                                .into_any_element()
+                        }))
+                        .into_any_element()
+                }))
+                .child(
+                    div()
+                        .id("agent-git-panel-scroll")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .child(body),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_agent_sidebar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.should_render_agent_sidebar() {
             return None;
@@ -2016,6 +4494,15 @@ impl TerminalView {
         );
         let selected_bg = overlay_style.panel_cursor(0.10);
         let button_hover_bg = overlay_style.chrome_panel_cursor(0.14);
+        let mut tooltip_bg = overlay_style.chrome_panel_background_with_floor(0.99, 0.94);
+        tooltip_bg.a = 1.0;
+        let tooltip_border = resolve_chrome_stroke_color(
+            tooltip_bg,
+            self.colors.foreground,
+            self.chrome_contrast_profile().stroke_mix,
+        );
+        let tooltip_text = overlay_style.panel_foreground(0.98);
+        let tooltip_muted = overlay_style.panel_foreground(0.74);
         let dark_surface = command_palette::AiAgentPreset::prefers_light_asset_variant(panel_bg);
         let active_thread_id = self
             .tabs
@@ -2024,13 +4511,14 @@ impl TerminalView {
             .map(str::to_string);
         let search_query = self.agent_sidebar_search_input.text().trim().to_string();
         let show_filtered_history = !search_query.is_empty();
+        let has_non_default_filter = self.agent_sidebar_filter != AgentSidebarFilter::All;
         let filtered_projects = self.filtered_agent_projects_for_sidebar();
         let filtered_thread_count = filtered_projects
             .iter()
             .map(|(_, threads)| threads.len())
             .sum::<usize>();
         let history_thread_count = self.agent_threads.len();
-        let history_summary = if show_filtered_history {
+        let history_summary = if show_filtered_history || has_non_default_filter {
             format!(
                 "{} match{}",
                 filtered_thread_count,
@@ -2043,6 +4531,7 @@ impl TerminalView {
                 if history_thread_count == 1 { "" } else { "s" }
             )
         };
+        let all_projects_collapsed = self.are_all_agent_projects_collapsed();
         let project_groups = filtered_projects
             .into_iter()
             .enumerate()
@@ -2051,6 +4540,9 @@ impl TerminalView {
                 let project_context_menu_id = project.id.clone();
                 let is_project_active =
                     self.active_agent_project_id.as_deref() == Some(project_id.as_str());
+                let is_project_pinned = project.pinned;
+                let is_renaming_project =
+                    self.renaming_agent_project_id.as_deref() == Some(project_id.as_str());
                 let allow_collapse_toggle = !show_filtered_history;
                 let is_collapsed = allow_collapse_toggle
                     && self
@@ -2061,17 +4553,25 @@ impl TerminalView {
                     .id(SharedString::from(format!("agent-project-{}", project.id)))
                     .w_full()
                     .h(px(AGENT_SIDEBAR_PROJECT_ROW_HEIGHT))
-                    .px(px(14.0))
-                    .mt(px(if index == 0 { 6.0 } else { 12.0 }))
+                    .px(px(10.0))
+                    .mt(px(if index == 0 { 4.0 } else { 8.0 }))
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(px(6.0))
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _event, _window, cx| {
                             let was_active = view.active_agent_project_id.as_deref()
                                 == Some(project_id.as_str());
+                            if view.renaming_agent_project_id.as_deref()
+                                != Some(project_id.as_str())
+                            {
+                                view.cancel_rename_agent_project(cx);
+                            }
+                            if view.renaming_agent_thread_id.is_some() {
+                                view.cancel_rename_agent_thread(cx);
+                            }
                             view.active_agent_project_id = Some(project_id.clone());
                             if allow_collapse_toggle && was_active {
                                 view.toggle_agent_project_collapsed(project_id.as_str(), cx);
@@ -2096,7 +4596,7 @@ impl TerminalView {
                         div()
                             .w(px(8.0))
                             .flex_none()
-                            .text_size(px(9.0))
+                            .text_size(px(8.0))
                             .text_color(muted)
                             .child(if is_collapsed { ">" } else { "v" }),
                     )
@@ -2104,16 +4604,42 @@ impl TerminalView {
                         if is_project_active { text } else { muted },
                         panel_bg,
                     ))
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .text_color(if is_project_active { text } else { muted })
-                            .child(project.name.clone()),
-                    )
+                    .child(div().flex_1().min_w(px(0.0)).relative().h(px(16.0)).child(
+                        if is_renaming_project {
+                            self.render_inline_input_layer(
+                                Font {
+                                    family: self.font_family.clone(),
+                                    weight: FontWeight::NORMAL,
+                                    ..Default::default()
+                                },
+                                px(11.5),
+                                text.into(),
+                                selected_bg.into(),
+                                InlineInputAlignment::Left,
+                                cx,
+                            )
+                        } else {
+                            div()
+                                .truncate()
+                                .text_size(px(11.5))
+                                .text_color(if is_project_active { text } else { muted })
+                                .child(project.name.clone())
+                                .into_any_element()
+                        },
+                    ))
+                    .children(is_project_pinned.then(|| {
+                        Self::render_agent_sidebar_chip(
+                            "pin",
+                            border,
+                            input_bg,
+                            if is_project_active { text } else { muted },
+                        )
+                    }))
                     .into_any_element();
 
-                let thread_rows = (!is_collapsed)
+                let thread_rows = (show_filtered_history
+                    || has_non_default_filter
+                    || !is_collapsed)
                     .then_some(project_threads)
                     .unwrap_or_default()
                     .into_iter()
@@ -2124,6 +4650,8 @@ impl TerminalView {
                             self.renaming_agent_thread_id.as_deref() == Some(thread_id.as_str());
                         let status = self.agent_thread_status_presentation(thread);
                         let is_active = active_thread_id.as_deref() == Some(thread_id.as_str());
+                        let is_thread_pinned = thread.pinned;
+                        let shows_activity = self.agent_thread_shows_activity(thread, is_active);
                         let title = self.agent_thread_display_title(thread);
                         let age = Self::agent_thread_relative_age(thread.updated_at_ms);
                         let detail = (!is_renaming_thread)
@@ -2137,11 +4665,11 @@ impl TerminalView {
                         div()
                             .id(SharedString::from(format!("agent-thread-{}", thread.id)))
                             .w_full()
-                            .px(px(14.0))
+                            .px(px(10.0))
                             .py(px(if detail.is_some() || is_renaming_thread {
-                                5.0
+                                3.0
                             } else {
-                                7.0
+                                4.0
                             }))
                             .rounded(px(0.0))
                             .bg(if is_active || is_renaming_thread {
@@ -2152,26 +4680,25 @@ impl TerminalView {
                             .cursor_pointer()
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
-                                    if event.click_count >= 2 {
-                                        view.begin_rename_agent_thread(thread_id.as_str(), cx);
-                                    } else {
-                                        view.agent_sidebar_search_active = false;
-                                        if let Some(tab_index) = linked_tab_id
-                                            .and_then(|tab_id| view.tab_index_by_id(tab_id))
-                                        {
-                                            view.switch_tab(tab_index, cx);
-                                        } else if let Err(error) =
-                                            view.resume_saved_agent_thread(thread_id.as_str(), cx)
-                                        {
-                                            termy_toast::error(error);
-                                            view.notify_overlay(cx);
-                                        }
-                                        if view.renaming_agent_thread_id.as_deref()
-                                            != Some(thread_id.as_str())
-                                        {
-                                            view.cancel_rename_agent_thread(cx);
-                                        }
+                                cx.listener(move |view, _event, _window, cx| {
+                                    if view.renaming_agent_project_id.is_some() {
+                                        view.cancel_rename_agent_project(cx);
+                                    }
+                                    view.agent_sidebar_search_active = false;
+                                    if let Some(tab_index) = linked_tab_id
+                                        .and_then(|tab_id| view.tab_index_by_id(tab_id))
+                                    {
+                                        view.switch_tab(tab_index, cx);
+                                    } else if let Err(error) =
+                                        view.resume_saved_agent_thread(thread_id.as_str(), cx)
+                                    {
+                                        termy_toast::error(error);
+                                        view.notify_overlay(cx);
+                                    }
+                                    if view.renaming_agent_thread_id.as_deref()
+                                        != Some(thread_id.as_str())
+                                    {
+                                        view.cancel_rename_agent_thread(cx);
                                     }
                                     cx.stop_propagation();
                                 }),
@@ -2191,13 +4718,13 @@ impl TerminalView {
                                     .w_full()
                                     .flex()
                                     .justify_between()
-                                    .gap(px(10.0))
+                                    .gap(px(6.0))
                                     .child(
                                         div()
                                             .flex_1()
                                             .min_w(px(0.0))
                                             .flex()
-                                            .gap(px(8.0))
+                                            .gap(px(6.0))
                                             .child(Self::render_agent_sidebar_avatar(
                                                 thread.agent,
                                                 dark_surface,
@@ -2211,8 +4738,8 @@ impl TerminalView {
                                                     .min_w(px(0.0))
                                                     .flex()
                                                     .flex_col()
-                                                    .gap(px(3.0))
-                                                    .child(div().relative().h(px(18.0)).child(
+                                                    .gap(px(1.0))
+                                                    .child(div().relative().h(px(15.0)).child(
                                                         if is_renaming_thread {
                                                             self.render_inline_input_layer(
                                                                 Font {
@@ -2222,7 +4749,7 @@ impl TerminalView {
                                                                     weight: FontWeight::NORMAL,
                                                                     ..Default::default()
                                                                 },
-                                                                px(14.0),
+                                                                px(12.0),
                                                                 text.into(),
                                                                 selected_bg.into(),
                                                                 InlineInputAlignment::Left,
@@ -2231,7 +4758,7 @@ impl TerminalView {
                                                         } else {
                                                             div()
                                                                 .truncate()
-                                                                .text_size(px(14.5))
+                                                                .text_size(px(12.0))
                                                                 .text_color(text)
                                                                 .child(title)
                                                                 .into_any_element()
@@ -2241,7 +4768,12 @@ impl TerminalView {
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .gap(px(6.0))
+                                                            .gap(px(4.0))
+                                                            .children(shows_activity.then(|| {
+                                                                Self::render_agent_activity_dot(
+                                                                    self.colors.ansi[11],
+                                                                )
+                                                            }))
                                                             .child(Self::render_agent_status_badge(
                                                                 status.label.as_str(),
                                                                 status.tone,
@@ -2252,12 +4784,17 @@ impl TerminalView {
                                                                 self.colors.ansi[11],
                                                                 self.colors.ansi[9],
                                                             ))
+                                                            .children(is_thread_pinned.then(|| {
+                                                                Self::render_agent_sidebar_chip(
+                                                                    "pin", border, input_bg, muted,
+                                                                )
+                                                            }))
                                                             .children(detail.map(|detail| {
                                                                 div()
                                                                     .flex_1()
                                                                     .min_w(px(0.0))
                                                                     .truncate()
-                                                                    .text_size(px(10.5))
+                                                                    .text_size(px(9.5))
                                                                     .text_color(muted)
                                                                     .child(detail)
                                                             })),
@@ -2267,8 +4804,7 @@ impl TerminalView {
                                     .child(
                                         div()
                                             .flex_none()
-                                            .pt(px(2.0))
-                                            .text_size(px(11.0))
+                                            .text_size(px(9.5))
                                             .text_color(muted)
                                             .child(age),
                                     ),
@@ -2290,13 +4826,18 @@ impl TerminalView {
         let empty_state = project_groups.is_empty().then(|| {
             let message = if show_filtered_history {
                 format!("No history matches \"{}\".", search_query)
+            } else if has_non_default_filter {
+                format!(
+                    "No threads match the {} filter.",
+                    self.agent_sidebar_filter.label().to_lowercase()
+                )
             } else {
                 "No threads yet. Start an agent to create a project.".to_string()
             };
             div()
-                .px(px(14.0))
-                .py(px(12.0))
-                .text_size(px(12.0))
+                .px(px(10.0))
+                .py(px(8.0))
+                .text_size(px(11.0))
                 .text_color(muted)
                 .child(message)
                 .into_any_element()
@@ -2305,6 +4846,7 @@ impl TerminalView {
         Some(
             div()
                 .id("agent-sidebar")
+                .relative()
                 .w(px(self.agent_sidebar_width))
                 .h_full()
                 .flex_none()
@@ -2315,15 +4857,33 @@ impl TerminalView {
                 .border_color(border)
                 .child(
                     div()
+                        .id("agent-sidebar-resize-handle")
+                        .absolute()
+                        .right(px(-4.0))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(8.0))
+                        .cursor_col_resize()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|view, _event: &MouseDownEvent, _window, cx| {
+                                view.agent_sidebar_resize_drag =
+                                    Some(AgentSidebarResizeDragState);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+                .child(
+                    div()
                         .h(px(AGENT_SIDEBAR_HEADER_HEIGHT))
-                        .px(px(14.0))
+                        .px(px(10.0))
                         .flex_none()
                         .flex()
                         .items_center()
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(15.0))
+                                .text_size(px(12.0))
                                 .text_color(muted)
                                 .child("Threads"),
                         )
@@ -2342,6 +4902,19 @@ impl TerminalView {
                                         .justify_center()
                                         .cursor_pointer()
                                         .hover(move |style| style.bg(button_hover_bg))
+                                        .tooltip(move |_window, cx| {
+                                            cx.new(|_| {
+                                                AgentSidebarTooltip::new(
+                                                    "New thread",
+                                                    "Open the agent picker and start a new thread.",
+                                                    tooltip_bg,
+                                                    tooltip_border,
+                                                    tooltip_text,
+                                                    tooltip_muted,
+                                                )
+                                            })
+                                            .into()
+                                        })
                                         .child(Self::render_agent_sidebar_new_session_icon(
                                             muted, panel_bg,
                                         ))
@@ -2366,13 +4939,29 @@ impl TerminalView {
                                         .justify_center()
                                         .cursor_pointer()
                                         .hover(move |style| style.bg(button_hover_bg))
+                                        .tooltip(move |_window, cx| {
+                                            cx.new(|_| {
+                                                AgentSidebarTooltip::new(
+                                                    "Hide Threads",
+                                                    "Close the Threads sidebar.",
+                                                    tooltip_bg,
+                                                    tooltip_border,
+                                                    tooltip_text,
+                                                    tooltip_muted,
+                                                )
+                                            })
+                                            .into()
+                                        })
                                         .child(Self::render_agent_sidebar_hide_icon(muted))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|view, _event, _window, cx| {
                                                 view.agent_sidebar_open = false;
                                                 view.agent_sidebar_search_active = false;
-                                                view.renaming_agent_thread_id = None;
+                                                view.cancel_rename_agent_project(cx);
+                                                view.cancel_rename_agent_thread(cx);
+                                                view.hovered_agent_thread_id = None;
+                                                view.close_agent_git_panel();
                                                 view.sync_persisted_agent_workspace();
                                                 cx.notify();
                                                 cx.stop_propagation();
@@ -2384,8 +4973,8 @@ impl TerminalView {
                 .child(
                     div()
                         .h(px(AGENT_SIDEBAR_SEARCH_HEIGHT))
-                        .px(px(14.0))
-                        .pb(px(6.0))
+                        .px(px(10.0))
+                        .pb(px(4.0))
                         .flex_none()
                         .child(
                             div()
@@ -2393,10 +4982,9 @@ impl TerminalView {
                                 .relative()
                                 .w_full()
                                 .h_full()
-                                .px(px(10.0))
+                                .px(px(8.0))
                                 .flex()
                                 .items_center()
-                                .gap(px(8.0))
                                 .border_1()
                                 .border_color(border)
                                 .bg(if self.agent_sidebar_search_active {
@@ -2412,7 +5000,6 @@ impl TerminalView {
                                         cx.stop_propagation();
                                     }),
                                 )
-                                .child(Self::render_agent_sidebar_search_icon(muted))
                                 .child(
                                     div()
                                         .relative()
@@ -2430,7 +5017,7 @@ impl TerminalView {
                                             .then(|| {
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(12.0))
+                                                    .text_size(px(11.0))
                                                     .text_color(muted)
                                                     .child("Search history")
                                                     .into_any_element()
@@ -2446,7 +5033,7 @@ impl TerminalView {
                                             .then(|| {
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(12.0))
+                                                    .text_size(px(11.0))
                                                     .text_color(text)
                                                     .child(
                                                         self.agent_sidebar_search_input
@@ -2463,7 +5050,7 @@ impl TerminalView {
                                                     weight: FontWeight::NORMAL,
                                                     ..Default::default()
                                                 },
-                                                px(12.0),
+                                                px(11.0),
                                                 text.into(),
                                                 selected_bg.into(),
                                                 InlineInputAlignment::Left,
@@ -2475,16 +5062,44 @@ impl TerminalView {
                 )
                 .child(
                     div()
-                        .px(px(14.0))
-                        .pt(px(4.0))
+                        .px(px(10.0))
+                        .pb(px(2.0))
+                        .flex_none()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .children(AgentSidebarFilter::ALL.into_iter().map(|filter| {
+                            let is_selected = self.agent_sidebar_filter == filter;
+                            div()
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _event, _window, cx| {
+                                        view.set_agent_sidebar_filter(filter, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .child(Self::render_agent_sidebar_chip(
+                                    filter.label(),
+                                    border,
+                                    if is_selected { selected_bg } else { input_bg },
+                                    if is_selected { text } else { muted },
+                                ))
+                                .into_any_element()
+                        })),
+                )
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .pt(px(2.0))
                         .pb(px(2.0))
                         .flex_none()
                         .flex()
                         .justify_between()
-                        .gap(px(8.0))
+                        .gap(px(6.0))
                         .child(
                             div()
-                                .text_size(px(10.5))
+                                .text_size(px(9.5))
                                 .text_color(muted)
                                 .child(if show_filtered_history {
                                     "Search Results"
@@ -2494,9 +5109,36 @@ impl TerminalView {
                         )
                         .child(
                             div()
-                                .text_size(px(10.5))
-                                .text_color(muted)
-                                .child(history_summary),
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .children((!show_filtered_history
+                                    && !has_non_default_filter
+                                    && !self.agent_projects.is_empty())
+                                    .then(|| {
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |view, _event, _window, cx| {
+                                                view.set_all_agent_projects_collapsed(!all_projects_collapsed, cx);
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .child(Self::render_agent_sidebar_chip(
+                                            if all_projects_collapsed { "expand" } else { "collapse" },
+                                            border,
+                                            input_bg,
+                                            muted,
+                                        ))
+                                        .into_any_element()
+                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(9.5))
+                                        .text_color(muted)
+                                        .child(history_summary),
+                                ),
                         ),
                 )
                 .child(
@@ -2539,6 +5181,7 @@ mod tests {
                     id: "project-1".to_string(),
                     name: "termy".to_string(),
                     root_path: "/Users/lasse/dev/termy".to_string(),
+                    pinned: true,
                     created_at_ms: 10,
                     updated_at_ms: 40,
                 },
@@ -2546,6 +5189,7 @@ mod tests {
                     id: "project-2".to_string(),
                     name: "playground".to_string(),
                     root_path: "/Users/lasse/dev/playground".to_string(),
+                    pinned: false,
                     created_at_ms: 20,
                     updated_at_ms: 30,
                 },
@@ -2556,6 +5200,7 @@ mod tests {
                 agent: command_palette::AiAgentPreset::Codex,
                 title: "Codex termy".to_string(),
                 custom_title: Some("sqlite migration".to_string()),
+                pinned: true,
                 launch_command: "codex".to_string(),
                 working_dir: "/Users/lasse/dev/termy".to_string(),
                 last_seen_title: Some("sqlite migration".to_string()),
@@ -2653,5 +5298,44 @@ mod tests {
         let loaded =
             load_or_migrate_agent_workspace_state(&db, &legacy_path).expect("migrate legacy state");
         assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn agent_workspace_defaults_missing_pinned_flags_to_false() {
+        let loaded = decode_agent_workspace_state(
+            r#"{
+  "version": 1,
+  "sidebar_open": true,
+  "active_project_id": "project-1",
+  "collapsed_project_ids": [],
+  "projects": [
+    {
+      "id": "project-1",
+      "name": "termy",
+      "root_path": "/Users/lasse/dev/termy",
+      "created_at_ms": 10,
+      "updated_at_ms": 40
+    }
+  ],
+  "threads": [
+    {
+      "id": "thread-1",
+      "project_id": "project-1",
+      "agent": "codex",
+      "title": "Codex termy",
+      "launch_command": "codex",
+      "working_dir": "/Users/lasse/dev/termy",
+      "created_at_ms": 11,
+      "updated_at_ms": 41
+    }
+  ]
+}"#,
+        )
+        .expect("decode state");
+
+        assert_eq!(loaded.projects.len(), 1);
+        assert!(!loaded.projects[0].pinned);
+        assert_eq!(loaded.threads.len(), 1);
+        assert!(!loaded.threads[0].pinned);
     }
 }

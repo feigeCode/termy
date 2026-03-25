@@ -5,11 +5,42 @@ const AGENT_SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const AGENT_SIDEBAR_UNAVAILABLE_MESSAGE: &str =
     "Agent sidebar is currently unavailable on Windows builds.";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AgentSidebarFilter {
+    #[default]
+    All,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct AgentGitPanelState {
+    pub(super) open: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AgentGitPanelFilter {
+    #[default]
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AgentGitPanelInputMode {
+    Commit,
+    CreateBranch,
+    SaveStash,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct AgentGitPanelEntry {
+    pub(super) status: String,
+    pub(super) path: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AgentProject {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) root_path: String,
+    pub(super) pinned: bool,
     pub(super) created_at_ms: u64,
     pub(super) updated_at_ms: u64,
 }
@@ -41,10 +72,17 @@ impl TerminalView {
         self.collapsed_agent_project_ids.clear();
         self.agent_projects.clear();
         self.agent_threads.clear();
+        self.renaming_agent_project_id = None;
+        self.agent_project_rename_input.clear();
         self.renaming_agent_thread_id = None;
         self.agent_thread_rename_input.clear();
         self.agent_sidebar_search_active = false;
         self.agent_sidebar_search_input.clear();
+        self.agent_git_panel_input_mode = None;
+        self.agent_git_panel_input.clear();
+        self.hovered_agent_thread_id = None;
+        self.agent_sidebar_filter = AgentSidebarFilter::All;
+        self.agent_git_panel = AgentGitPanelState::default();
     }
 
     pub(super) fn sync_persisted_agent_workspace(&self) {}
@@ -123,6 +161,27 @@ impl TerminalView {
 
     pub(super) fn begin_rename_agent_thread(&mut self, _thread_id: &str, _cx: &mut Context<Self>) {}
 
+    pub(super) fn begin_rename_agent_project(
+        &mut self,
+        _project_id: &str,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    pub(super) fn commit_rename_agent_project(&mut self, cx: &mut Context<Self>) {
+        self.cancel_rename_agent_project(cx);
+    }
+
+    pub(super) fn cancel_rename_agent_project(&mut self, cx: &mut Context<Self>) {
+        if self.renaming_agent_project_id.take().is_some()
+            || !self.agent_project_rename_input.text().is_empty()
+        {
+            self.agent_project_rename_input.clear();
+            self.inline_input_selecting = false;
+            cx.notify();
+        }
+    }
+
     pub(super) fn commit_rename_agent_thread(&mut self, cx: &mut Context<Self>) {
         self.cancel_rename_agent_thread(cx);
     }
@@ -147,6 +206,24 @@ impl TerminalView {
     }
 
     pub(super) fn open_first_matching_agent_thread(&mut self, _cx: &mut Context<Self>) {}
+
+    pub(super) fn commit_agent_git_panel_input(&mut self, cx: &mut Context<Self>) {
+        self.cancel_agent_git_panel_input(cx);
+    }
+
+    pub(super) fn cancel_agent_git_panel_input(&mut self, cx: &mut Context<Self>) {
+        if self.agent_git_panel_input_mode.take().is_some()
+            || !self.agent_git_panel_input.text().is_empty()
+        {
+            self.agent_git_panel_input.clear();
+            self.inline_input_selecting = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn render_agent_git_panel(&mut self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
 
     pub(super) fn render_agent_sidebar(&mut self, _cx: &mut Context<Self>) -> Option<AnyElement> {
         None

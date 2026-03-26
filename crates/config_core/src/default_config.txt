@@ -55,6 +55,8 @@ vertical_tabs = false
 vertical_tabs_width = 220
 # Start vertical tabs in the collapsed state
 vertical_tabs_minimized = false
+# Enable or disable all AI and agent UI features
+ai_features_enabled = false
 # Enable the persisted agent projects and threads sidebar (currently unavailable on Windows)
 agent_sidebar_enabled = false
 # Width for the agent sidebar in pixels (currently unavailable on Windows)

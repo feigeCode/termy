@@ -22,7 +22,7 @@ mod workspace;
 mod workspace_db;
 
 pub(in super::super) use self::types::{
-    AgentGitPanelInputMode, AgentGitPanelState, AgentProject, AgentSidebarFilter, AgentThread,
+    AgentGitPanelInputMode, AgentGitPanelState, AgentProject, AgentThread,
 };
 use self::{types::*, workspace_db::*};
 
@@ -80,6 +80,14 @@ impl TerminalView {
 
     pub(in super::super) fn terminal_left_sidebar_width(&self) -> f32 {
         self.tab_strip_sidebar_width() + self.agent_sidebar_width()
+    }
+
+    pub(in super::super) fn terminal_right_panel_width(&self) -> f32 {
+        if self.agent_git_panel.open {
+            self.agent_git_panel_width
+        } else {
+            0.0
+        }
     }
 
     pub(super) fn should_render_agent_sidebar(&self) -> bool {

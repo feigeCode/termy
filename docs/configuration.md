@@ -225,6 +225,11 @@ Platform note: the Agent Sidebar/Workspace is currently unavailable on Windows b
 - Start vertical tabs in the collapsed state
 - Group: `TAB STRIP`
 
+`ai_features_enabled`
+- Default: `false`
+- Enable or disable all AI and agent UI features
+- Group: `AGENTS`
+
 `agent_sidebar_enabled`
 - Default: `false`
 - Enable the persisted agent projects and threads sidebar (currently unavailable on Windows)
@@ -407,4 +412,3 @@ Use `[colors]` to override theme colors with `#RRGGBB` values.
 `bright_white`
 - Aliases: `brightwhite`, `color15`
 - ANSI bright white
-

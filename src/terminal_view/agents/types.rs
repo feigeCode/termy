@@ -1,28 +1,17 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum AgentSidebarFilter {
-    #[default]
-    All,
-    Live,
-    Saved,
-    Busy,
-    Pinned,
-}
-
-impl AgentSidebarFilter {
-    pub(crate) const ALL: [Self; 5] =
-        [Self::All, Self::Live, Self::Saved, Self::Busy, Self::Pinned];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Live => "Live",
-            Self::Saved => "Saved",
-            Self::Busy => "Busy",
-            Self::Pinned => "Pinned",
-        }
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct GitPanelTheme {
+    pub(crate) panel_bg: gpui::Rgba,
+    pub(crate) input_bg: gpui::Rgba,
+    pub(crate) selected_bg: gpui::Rgba,
+    pub(crate) border: gpui::Rgba,
+    pub(crate) text: gpui::Rgba,
+    pub(crate) muted: gpui::Rgba,
+    pub(crate) success: gpui::Rgba,
+    pub(crate) warning: gpui::Rgba,
+    pub(crate) danger: gpui::Rgba,
+    pub(crate) info: gpui::Rgba,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -49,6 +38,7 @@ pub(crate) struct AgentGitPanelState {
     pub(crate) project_history: Vec<AgentGitHistoryEntry>,
     pub(crate) branches: Vec<String>,
     pub(crate) stashes: Vec<AgentGitStashEntry>,
+    pub(crate) just_committed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,28 +124,24 @@ impl AgentGitPanelEntry {
         }
         self.status.trim().to_lowercase().into()
     }
+
+    pub(crate) fn status_color(&self, theme: &GitPanelTheme) -> gpui::Rgba {
+        if self.is_untracked() || self.status.contains('A') {
+            theme.success
+        } else if self.status.contains('D') || self.status.contains('U') {
+            theme.danger
+        } else if self.status.contains('R') {
+            theme.info
+        } else {
+            theme.warning
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum AgentGitPanelFilter {
     #[default]
     All,
-    Staged,
-    Unstaged,
-    Untracked,
-}
-
-impl AgentGitPanelFilter {
-    pub(crate) const ALL: [Self; 4] = [Self::All, Self::Staged, Self::Unstaged, Self::Untracked];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Staged => "Staged",
-            Self::Unstaged => "Unstaged",
-            Self::Untracked => "Untracked",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,6 +335,8 @@ pub(crate) struct AgentThread {
     pub(crate) last_status_label: Option<String>,
     #[serde(default)]
     pub(crate) last_status_detail: Option<String>,
+    #[serde(default)]
+    pub(crate) last_session_id: Option<String>,
     pub(crate) created_at_ms: u64,
     pub(crate) updated_at_ms: u64,
     #[serde(skip)]

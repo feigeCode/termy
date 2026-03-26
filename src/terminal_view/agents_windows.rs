@@ -5,12 +5,6 @@ const AGENT_SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const AGENT_SIDEBAR_UNAVAILABLE_MESSAGE: &str =
     "Agent sidebar is currently unavailable on Windows builds.";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum AgentSidebarFilter {
-    #[default]
-    All,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct AgentGitPanelState {
     pub(super) open: bool,
@@ -53,20 +47,7 @@ pub(super) fn clamp_agent_sidebar_width(width: f32) -> f32 {
 }
 
 impl TerminalView {
-    pub(in super::super) fn agent_sidebar_width(&self) -> f32 {
-        0.0
-    }
-
-    pub(in super::super) fn terminal_left_sidebar_width(&self) -> f32 {
-        self.tab_strip_sidebar_width()
-    }
-
-    pub(super) fn should_render_agent_sidebar(&self) -> bool {
-        false
-    }
-
-    pub(super) fn restore_persisted_agent_workspace(&mut self) {
-        self.agent_sidebar_enabled = false;
+    pub(in super::super) fn reset_agent_workspace_runtime_state(&mut self) {
         self.agent_sidebar_open = false;
         self.active_agent_project_id = None;
         self.collapsed_agent_project_ids.clear();
@@ -80,9 +61,36 @@ impl TerminalView {
         self.agent_sidebar_search_input.clear();
         self.agent_git_panel_input_mode = None;
         self.agent_git_panel_input.clear();
+        self.agent_git_panel_branch_dropdown_open = false;
+        self.agent_git_panel_poll_task = None;
         self.hovered_agent_thread_id = None;
-        self.agent_sidebar_filter = AgentSidebarFilter::All;
         self.agent_git_panel = AgentGitPanelState::default();
+        self.command_palette.set_agent_launch_project_id(None);
+        for tab in &mut self.tabs {
+            tab.agent_thread_id = None;
+            tab.agent_command_has_started = false;
+        }
+    }
+
+    pub(in super::super) fn agent_sidebar_width(&self) -> f32 {
+        0.0
+    }
+
+    pub(in super::super) fn terminal_left_sidebar_width(&self) -> f32 {
+        self.tab_strip_sidebar_width()
+    }
+
+    pub(in super::super) fn terminal_right_panel_width(&self) -> f32 {
+        0.0
+    }
+
+    pub(super) fn should_render_agent_sidebar(&self) -> bool {
+        false
+    }
+
+    pub(super) fn restore_persisted_agent_workspace(&mut self) {
+        self.agent_sidebar_enabled = false;
+        self.reset_agent_workspace_runtime_state();
     }
 
     pub(super) fn sync_persisted_agent_workspace(&self) {}

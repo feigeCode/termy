@@ -6,6 +6,8 @@ use gpui::{Rgba, UniformListScrollHandle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use termy_terminal_ui::TmuxSocketTarget;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum CommandPaletteMode {
@@ -23,16 +25,20 @@ pub(in super::super) enum CommandPaletteMode {
 pub(in super::super) enum AiAgentPreset {
     Codex,
     Claude,
+    Copilot,
     Cursor,
+    Kiro,
     OpenCode,
     Pi,
 }
 
 impl AiAgentPreset {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::Codex,
         Self::Claude,
+        Self::Copilot,
         Self::Cursor,
+        Self::Kiro,
         Self::OpenCode,
         Self::Pi,
     ];
@@ -41,7 +47,9 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::Copilot => "Copilot",
             Self::Cursor => "Cursor",
+            Self::Kiro => "Kiro",
             Self::OpenCode => "OpenCode",
             Self::Pi => "Pi",
         }
@@ -51,7 +59,9 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "ai agent assistant codex openai code",
             Self::Claude => "ai agent assistant claude anthropic code",
+            Self::Copilot => "ai agent assistant copilot github code",
             Self::Cursor => "ai agent assistant cursor code",
+            Self::Kiro => "ai agent assistant kiro amazon aws",
             Self::OpenCode => "ai agent assistant opencode open code",
             Self::Pi => "ai agent assistant pi",
         }
@@ -61,35 +71,51 @@ impl AiAgentPreset {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Copilot => "copilot",
             Self::Cursor => "agent",
+            Self::Kiro => "kiro-cli",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
         }
+    }
+
+    pub(in super::super) fn is_installed(self) -> bool {
+        let path = resolve_user_path();
+        command_exists_in_path(self.launch_command(), path.as_str())
     }
 
     pub(in super::super) fn fallback_label(self) -> &'static str {
         match self {
             Self::Codex => "CX",
             Self::Claude => "CL",
+            Self::Copilot => "CP",
             Self::Cursor => "CU",
+            Self::Kiro => "KI",
             Self::OpenCode => "OC",
             Self::Pi => "PI",
         }
     }
 
-    pub(in super::super) fn image_asset_path(self, dark_surface: bool) -> &'static str {
+    pub(in super::super) fn image_asset_path(self, _dark_surface: bool) -> &'static str {
         match self {
-            Self::Codex => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/codex.png"),
-            Self::Claude => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/claude.svg"),
-            Self::Cursor => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/cursor.png"),
-            Self::OpenCode if dark_surface => {
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/assets/agents/opencode-light.png"
-                )
+            Self::Codex => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/openai.svg"),
+            Self::Claude => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/claude.svg")
             }
-            Self::OpenCode => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/opencode.png"),
-            Self::Pi => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agents/pi.webp"),
+            Self::Copilot => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/copilot.svg")
+            }
+            Self::Cursor => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/cursor.svg")
+            }
+            Self::Kiro => {
+                concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/kiro.svg")
+            }
+            Self::OpenCode => concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/agent-icons/opencode.svg"
+            ),
+            Self::Pi => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/agent-icons/pi.svg"),
         }
     }
 
@@ -232,7 +258,7 @@ impl CommandPaletteItem {
             title: agent.title().to_string(),
             keywords: agent.keywords().to_string(),
             enabled: true,
-            status_hint: Some(agent.launch_command()),
+            status_hint: None,
             tmux_status_hint: None,
             kind: CommandPaletteItemKind::AiAgentSpawn(agent),
         }
@@ -763,12 +789,111 @@ pub(super) fn command_palette_next_scroll_y(
     }
 }
 
+/// Resolves the user's full login shell PATH, cached for the process lifetime.
+/// On macOS GUI apps launched from Finder/Dock, the process inherits a minimal
+/// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`). This function runs the user's login
+/// shell to get their real PATH including `~/.local/bin`, `~/.cargo/bin`,
+/// nvm paths, homebrew, etc.
+pub(super) fn prewarm_user_path_resolution() {
+    std::thread::spawn(|| {
+        let _ = resolve_user_path();
+    });
+}
+
+fn resolve_user_path() -> String {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            resolve_user_path_from_shell()
+                .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default())
+        })
+        .clone()
+}
+
+fn resolve_user_path_from_shell() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = std::process::Command::new(&shell)
+        .args(["-l", "-i", "-c", "echo $PATH"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
+fn command_exists_in_path(command: &str, path_env: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+
+    std::env::split_paths(path_env)
+        .filter(|entry| !entry.as_os_str().is_empty())
+        .any(|entry| command_exists_in_dir(&entry, command))
+}
+
+fn command_exists_in_dir(dir: &std::path::Path, command: &str) -> bool {
+    let candidate = dir.join(command);
+    candidate_is_executable(&candidate)
+}
+
+fn candidate_is_executable(candidate: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(candidate) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn command_item(title: &str, keywords: &str, action: CommandAction) -> CommandPaletteItem {
         CommandPaletteItem::command_with_state(title, keywords, action, true, None)
+    }
+
+    #[test]
+    fn command_exists_in_path_finds_executable_file() {
+        let dir = tempdir().expect("tempdir");
+        let executable_path = dir.path().join("codex");
+        std::fs::write(&executable_path, "#!/bin/sh\n").expect("write executable");
+        #[cfg(unix)]
+        std::fs::set_permissions(&executable_path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod executable");
+
+        let path = std::env::join_paths([dir.path()]).expect("join PATH");
+        assert!(command_exists_in_path("codex", path.to_string_lossy().as_ref()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_exists_in_path_rejects_non_executable_file() {
+        let dir = tempdir().expect("tempdir");
+        let file_path = dir.path().join("codex");
+        std::fs::write(&file_path, "#!/bin/sh\n").expect("write file");
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod file");
+
+        let path = std::env::join_paths([dir.path()]).expect("join PATH");
+        assert!(!command_exists_in_path("codex", path.to_string_lossy().as_ref()));
     }
 
     #[test]

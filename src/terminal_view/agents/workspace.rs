@@ -1,6 +1,31 @@
 use super::*;
 
 impl TerminalView {
+    pub(in super::super) fn reset_agent_workspace_runtime_state(&mut self) {
+        self.agent_sidebar_open = false;
+        self.active_agent_project_id = None;
+        self.collapsed_agent_project_ids.clear();
+        self.agent_projects.clear();
+        self.agent_threads.clear();
+        self.renaming_agent_project_id = None;
+        self.agent_project_rename_input.clear();
+        self.renaming_agent_thread_id = None;
+        self.agent_thread_rename_input.clear();
+        self.agent_sidebar_search_active = false;
+        self.agent_sidebar_search_input.clear();
+        self.agent_git_panel_input_mode = None;
+        self.agent_git_panel_input.clear();
+        self.agent_git_panel_branch_dropdown_open = false;
+        self.agent_git_panel_poll_task = None;
+        self.hovered_agent_thread_id = None;
+        self.agent_git_panel = AgentGitPanelState::default();
+        self.command_palette.set_agent_launch_project_id(None);
+        for tab in &mut self.tabs {
+            tab.agent_thread_id = None;
+            tab.agent_command_has_started = false;
+        }
+    }
+
     pub(in super::super) fn persisted_agent_workspace_db_path() -> Result<PathBuf, String> {
         let config_path = crate::config::ensure_config_file().map_err(|error| error.to_string())?;
         let parent = config_path
@@ -56,6 +81,10 @@ impl TerminalView {
     }
 
     pub(in super::super) fn restore_persisted_agent_workspace(&mut self) {
+        if !self.ai_features_enabled {
+            self.reset_agent_workspace_runtime_state();
+            return;
+        }
         match Self::load_persisted_agent_workspace_state() {
             Ok(state) => {
                 self.agent_projects = state.projects;
@@ -95,12 +124,20 @@ impl TerminalView {
     }
 
     pub(in super::super) fn sync_persisted_agent_workspace(&self) {
+        if !self.ai_features_enabled {
+            return;
+        }
         if let Err(error) = self.store_persisted_agent_workspace_state() {
             log::error!("Failed to persist agent workspace: {}", error);
         }
     }
 
     pub(in super::super) fn toggle_agent_sidebar(&mut self, cx: &mut Context<Self>) {
+        if !self.ai_features_enabled {
+            termy_toast::info("AI features are disabled in config.txt");
+            self.notify_overlay(cx);
+            return;
+        }
         if !self.agent_sidebar_enabled {
             termy_toast::info(
                 "Enable agent_sidebar_enabled in config.txt to use the agent workspace",
@@ -271,44 +308,6 @@ impl TerminalView {
         true
     }
 
-    pub(in super::super) fn set_agent_sidebar_filter(
-        &mut self,
-        filter: AgentSidebarFilter,
-        cx: &mut Context<Self>,
-    ) {
-        if self.agent_sidebar_filter == filter {
-            return;
-        }
-
-        self.agent_sidebar_filter = filter;
-        cx.notify();
-    }
-
-    pub(in super::super) fn are_all_agent_projects_collapsed(&self) -> bool {
-        !self.agent_projects.is_empty()
-            && self.collapsed_agent_project_ids.len() >= self.agent_projects.len()
-    }
-
-    pub(in super::super) fn set_all_agent_projects_collapsed(
-        &mut self,
-        collapsed: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if collapsed {
-            self.collapsed_agent_project_ids = self
-                .agent_projects
-                .iter()
-                .map(|project| project.id.clone())
-                .collect();
-            self.cancel_rename_agent_project(cx);
-            self.cancel_rename_agent_thread(cx);
-        } else {
-            self.collapsed_agent_project_ids.clear();
-        }
-
-        self.sync_persisted_agent_workspace();
-        cx.notify();
-    }
 
     pub(in super::super) fn begin_rename_agent_project(
         &mut self,
@@ -412,6 +411,7 @@ impl TerminalView {
             last_seen_command: Some(agent.launch_command().to_string()),
             last_status_label: None,
             last_status_detail: None,
+            last_session_id: None,
             created_at_ms: now,
             updated_at_ms: now,
             linked_tab_id: Some(tab_id),
@@ -444,9 +444,17 @@ impl TerminalView {
             return Ok(());
         }
 
-        let command = self.agent_threads[thread_index].launch_command.clone();
-        let working_dir = self.agent_threads[thread_index].working_dir.clone();
-        let project_id = self.agent_threads[thread_index].project_id.clone();
+        let thread = &self.agent_threads[thread_index];
+        let base_command = thread.launch_command.clone();
+        let session_id = thread.last_session_id.clone();
+        let working_dir = thread.working_dir.clone();
+        let project_id = thread.project_id.clone();
+
+        let command = if let Some(ref sid) = session_id {
+            format!("{} --resume {}", base_command, sid)
+        } else {
+            base_command
+        };
         let previous_tab_count = self.tabs.len();
         self.add_tab_with_working_dir(Some(working_dir.as_str()), cx);
 
@@ -461,7 +469,7 @@ impl TerminalView {
             return Err("Failed to access the new agent terminal".to_string());
         };
 
-        let mut command_input = command.clone();
+        let mut command_input = format!("clear\n{}", command);
         if !command_input.ends_with('\n') {
             command_input.push('\n');
         }
@@ -486,6 +494,9 @@ impl TerminalView {
         project_id: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if !self.ai_features_enabled {
+            return Err("AI features are disabled in config.txt".to_string());
+        }
         let (project_id, working_dir) = match project_id {
             Some(project_id) => {
                 let working_dir = self
@@ -515,7 +526,7 @@ impl TerminalView {
             return Err("Failed to access the new agent terminal".to_string());
         };
 
-        let mut command_input = agent.launch_command().to_string();
+        let mut command_input = format!("clear\n{}", agent.launch_command());
         if !command_input.ends_with('\n') {
             command_input.push('\n');
         }
@@ -623,6 +634,41 @@ impl TerminalView {
         Ok(removed_threads)
     }
 
+    pub(in super::super) fn capture_agent_session_id_for_tab(&mut self, index: usize) {
+        if !self.ai_features_enabled {
+            return;
+        }
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let Some(thread_id) = tab.agent_thread_id.clone() else {
+            return;
+        };
+        let Some(terminal) = tab.active_terminal() else {
+            return;
+        };
+        let Some(thread) = self
+            .agent_threads
+            .iter()
+            .find(|t| t.id == thread_id)
+        else {
+            return;
+        };
+        if thread.last_session_id.is_some() {
+            return;
+        }
+        let agent = thread.agent;
+        if let Some(session_id) = Self::detect_agent_session_id(agent, terminal) {
+            if let Some(thread) = self
+                .agent_threads
+                .iter_mut()
+                .find(|t| t.id == thread_id)
+            {
+                thread.last_session_id = Some(session_id);
+            }
+        }
+    }
+
     pub(in super::super) fn agent_thread_archive_snapshot_for_tab(
         &self,
         index: usize,
@@ -633,6 +679,9 @@ impl TerminalView {
         Option<String>,
         Option<String>,
     )> {
+        if !self.ai_features_enabled {
+            return None;
+        }
         let tab = self.tabs.get(index)?;
         let (status_label, status_detail) = tab
             .agent_thread_id
@@ -663,6 +712,9 @@ impl TerminalView {
         status_label: Option<&str>,
         status_detail: Option<&str>,
     ) {
+        if !self.ai_features_enabled {
+            return;
+        }
         let Some(thread_id) = thread_id else {
             return;
         };
@@ -691,6 +743,9 @@ impl TerminalView {
     }
 
     pub(in super::super) fn sync_agent_workspace_to_active_tab(&mut self) {
+        if !self.ai_features_enabled {
+            return;
+        }
         let Some(project_id) = self
             .tabs
             .get(self.active_tab)

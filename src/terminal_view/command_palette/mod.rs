@@ -19,6 +19,10 @@ pub(super) use state::{AiAgentPreset, CommandPaletteMode, CommandPaletteState, T
 pub(super) use state_layouts::SavedLayoutIntent;
 pub(super) use state_tmux::TmuxSessionIntent;
 
+pub(super) fn prewarm_user_path_resolution() {
+    state::prewarm_user_path_resolution();
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommandPaletteEscapeAction {
     ClosePalette,
@@ -189,10 +193,19 @@ impl TerminalView {
     fn command_palette_command_items_for_state(
         install_cli_available: bool,
         tmux_enabled: bool,
+        ai_features_enabled: bool,
     ) -> Vec<CommandPaletteItem> {
         let mut items =
             Self::command_palette_core_command_items_for_state(install_cli_available, tmux_enabled);
-        if !cfg!(target_os = "windows") {
+        if !ai_features_enabled {
+            items.retain(|item| {
+                !matches!(
+                    item.kind,
+                    CommandPaletteItemKind::Command(CommandAction::ToggleAgentSidebar)
+                )
+            });
+        }
+        if ai_features_enabled && !cfg!(target_os = "windows") {
             let insert_index = items
                 .iter()
                 .position(|item| {
@@ -234,6 +247,7 @@ impl TerminalView {
     fn command_palette_ai_agent_items() -> Vec<CommandPaletteItem> {
         AiAgentPreset::ALL
             .into_iter()
+            .filter(|agent| agent.is_installed())
             .map(CommandPaletteItem::ai_agent)
             .collect()
     }
@@ -247,6 +261,7 @@ impl TerminalView {
             CommandPaletteMode::Commands => Self::command_palette_command_items_for_state(
                 self.install_cli_available(),
                 self.runtime_uses_tmux(),
+                self.ai_features_enabled,
             ),
             CommandPaletteMode::AgentProjects => self.command_palette_ai_agent_project_items(cx),
             CommandPaletteMode::Agents => Self::command_palette_ai_agent_items(),
@@ -615,6 +630,11 @@ impl TerminalView {
     }
 
     fn open_ai_agent_projects_palette_from_palette(&mut self, cx: &mut Context<Self>) {
+        if !self.ai_features_enabled {
+            termy_toast::info("AI features are disabled in config.txt");
+            self.notify_overlay(cx);
+            return;
+        }
         self.command_palette.set_agent_launch_project_id(None);
         self.set_command_palette_mode(CommandPaletteMode::AgentProjects, false, cx);
         self.command_palette.input_mut().set_text(String::new());
@@ -628,6 +648,11 @@ impl TerminalView {
         project_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if !self.ai_features_enabled {
+            termy_toast::info("AI features are disabled in config.txt");
+            self.notify_overlay(cx);
+            return;
+        }
         self.command_palette.set_agent_launch_project_id(project_id);
         self.set_command_palette_mode(CommandPaletteMode::Agents, false, cx);
     }
@@ -693,6 +718,17 @@ impl TerminalView {
             CommandPaletteNotifyEvent::InteractionOnly,
             cx,
         );
+    }
+
+    pub(super) fn reset_agent_command_palette_mode_if_disabled(&mut self) {
+        if !self.ai_features_enabled
+            && matches!(
+                self.command_palette.mode(),
+                CommandPaletteMode::AgentProjects | CommandPaletteMode::Agents
+            )
+        {
+            self.command_palette.set_mode(CommandPaletteMode::Commands);
+        }
     }
 
     pub(super) fn animate_command_palette_to_selected(
@@ -1769,7 +1805,7 @@ mod tests {
 
     #[test]
     fn ai_agent_command_is_inserted_after_run_task() {
-        let items = TerminalView::command_palette_command_items_for_state(true, true);
+        let items = TerminalView::command_palette_command_items_for_state(true, true, true);
         let ai_agent_index = items
             .iter()
             .position(|item| matches!(item.kind, CommandPaletteItemKind::AiAgentOpenMode));
@@ -1790,6 +1826,19 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         assert_eq!(ai_agent_index, None);
+    }
+
+    #[test]
+    fn ai_agent_command_is_hidden_when_ai_features_are_disabled() {
+        let items = TerminalView::command_palette_command_items_for_state(true, true, false);
+
+        assert!(items.iter().all(|item| {
+            !matches!(
+                item.kind,
+                CommandPaletteItemKind::AiAgentOpenMode
+                    | CommandPaletteItemKind::Command(CommandAction::ToggleAgentSidebar)
+            )
+        }));
     }
 
     #[test]

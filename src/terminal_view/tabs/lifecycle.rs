@@ -345,6 +345,7 @@ impl TerminalView {
             return;
         }
 
+        self.capture_agent_session_id_for_tab(index);
         let removed_agent_snapshot = self.agent_thread_archive_snapshot_for_tab(index);
         self.tabs.remove(index);
         self.native_pane_zoom_snapshots.remove(&removed_tab_id);

@@ -100,6 +100,80 @@ impl TerminalView {
         lines
     }
 
+    pub(in super::super) fn detect_agent_session_id(
+        agent: command_palette::AiAgentPreset,
+        terminal: &Terminal,
+    ) -> Option<String> {
+        if !matches!(
+            agent,
+            command_palette::AiAgentPreset::Claude | command_palette::AiAgentPreset::Codex
+        ) {
+            return None;
+        }
+
+        let (_, history_size) = terminal.scroll_state();
+        let rows = i32::from(terminal.size().rows.max(1));
+        let scan_start = -(history_size as i32);
+
+        let mut session_id: Option<String> = None;
+
+        let _ = terminal.with_grid(|grid| {
+            for line_idx in scan_start..rows {
+                let Some(line) = Self::extract_agent_status_line(grid, line_idx) else {
+                    continue;
+                };
+                let trimmed = line.trim();
+
+                // Match patterns like:
+                //   session: <id>
+                //   session id: <id>
+                //   Session ID: <id>
+                //   conversation: <id>
+                //   resume: <id>
+                //   --resume <id>
+                let lower = trimmed.to_ascii_lowercase();
+                for prefix in &[
+                    "session id: ",
+                    "session: ",
+                    "conversation id: ",
+                    "conversation: ",
+                    "session_id: ",
+                    "resume id: ",
+                ] {
+                    if let Some(rest) = lower.find(prefix).map(|pos| {
+                        let start = pos + prefix.len();
+                        trimmed[start..].trim()
+                    }) {
+                        let id = rest
+                            .split(|c: char| c.is_whitespace() || c == ',' || c == ')')
+                            .next()
+                            .unwrap_or(rest)
+                            .trim();
+                        if !id.is_empty() && id.len() >= 4 {
+                            session_id = Some(id.to_string());
+                        }
+                    }
+                }
+
+                // Also match UUID-like patterns on lines containing "session"
+                if lower.contains("session") || lower.contains("conversation") {
+                    for word in trimmed.split_whitespace() {
+                        let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                        if cleaned.len() >= 8
+                            && cleaned.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                            && cleaned.chars().any(|c| c.is_alphanumeric())
+                            && !cleaned.chars().all(|c| c.is_alphabetic())
+                        {
+                            session_id = Some(cleaned.to_string());
+                        }
+                    }
+                }
+            }
+        });
+
+        session_id
+    }
+
     pub(in super::super) fn find_last_status_line(
         lines: &[String],
         needles: &[&str],
@@ -259,6 +333,8 @@ impl TerminalView {
                 }
             }
             command_palette::AiAgentPreset::Cursor => {}
+            command_palette::AiAgentPreset::Copilot => {}
+            command_palette::AiAgentPreset::Kiro => {}
         }
 
         if let Some(generic) = Self::detect_generic_agent_status(lines) {
@@ -277,8 +353,10 @@ impl TerminalView {
             }
             command_palette::AiAgentPreset::Claude => None,
             command_palette::AiAgentPreset::Cursor => None,
+            command_palette::AiAgentPreset::Copilot => None,
             command_palette::AiAgentPreset::OpenCode => None,
             command_palette::AiAgentPreset::Codex => None,
+            command_palette::AiAgentPreset::Kiro => None,
         }
     }
 
@@ -355,6 +433,28 @@ impl TerminalView {
                     )))
                 }),
             tone: AgentThreadStatusTone::Muted,
+        }
+    }
+
+    pub(in super::super) fn update_agent_session_ids(&mut self) {
+        let updates: Vec<(usize, String)> = self
+            .agent_threads
+            .iter()
+            .enumerate()
+            .filter(|(_, thread)| thread.last_session_id.is_none() && thread.linked_tab_id.is_some())
+            .filter_map(|(i, thread)| {
+                let tab = thread
+                    .linked_tab_id
+                    .and_then(|tab_id| self.tab_index_by_id(tab_id))
+                    .and_then(|index| self.tabs.get(index))?;
+                let terminal = tab.active_terminal()?;
+                let session_id = Self::detect_agent_session_id(thread.agent, terminal)?;
+                Some((i, session_id))
+            })
+            .collect();
+
+        for (index, session_id) in updates {
+            self.agent_threads[index].last_session_id = Some(session_id);
         }
     }
 
@@ -465,21 +565,10 @@ impl TerminalView {
 
     pub(in super::super) fn agent_sidebar_thread_matches_filter(
         &self,
-        project: &AgentProject,
-        thread: &AgentThread,
+        _project: &AgentProject,
+        _thread: &AgentThread,
     ) -> bool {
-        match self.agent_sidebar_filter {
-            AgentSidebarFilter::All => true,
-            AgentSidebarFilter::Live => self.agent_thread_has_live_session(thread),
-            AgentSidebarFilter::Saved => !self.agent_thread_has_live_session(thread),
-            AgentSidebarFilter::Busy => {
-                matches!(
-                    self.agent_thread_runtime_status(thread),
-                    AgentThreadRuntimeStatus::Busy
-                )
-            }
-            AgentSidebarFilter::Pinned => project.pinned || thread.pinned,
-        }
+        true
     }
 
     pub(in super::super) fn filtered_agent_projects_for_sidebar(
@@ -500,15 +589,7 @@ impl TerminalView {
                         .retain(|thread| self.agent_sidebar_thread_matches_terms(thread, &terms));
                 }
 
-                let project_matches_filter = match self.agent_sidebar_filter {
-                    AgentSidebarFilter::Pinned => project.pinned,
-                    AgentSidebarFilter::All => true,
-                    _ => false,
-                };
-
-                if ((!terms.is_empty() && !project_matches) || !project_matches_filter)
-                    && threads.is_empty()
-                {
+                if !terms.is_empty() && !project_matches && threads.is_empty() {
                     return None;
                 }
 

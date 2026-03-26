@@ -1,6 +1,31 @@
 use super::*;
 
 impl TerminalView {
+    pub(in super::super) fn reset_agent_workspace_runtime_state(&mut self) {
+        self.agent_sidebar_open = false;
+        self.active_agent_project_id = None;
+        self.collapsed_agent_project_ids.clear();
+        self.agent_projects.clear();
+        self.agent_threads.clear();
+        self.renaming_agent_project_id = None;
+        self.agent_project_rename_input.clear();
+        self.renaming_agent_thread_id = None;
+        self.agent_thread_rename_input.clear();
+        self.agent_sidebar_search_active = false;
+        self.agent_sidebar_search_input.clear();
+        self.agent_git_panel_input_mode = None;
+        self.agent_git_panel_input.clear();
+        self.agent_git_panel_branch_dropdown_open = false;
+        self.agent_git_panel_poll_task = None;
+        self.hovered_agent_thread_id = None;
+        self.agent_git_panel = AgentGitPanelState::default();
+        self.command_palette.set_agent_launch_project_id(None);
+        for tab in &mut self.tabs {
+            tab.agent_thread_id = None;
+            tab.agent_command_has_started = false;
+        }
+    }
+
     pub(in super::super) fn persisted_agent_workspace_db_path() -> Result<PathBuf, String> {
         let config_path = crate::config::ensure_config_file().map_err(|error| error.to_string())?;
         let parent = config_path
@@ -56,6 +81,10 @@ impl TerminalView {
     }
 
     pub(in super::super) fn restore_persisted_agent_workspace(&mut self) {
+        if !self.ai_features_enabled {
+            self.reset_agent_workspace_runtime_state();
+            return;
+        }
         match Self::load_persisted_agent_workspace_state() {
             Ok(state) => {
                 self.agent_projects = state.projects;
@@ -95,12 +124,20 @@ impl TerminalView {
     }
 
     pub(in super::super) fn sync_persisted_agent_workspace(&self) {
+        if !self.ai_features_enabled {
+            return;
+        }
         if let Err(error) = self.store_persisted_agent_workspace_state() {
             log::error!("Failed to persist agent workspace: {}", error);
         }
     }
 
     pub(in super::super) fn toggle_agent_sidebar(&mut self, cx: &mut Context<Self>) {
+        if !self.ai_features_enabled {
+            termy_toast::info("AI features are disabled in config.txt");
+            self.notify_overlay(cx);
+            return;
+        }
         if !self.agent_sidebar_enabled {
             termy_toast::info(
                 "Enable agent_sidebar_enabled in config.txt to use the agent workspace",
@@ -457,6 +494,9 @@ impl TerminalView {
         project_id: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if !self.ai_features_enabled {
+            return Err("AI features are disabled in config.txt".to_string());
+        }
         let (project_id, working_dir) = match project_id {
             Some(project_id) => {
                 let working_dir = self
@@ -595,6 +635,9 @@ impl TerminalView {
     }
 
     pub(in super::super) fn capture_agent_session_id_for_tab(&mut self, index: usize) {
+        if !self.ai_features_enabled {
+            return;
+        }
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
@@ -636,6 +679,9 @@ impl TerminalView {
         Option<String>,
         Option<String>,
     )> {
+        if !self.ai_features_enabled {
+            return None;
+        }
         let tab = self.tabs.get(index)?;
         let (status_label, status_detail) = tab
             .agent_thread_id
@@ -666,6 +712,9 @@ impl TerminalView {
         status_label: Option<&str>,
         status_detail: Option<&str>,
     ) {
+        if !self.ai_features_enabled {
+            return;
+        }
         let Some(thread_id) = thread_id else {
             return;
         };
@@ -694,6 +743,9 @@ impl TerminalView {
     }
 
     pub(in super::super) fn sync_agent_workspace_to_active_tab(&mut self) {
+        if !self.ai_features_enabled {
+            return;
+        }
         let Some(project_id) = self
             .tabs
             .get(self.active_tab)

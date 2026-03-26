@@ -1505,6 +1505,7 @@ pub struct TerminalView {
     vertical_tabs: bool,
     vertical_tabs_width: f32,
     vertical_tabs_minimized: bool,
+    ai_features_enabled: bool,
     agent_sidebar_enabled: bool,
     agent_sidebar_width: f32,
     agent_sidebar_open: bool,
@@ -3000,10 +3001,11 @@ impl TerminalView {
                 config.vertical_tabs_width,
             ),
             vertical_tabs_minimized: config.vertical_tabs_minimized,
+            ai_features_enabled: config.ai_features_enabled,
             agent_sidebar_enabled: if cfg!(target_os = "windows") {
                 false
             } else {
-                config.agent_sidebar_enabled
+                config.ai_features_enabled && config.agent_sidebar_enabled
             },
             agent_sidebar_width: agents::clamp_agent_sidebar_width(config.agent_sidebar_width),
             agent_sidebar_open: false,
@@ -3137,7 +3139,12 @@ impl TerminalView {
             // Surface explicit feedback when a synced/shared config requests tmux on Windows.
             termy_toast::warning(TMUX_UNSUPPORTED_WINDOWS_TOAST);
         }
-        view.restore_persisted_agent_workspace();
+        command_palette::prewarm_user_path_resolution();
+        if view.ai_features_enabled {
+            view.restore_persisted_agent_workspace();
+        } else {
+            view.reset_agent_workspace_runtime_state();
+        }
         let restored_native_workspace = if resolved_runtime_kind == RuntimeKind::Native {
             match view.restore_persisted_native_workspace(cx) {
                 Ok(restored) => restored,
@@ -3278,6 +3285,7 @@ impl TerminalView {
         let tab_close_visibility_changed = self.tab_close_visibility != config.tab_close_visibility;
         let tab_width_mode_changed = self.tab_width_mode != config.tab_width_mode;
         let vertical_tabs_changed = self.vertical_tabs != config.vertical_tabs;
+        let ai_features_enabled_changed = self.ai_features_enabled != config.ai_features_enabled;
         let vertical_tabs_width =
             tab_strip::clamp_expanded_vertical_tab_strip_width(config.vertical_tabs_width);
         let vertical_tabs_width_changed =
@@ -3296,13 +3304,18 @@ impl TerminalView {
         self.vertical_tabs = config.vertical_tabs;
         self.vertical_tabs_width = vertical_tabs_width;
         self.vertical_tabs_minimized = config.vertical_tabs_minimized;
+        self.ai_features_enabled = config.ai_features_enabled;
         self.agent_sidebar_enabled = if cfg!(target_os = "windows") {
             false
         } else {
-            config.agent_sidebar_enabled
+            config.ai_features_enabled && config.agent_sidebar_enabled
         };
         self.agent_sidebar_width = agents::clamp_agent_sidebar_width(config.agent_sidebar_width);
-        if !self.agent_sidebar_enabled {
+        if !self.ai_features_enabled {
+            self.reset_agent_workspace_runtime_state();
+        } else if ai_features_enabled_changed {
+            self.restore_persisted_agent_workspace();
+        } else if !self.agent_sidebar_enabled {
             self.agent_sidebar_open = false;
             self.agent_git_panel = agents::AgentGitPanelState::default();
             self.agent_git_panel_input_mode = None;
@@ -3469,6 +3482,7 @@ impl TerminalView {
         }
 
         if self.is_command_palette_open() {
+            self.reset_agent_command_palette_mode_if_disabled();
             self.refresh_command_palette_matches(true, cx);
         }
 

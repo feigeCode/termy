@@ -6,6 +6,8 @@ use gpui::{Rgba, UniformListScrollHandle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use termy_terminal_ui::TmuxSocketTarget;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum CommandPaletteMode {
@@ -78,13 +80,8 @@ impl AiAgentPreset {
     }
 
     pub(in super::super) fn is_installed(self) -> bool {
-        std::process::Command::new("which")
-            .arg(self.launch_command())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .env("PATH", resolve_user_path())
-            .status()
-            .is_ok_and(|s| s.success())
+        let path = resolve_user_path();
+        command_exists_in_path(self.launch_command(), path.as_str())
     }
 
     pub(in super::super) fn fallback_label(self) -> &'static str {
@@ -797,6 +794,12 @@ pub(super) fn command_palette_next_scroll_y(
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`). This function runs the user's login
 /// shell to get their real PATH including `~/.local/bin`, `~/.cargo/bin`,
 /// nvm paths, homebrew, etc.
+pub(super) fn prewarm_user_path_resolution() {
+    std::thread::spawn(|| {
+        let _ = resolve_user_path();
+    });
+}
+
 fn resolve_user_path() -> String {
     use std::sync::OnceLock;
     static CACHED: OnceLock<String> = OnceLock::new();
@@ -824,12 +827,73 @@ fn resolve_user_path_from_shell() -> Option<String> {
     if path.is_empty() { None } else { Some(path) }
 }
 
+fn command_exists_in_path(command: &str, path_env: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+
+    std::env::split_paths(path_env)
+        .filter(|entry| !entry.as_os_str().is_empty())
+        .any(|entry| command_exists_in_dir(&entry, command))
+}
+
+fn command_exists_in_dir(dir: &std::path::Path, command: &str) -> bool {
+    let candidate = dir.join(command);
+    candidate_is_executable(&candidate)
+}
+
+fn candidate_is_executable(candidate: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(candidate) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn command_item(title: &str, keywords: &str, action: CommandAction) -> CommandPaletteItem {
         CommandPaletteItem::command_with_state(title, keywords, action, true, None)
+    }
+
+    #[test]
+    fn command_exists_in_path_finds_executable_file() {
+        let dir = tempdir().expect("tempdir");
+        let executable_path = dir.path().join("codex");
+        std::fs::write(&executable_path, "#!/bin/sh\n").expect("write executable");
+        #[cfg(unix)]
+        std::fs::set_permissions(&executable_path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod executable");
+
+        let path = std::env::join_paths([dir.path()]).expect("join PATH");
+        assert!(command_exists_in_path("codex", path.to_string_lossy().as_ref()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_exists_in_path_rejects_non_executable_file() {
+        let dir = tempdir().expect("tempdir");
+        let file_path = dir.path().join("codex");
+        std::fs::write(&file_path, "#!/bin/sh\n").expect("write file");
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod file");
+
+        let path = std::env::join_paths([dir.path()]).expect("join PATH");
+        assert!(!command_exists_in_path("codex", path.to_string_lossy().as_ref()));
     }
 
     #[test]

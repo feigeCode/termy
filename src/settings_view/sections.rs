@@ -598,6 +598,7 @@ impl SettingsWindow {
         let show_switch_hints = self.config.tab_switch_modifier_hints;
         let vertical_tabs = self.config.vertical_tabs;
         let vertical_tabs_minimized = self.config.vertical_tabs_minimized;
+        let ai_features_enabled = self.config.ai_features_enabled;
         let agent_sidebar_enabled = self.config.agent_sidebar_enabled;
         let auto_hide_tabbar = self.config.auto_hide_tabbar;
         let close_visibility_meta = Self::setting_metadata_or_fallback("tab_close_visibility");
@@ -656,13 +657,23 @@ impl SettingsWindow {
 
         if !cfg!(target_os = "windows") {
             rows.push(self.render_root_bool_setting_row(
-                "agent_sidebar_enabled",
-                "agent_sidebar_enabled-toggle",
-                RootSettingId::AgentSidebarEnabled,
-                agent_sidebar_enabled,
+                "ai_features_enabled",
+                "ai_features_enabled-toggle",
+                RootSettingId::AiFeaturesEnabled,
+                ai_features_enabled,
                 "Saved",
                 cx,
             ));
+            if ai_features_enabled {
+                rows.push(self.render_root_bool_setting_row(
+                    "agent_sidebar_enabled",
+                    "agent_sidebar_enabled-toggle",
+                    RootSettingId::AgentSidebarEnabled,
+                    agent_sidebar_enabled,
+                    "Saved",
+                    cx,
+                ));
+            }
         }
 
         rows.push(self.render_root_bool_setting_row(

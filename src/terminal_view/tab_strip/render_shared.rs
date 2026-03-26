@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_tab_bar_visibility_hides_follow_config_while_agent_sidebar_is_enabled() {
+    fn effective_tab_bar_visibility_hides_only_while_agent_sidebar_is_visible() {
         assert_eq!(
             TerminalView::effective_tab_bar_visibility_for_state(
                 TabBarVisibility::FollowConfig,
@@ -68,6 +68,13 @@ mod tests {
                 false
             ),
             TabBarVisibility::FollowConfig
+        );
+        assert_eq!(
+            TerminalView::effective_tab_bar_visibility_for_state(
+                TabBarVisibility::ForceVisible,
+                false
+            ),
+            TabBarVisibility::ForceVisible
         );
         assert_eq!(
             TerminalView::effective_tab_bar_visibility_for_state(
@@ -200,9 +207,9 @@ impl TerminalView {
 
     pub(crate) fn effective_tab_bar_visibility_for_state(
         visibility: TabBarVisibility,
-        agent_sidebar_enabled: bool,
+        agent_sidebar_visible: bool,
     ) -> TabBarVisibility {
-        if agent_sidebar_enabled {
+        if agent_sidebar_visible {
             TabBarVisibility::ForceHidden
         } else {
             visibility
@@ -212,7 +219,7 @@ impl TerminalView {
     pub(crate) fn effective_tab_bar_visibility(&self) -> TabBarVisibility {
         Self::effective_tab_bar_visibility_for_state(
             self.tab_bar_visibility,
-            self.agent_sidebar_enabled,
+            self.should_render_agent_sidebar(),
         )
     }
 

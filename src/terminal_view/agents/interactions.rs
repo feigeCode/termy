@@ -140,6 +140,11 @@ impl TerminalView {
         project_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if !self.ai_features_enabled {
+            termy_toast::info("AI features are disabled in config.txt");
+            self.notify_overlay(cx);
+            return;
+        }
         self.command_palette.set_agent_launch_project_id(project_id);
         self.open_command_palette_in_mode(command_palette::CommandPaletteMode::Agents, cx);
     }

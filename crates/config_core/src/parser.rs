@@ -456,6 +456,13 @@ impl AppConfig {
                         config.vertical_tabs_minimized = parsed;
                     }
                 }
+                RootSettingId::AiFeaturesEnabled => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.ai_features_enabled = parsed;
+                    }
+                }
                 RootSettingId::AgentSidebarEnabled => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)

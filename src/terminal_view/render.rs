@@ -1677,7 +1677,7 @@ impl TerminalView {
         )
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     fn clamped_context_menu_origin(
         &self,
         anchor: gpui::Point<Pixels>,
@@ -1701,13 +1701,13 @@ impl TerminalView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             let _ = cx;
             return None;
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         {
             let state = self.terminal_context_menu.clone()?;
             let overlay_style = self.overlay_style();
@@ -1896,13 +1896,13 @@ impl TerminalView {
     }
 
     fn render_tab_context_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             let _ = cx;
             return None;
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         {
             let state = self.tab_context_menu.clone()?;
             let overlay_style = self.overlay_style();

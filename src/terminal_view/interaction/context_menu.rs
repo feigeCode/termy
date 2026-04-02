@@ -134,7 +134,7 @@ impl TerminalView {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     fn schedule_native_terminal_context_menu(
         &mut self,
         buffer_position_label: Option<String>,
@@ -165,7 +165,7 @@ impl TerminalView {
         .detach();
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     fn schedule_native_tab_context_menu(&mut self, pinned: bool, cx: &mut Context<Self>) {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let action =
@@ -198,18 +198,18 @@ impl TerminalView {
             can_copy,
             can_paste,
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         let state_changed = self.terminal_context_menu.as_ref() != Some(&state);
         self.terminal_context_menu = Some(state);
 
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         {
             if state_changed {
                 self.notify_overlay(cx);
             }
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             let _ = position;
             let buffer_position_label = buffer_position.map(Self::format_terminal_buffer_position);
@@ -239,18 +239,18 @@ impl TerminalView {
             tab_id,
             pinned,
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         let state_changed = self.tab_context_menu.as_ref() != Some(&state);
         self.tab_context_menu = Some(state);
 
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         {
             if state_changed {
                 self.notify_overlay(cx);
             }
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             self.schedule_native_tab_context_menu(pinned, cx);
         }

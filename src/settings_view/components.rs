@@ -1011,6 +1011,9 @@ impl SettingsWindow {
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                    if view.background_opacity_drag_state.is_none() {
+                        return;
+                    }
                     cx.stop_propagation();
                     match view.finish_background_opacity_drag() {
                         Ok(true) => termy_toast::success("Saved"),

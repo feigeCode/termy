@@ -3,6 +3,9 @@ name = "termy_cli"
 version = "0.1.72"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "termy-cli"
 path = "src/main.rs"

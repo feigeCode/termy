@@ -20,6 +20,41 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(macos_sdk_26)',
+  'cfg(feature, values("cargo-clippy"))',
+] }
+
+[workspace.lints.clippy]
+# ── Correctness & performance ────────────────────────────────────
+redundant_clone              = "warn"
+inefficient_to_string        = "warn"
+large_types_passed_by_value  = "warn"
+unnecessary_wraps            = "warn"
+unnested_or_patterns         = "warn"
+manual_let_else              = "warn"
+semicolon_if_nothing_returned = "warn"
+
+# ── Code quality ─────────────────────────────────────────────────
+cloned_instead_of_copied           = "warn"
+flat_map_option                    = "warn"
+implicit_clone                     = "warn"
+inconsistent_struct_constructor    = "warn"
+macro_use_imports                  = "warn"
+map_unwrap_or                      = "warn"
+needless_continue                  = "warn"
+trivially_copy_pass_by_ref         = "warn"
+uninlined_format_args              = "warn"
+explicit_iter_loop                 = "warn"
+ref_as_ptr                         = "warn"
+single_match_else                  = "warn"
+
+# ── Safety nets ──────────────────────────────────────────────────
+dbg_macro    = "warn"
+todo         = "warn"
+unimplemented = "warn"
+
 [package]
 name = "termy"
 version = "0.1.72"
@@ -32,11 +67,8 @@ short_description = "Minimal GPUI-powered terminal"
 category = "Developer Tool"
 icon = ["assets/termy.icns"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-  'cfg(macos_sdk_26)',
-  'cfg(feature, values("cargo-clippy"))',
-] }
+[lints]
+workspace = true
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "83de8a25e0ef71a8d762a148459bc863adaeb7e3", package = "gpui" }

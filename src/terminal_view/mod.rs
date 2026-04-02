@@ -752,6 +752,30 @@ struct TerminalPane {
     /// Tracks the previous alternate-screen state so that transitions can be
     /// detected during `sync_terminal_size` and a SIGWINCH nudge sent.
     last_alternate_screen: Cell<bool>,
+    /// Pre-computed element IDs to avoid per-frame `format!()` allocations.
+    cached_element_ids: PaneCachedElementIds,
+}
+
+/// Pre-computed GPUI element IDs for a terminal pane, avoiding `format!()`
+/// string allocations on every render frame.
+struct PaneCachedElementIds {
+    pane: SharedString,
+    resize_handle_right: SharedString,
+    resize_handle_bottom: SharedString,
+    focus_accent: SharedString,
+    degraded_accent: SharedString,
+}
+
+impl PaneCachedElementIds {
+    fn new(id: &str) -> Self {
+        Self {
+            pane: SharedString::from(format!("pane-{}", id)),
+            resize_handle_right: SharedString::from(format!("pane-resize-handle-right-{}", id)),
+            resize_handle_bottom: SharedString::from(format!("pane-resize-handle-bottom-{}", id)),
+            focus_accent: SharedString::from(format!("pane-focus-accent-{}", id)),
+            degraded_accent: SharedString::from(format!("pane-degraded-accent-{}", id)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,6 +827,7 @@ impl TerminalPane {
         height: u16,
         terminal: Terminal,
     ) -> Self {
+        let cached_element_ids = PaneCachedElementIds::new(&id);
         Self {
             id,
             left,
@@ -814,6 +839,7 @@ impl TerminalPane {
             terminal,
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids,
         }
     }
 }
@@ -2892,12 +2918,17 @@ impl TerminalView {
         }
 
         // Toggle cursor visibility for blink in both terminal and inline inputs.
+        // Skip the notification when the blink has no visible effect (blink disabled
+        // or command palette is covering the terminal cursor).
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 smol::Timer::after(Duration::from_millis(CURSOR_BLINK_INTERVAL_MS)).await;
                 let result = cx.update(|cx| {
                     this.update(cx, |view, cx| {
-                        if view.tick_cursor_blink() {
+                        if view.tick_cursor_blink()
+                            && !view.is_command_palette_open()
+                            && view.renaming_tab.is_none()
+                        {
                             cx.notify();
                         }
                     })

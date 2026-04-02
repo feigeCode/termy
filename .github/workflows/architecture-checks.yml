@@ -9,6 +9,23 @@ permissions:
   contents: read
 
 jobs:
+  clippy:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   boundaries:
     runs-on: ubuntu-latest
     steps:

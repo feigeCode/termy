@@ -1059,6 +1059,7 @@ mod tests {
                 terminal: left_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%left"),
             },
             TerminalPane {
                 id: "%right".to_string(),
@@ -1071,6 +1072,7 @@ mod tests {
                 terminal: right_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%right"),
             },
         ];
 
@@ -1138,6 +1140,7 @@ mod tests {
                 terminal: left_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%left"),
             },
             TerminalPane {
                 id: "%right".to_string(),
@@ -1150,6 +1153,7 @@ mod tests {
                 terminal: right_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%right"),
             },
         ];
 
@@ -1243,6 +1247,7 @@ mod tests {
                 terminal: left_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%left"),
             },
             TerminalPane {
                 id: "%right".to_string(),
@@ -1255,6 +1260,7 @@ mod tests {
                 terminal: right_terminal,
                 render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
                 last_alternate_screen: std::cell::Cell::new(false),
+                cached_element_ids: PaneCachedElementIds::new("%right"),
             },
         ];
 

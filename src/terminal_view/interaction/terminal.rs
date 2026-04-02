@@ -417,6 +417,7 @@ mod tests {
             terminal: test_terminal(),
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids: PaneCachedElementIds::new(id),
         }
     }
 

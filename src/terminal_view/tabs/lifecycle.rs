@@ -946,6 +946,7 @@ impl TerminalView {
             active_pane.height = current_size.3;
         }
 
+        let cached_element_ids = PaneCachedElementIds::new(&pane_id);
         let split_pane = TerminalPane {
             id: pane_id.clone(),
             left: split_size.0,
@@ -957,6 +958,7 @@ impl TerminalView {
             terminal,
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids,
         };
 
         tab.panes.insert(active_index + 1, split_pane);
@@ -1401,6 +1403,7 @@ mod tests {
             terminal: test_terminal(),
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids: PaneCachedElementIds::new(id),
         }
     }
 

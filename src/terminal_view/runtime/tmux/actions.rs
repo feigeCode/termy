@@ -558,7 +558,8 @@ mod tests {
         should_refresh_search_after_tmux_pane_focus,
     };
     use crate::terminal_view::{
-        Terminal, TerminalOptions, TerminalPane, TerminalPaneRenderCache, TerminalSize, TerminalTab,
+        PaneCachedElementIds, Terminal, TerminalOptions, TerminalPane, TerminalPaneRenderCache,
+        TerminalSize, TerminalTab,
     };
     use std::cell::{Cell, RefCell};
 
@@ -581,6 +582,7 @@ mod tests {
             terminal: Terminal::new_tmux(TerminalSize::default(), TerminalOptions::default()),
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids: PaneCachedElementIds::new("%1"),
         };
         let pane_two = TerminalPane {
             id: "%2".to_string(),
@@ -593,6 +595,7 @@ mod tests {
             terminal: Terminal::new_tmux(TerminalSize::default(), TerminalOptions::default()),
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids: PaneCachedElementIds::new("%2"),
         };
         let mut tab = TerminalTab {
             id: 1,

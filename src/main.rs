@@ -374,6 +374,20 @@ fn main() {
     let (deeplink_tx, deeplink_rx) = flume::unbounded::<Vec<String>>();
     let application = Application::new();
 
+    // On Windows, URL scheme launches pass the URL as a command-line argument
+    // (argv[1]) instead of going through Application::on_open_urls(). Enqueue
+    // any termy:// argument so the deeplink listener processes it after startup.
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(url) = std::env::args().nth(1) {
+            if url.starts_with("termy://") {
+                if let Err(error) = deeplink_tx.send(vec![url]) {
+                    log::error!("Failed to enqueue Windows argv deeplink: {error}");
+                }
+            }
+        }
+    }
+
     application.on_reopen(|cx| {
         let _ = reopen_if_no_windows(cx, reopen_main_window);
     });

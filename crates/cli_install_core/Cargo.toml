@@ -3,6 +3,9 @@ name = "termy_cli_install_core"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 dirs = "6.0"
 

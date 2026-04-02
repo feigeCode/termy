@@ -148,6 +148,8 @@ fn finalized_cache_update_strategy(
 thread_local! {
     static DIRTY_SPAN_RANGES: std::cell::RefCell<Vec<(usize, usize, usize)>> =
         std::cell::RefCell::new(Vec::with_capacity(128));
+    static PATCH_UPDATES: std::cell::RefCell<Vec<(usize, usize, CellRenderInfo)>> =
+        std::cell::RefCell::new(Vec::with_capacity(64));
 }
 
 fn paint_damage_from_dirty_spans(
@@ -704,55 +706,71 @@ impl TerminalView {
             return (0, true);
         }
 
-        let mut updates = Vec::new();
-        let _ = terminal.with_grid(|grid| {
-            let Some(screen_lines) = i32::try_from(grid.screen_lines()).ok() else {
-                return;
-            };
-            let Some(total_lines) = i32::try_from(grid.total_lines()).ok() else {
-                return;
-            };
-            let min_line = -(total_lines - screen_lines);
-            let max_line = screen_lines - 1;
-
-            for span in spans {
-                if span.row >= rows || cols == 0 {
-                    continue;
-                }
-
-                let Some(term_line) = term_line_from_viewport_row(span.row, display_offset) else {
-                    continue;
+        // Reuse a thread-local scratch buffer to avoid per-call heap allocations.
+        let result = PATCH_UPDATES.with(|buf| {
+            let mut updates = buf.borrow_mut();
+            updates.clear();
+            let _ = terminal.with_grid(|grid| {
+                let Some(screen_lines) = i32::try_from(grid.screen_lines()).ok() else {
+                    return;
                 };
-                if term_line < min_line || term_line > max_line {
-                    continue;
-                }
+                let Some(total_lines) = i32::try_from(grid.total_lines()).ok() else {
+                    return;
+                };
+                let min_line = -(total_lines - screen_lines);
+                let max_line = screen_lines - 1;
 
-                let row = span.row;
-                let line_ref = &grid[Line(term_line)];
-                let left_col = span.left_col.min(cols.saturating_sub(1));
-                let right_col = span.right_col.min(cols.saturating_sub(1));
-                if left_col > right_col {
-                    continue;
-                }
+                for span in spans {
+                    if span.row >= rows || cols == 0 {
+                        continue;
+                    }
 
-                for col in left_col..=right_col {
-                    let cell_content = &line_ref[Column(col)];
-                    updates.push((
-                        row,
-                        col,
-                        self.build_cell_render_info(col, row, term_line, cell_content, context),
-                    ));
+                    let Some(term_line) = term_line_from_viewport_row(span.row, display_offset)
+                    else {
+                        continue;
+                    };
+                    if term_line < min_line || term_line > max_line {
+                        continue;
+                    }
+
+                    let row = span.row;
+                    let line_ref = &grid[Line(term_line)];
+                    let left_col = span.left_col.min(cols.saturating_sub(1));
+                    let right_col = span.right_col.min(cols.saturating_sub(1));
+                    if left_col > right_col {
+                        continue;
+                    }
+
+                    for col in left_col..=right_col {
+                        let cell_content = &line_ref[Column(col)];
+                        updates.push((
+                            row,
+                            col,
+                            self.build_cell_render_info(
+                                col, row, term_line, cell_content, context,
+                            ),
+                        ));
+                    }
                 }
+            });
+
+            if updates.is_empty() {
+                return None;
             }
+
+            let patched_cell_count = updates.len();
+            // Drain updates into merge to avoid holding the borrow across the return.
+            let owned_updates: Vec<_> = updates.drain(..).collect();
+            Some((patched_cell_count, owned_updates))
         });
 
-        if updates.is_empty() {
-            return (0, false);
+        match result {
+            Some((patched_cell_count, updates)) => {
+                *cells = merge_pane_render_rows(cells, rows, cols, updates);
+                (patched_cell_count, false)
+            }
+            None => (0, false),
         }
-
-        let patched_cell_count = updates.len();
-        *cells = merge_pane_render_rows(cells, rows, cols, updates);
-        (patched_cell_count, false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2445,10 +2463,7 @@ impl Render for TerminalView {
                     );
                     pane_resize_handles.push(
                         div()
-                            .id(SharedString::from(format!(
-                                "pane-resize-handle-right-{}",
-                                pane.id
-                            )))
+                            .id(pane.cached_element_ids.resize_handle_right.clone())
                             .absolute()
                             .left(px(handle_left))
                             .top(px(pane_frame_top))
@@ -2491,10 +2506,7 @@ impl Render for TerminalView {
                     );
                     pane_resize_handles.push(
                         div()
-                            .id(SharedString::from(format!(
-                                "pane-resize-handle-bottom-{}",
-                                pane.id
-                            )))
+                            .id(pane.cached_element_ids.resize_handle_bottom.clone())
                             .absolute()
                             .left(px(pane_frame_left))
                             .top(px(handle_top))
@@ -2520,7 +2532,7 @@ impl Render for TerminalView {
                 let link_hovered = is_active_pane && self.hovered_link.is_some();
                 pane_layers.push(
                     div()
-                        .id(SharedString::from(format!("pane-{}", pane.id)))
+                        .id(pane.cached_element_ids.pane.clone())
                         .absolute()
                         .left(px(pane_left))
                         .top(px(pane_top))
@@ -2537,7 +2549,7 @@ impl Render for TerminalView {
                     let accent_hsla: gpui::Hsla = accent.into();
                     pane_focus_accents.push(
                         div()
-                            .id(SharedString::from(format!("pane-focus-accent-{}", pane.id)))
+                            .id(pane.cached_element_ids.focus_accent.clone())
                             .absolute()
                             .left(px(pane_frame_left))
                             .top(px(pane_frame_top))
@@ -2560,10 +2572,7 @@ impl Render for TerminalView {
                     };
                     pane_focus_accents.push(
                         div()
-                            .id(SharedString::from(format!(
-                                "pane-degraded-accent-{}",
-                                pane.id
-                            )))
+                            .id(pane.cached_element_ids.degraded_accent.clone())
                             .absolute()
                             .left(px(pane_frame_left))
                             .top(px(pane_frame_top))
@@ -3084,10 +3093,11 @@ mod tests {
                     ..TerminalOptions::default()
                 },
             ),
-            render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
-            last_alternate_screen: std::cell::Cell::new(false),
-        }
+        render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
+        last_alternate_screen: std::cell::Cell::new(false),
+        cached_element_ids: PaneCachedElementIds::new(id),
     }
+}
 
     fn test_render_rows(rows: Vec<Vec<CellRenderInfo>>) -> PaneRenderCells {
         Arc::new(rows.into_iter().map(Arc::new).collect())

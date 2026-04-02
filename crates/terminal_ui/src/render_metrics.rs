@@ -1,6 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerminalUiRenderMetricsSnapshot {
@@ -62,9 +62,7 @@ static SPAN_TEXT_SHAPING_US: AtomicU64 = AtomicU64::new(0);
 static SPAN_GRID_PAINT_US: AtomicU64 = AtomicU64::new(0);
 
 fn increment_counter(counter: &AtomicU64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_add(1))
-    });
+    counter.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn increment_grid_paint_count() {
@@ -88,9 +86,7 @@ pub(crate) fn increment_runtime_wakeup_count() {
 }
 
 fn add_to_counter(counter: &AtomicU64, micros: u64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_add(micros))
-    });
+    counter.fetch_add(micros, Ordering::Relaxed);
 }
 
 pub fn add_span_damage_compute_us(micros: u64) {

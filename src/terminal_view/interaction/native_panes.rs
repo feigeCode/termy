@@ -157,12 +157,10 @@ impl TerminalView {
             }
             max_positions[boundary_index] = allowed;
         }
-        debug_assert!(
-            min_positions
-                .iter()
-                .zip(max_positions.iter())
-                .all(|(min_position, max_position)| min_position <= max_position)
-        );
+        debug_assert!(min_positions
+            .iter()
+            .zip(max_positions.iter())
+            .all(|(min_position, max_position)| min_position <= max_position));
 
         let mut adjusted = vec![0u16; boundaries.len()];
         adjusted[0] = 0;
@@ -299,6 +297,7 @@ mod tests {
             terminal: test_terminal(),
             render_cache: RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: Cell::new(false),
+            cached_element_ids: PaneCachedElementIds::new(id),
         }
     }
 

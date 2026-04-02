@@ -318,7 +318,9 @@ impl BoxDrawSegments {
 struct TextBatch {
     start_col: usize,
     row: usize,
-    text: String,
+    /// Text content. Stored as `SharedString` so that clones during text
+    /// shaping are cheap refcount bumps instead of heap copies.
+    text: SharedString,
     bold: bool,
     fg: Hsla,
     underline: Option<UnderlineStyle>,
@@ -424,6 +426,9 @@ struct TerminalGridPaintCache {
     /// Cached Font objects, rebuilt only when style_key changes.
     cached_font_normal: Option<Font>,
     cached_font_bold: Option<Font>,
+    /// Reusable scratch buffers for building row ops, avoiding per-row heap allocations.
+    scratch_bg_spans: Vec<BackgroundSpan>,
+    scratch_draw_ops: Vec<TextDrawOp>,
 }
 
 impl TerminalGridPaintCache {
@@ -457,7 +462,19 @@ struct TextBatchKey {
     fg: Hsla,
 }
 
-impl TextBatch {
+/// Temporary mutable builder for a text batch. Collects chars into a String,
+/// then converts to the immutable `TextBatch` (with `SharedString`) on finalize.
+struct TextBatchBuilder {
+    start_col: usize,
+    row: usize,
+    text: String,
+    bold: bool,
+    fg: Hsla,
+    underline: Option<UnderlineStyle>,
+    cell_len: usize,
+}
+
+impl TextBatchBuilder {
     fn new(
         start_col: usize,
         row: usize,
@@ -495,6 +512,18 @@ impl TextBatch {
     fn append_char(&mut self, c: char) {
         self.text.push(c);
         self.cell_len += 1;
+    }
+
+    fn finalize(self) -> TextBatch {
+        TextBatch {
+            start_col: self.start_col,
+            row: self.row,
+            text: SharedString::from(self.text),
+            bold: self.bold,
+            fg: self.fg,
+            underline: self.underline,
+            cell_len: self.cell_len,
+        }
     }
 }
 
@@ -1578,16 +1607,16 @@ impl TerminalGrid {
         }
     }
 
-    fn build_row_background_spans(
+    fn build_row_background_spans_into(
         &self,
         row_cells: &[CellRenderInfo],
         color_cache: &mut HashMap<[u32; 4], Option<Hsla>>,
-    ) -> Vec<BackgroundSpan> {
+        spans: &mut Vec<BackgroundSpan>,
+    ) {
+        spans.clear();
         if row_cells.is_empty() {
-            return Vec::new();
+            return;
         }
-
-        let mut spans = Vec::new();
         let mut current: Option<BackgroundSpan> = None;
 
         for cell in row_cells {
@@ -1638,31 +1667,30 @@ impl TerminalGrid {
         if let Some(span) = current {
             spans.push(span);
         }
-
-        spans
     }
 
-    fn collect_row_draw_ops(
+    fn collect_row_draw_ops_into(
         &self,
         row_cells: &[CellRenderInfo],
         cursor_fg: Hsla,
         highlight_fg: Hsla,
-    ) -> Vec<TextDrawOp> {
-        let mut ops = Vec::with_capacity(row_cells.len());
-        let mut current: Option<TextBatch> = None;
+        ops: &mut Vec<TextDrawOp>,
+    ) {
+        ops.clear();
+        let mut current: Option<TextBatchBuilder> = None;
         let cell_w: f32 = self.cell_size.width.into();
         let cell_h: f32 = self.cell_size.height.into();
         let font_sz: f32 = self.font_size.into();
 
         for cell in row_cells {
             if !Self::cell_is_drawable_text(cell) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
+                Self::push_pending_text_batch(&mut current, ops);
                 continue;
             }
 
             let fg = self.cell_fg_color(cell, cursor_fg, highlight_fg);
             if rounded_corner_char(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
+                Self::push_pending_text_batch(&mut current, ops);
                 ops.push(TextDrawOp::RoundedCorner(RoundedCornerDraw {
                     row: cell.row,
                     col: cell.col,
@@ -1673,7 +1701,7 @@ impl TerminalGrid {
             }
 
             if diagonal_char(cell.char) {
-                Self::push_pending_text_batch(&mut current, &mut ops);
+                Self::push_pending_text_batch(&mut current, ops);
                 ops.push(TextDrawOp::Diagonal(DiagonalDraw {
                     row: cell.row,
                     col: cell.col,
@@ -1686,7 +1714,7 @@ impl TerminalGrid {
             if let Some(geometry) = block_element_geometry(cell.char)
                 .or_else(|| box_draw_geometry_for_char(cell.char, cell_w, cell_h, font_sz))
             {
-                Self::push_pending_text_batch(&mut current, &mut ops);
+                Self::push_pending_text_batch(&mut current, ops);
                 ops.push(TextDrawOp::Block(BlockDraw {
                     row: cell.row,
                     col: cell.col,
@@ -1712,16 +1740,36 @@ impl TerminalGrid {
                 continue;
             }
 
-            Self::push_pending_text_batch(&mut current, &mut ops);
-            current = Some(TextBatch::new(
+            Self::push_pending_text_batch(&mut current, ops);
+            current = Some(TextBatchBuilder::new(
                 cell.col, cell.row, cell.char, key, underline,
             ));
         }
 
-        Self::push_pending_text_batch(&mut current, &mut ops);
-        ops
+        Self::push_pending_text_batch(&mut current, ops);
     }
 
+    fn rebuild_cached_row_ops_into(
+        &self,
+        row_cells: &[CellRenderInfo],
+        cursor_fg: Hsla,
+        highlight_fg: Hsla,
+        color_cache: &mut HashMap<[u32; 4], Option<Hsla>>,
+        scratch_bg: &mut Vec<BackgroundSpan>,
+        scratch_ops: &mut Vec<TextDrawOp>,
+    ) -> CachedRowPaintOps {
+        self.collect_row_draw_ops_into(row_cells, cursor_fg, highlight_fg, scratch_ops);
+        self.build_row_background_spans_into(row_cells, color_cache, scratch_bg);
+        let ops_len = scratch_ops.len();
+        CachedRowPaintOps {
+            background_spans: std::mem::take(scratch_bg),
+            draw_ops: std::mem::take(scratch_ops),
+            shaped_lines: vec![None; ops_len],
+        }
+    }
+
+    /// Convenience wrapper for tests — allocates fresh scratch buffers per call.
+    #[cfg(test)]
     fn rebuild_cached_row_ops(
         &self,
         row_cells: &[CellRenderInfo],
@@ -1729,12 +1777,16 @@ impl TerminalGrid {
         highlight_fg: Hsla,
         color_cache: &mut HashMap<[u32; 4], Option<Hsla>>,
     ) -> CachedRowPaintOps {
-        let draw_ops = self.collect_row_draw_ops(row_cells, cursor_fg, highlight_fg);
-        CachedRowPaintOps {
-            background_spans: self.build_row_background_spans(row_cells, color_cache),
-            shaped_lines: vec![None; draw_ops.len()],
-            draw_ops,
-        }
+        let mut scratch_bg = Vec::new();
+        let mut scratch_ops = Vec::new();
+        self.rebuild_cached_row_ops_into(
+            row_cells,
+            cursor_fg,
+            highlight_fg,
+            color_cache,
+            &mut scratch_bg,
+            &mut scratch_ops,
+        )
     }
 
     fn clear_bounds(&self, bounds: Bounds<Pixels>, window: &mut Window) {
@@ -1819,7 +1871,7 @@ impl TerminalGrid {
                         };
                         let t_shape = Instant::now();
                         row_ops.shaped_lines[index] = Some(window.text_system().shape_line(
-                            batch.text.clone().into(),
+                            batch.text.clone(),
                             self.font_size,
                             &[run],
                             Some(self.cell_size.width),
@@ -2005,7 +2057,20 @@ impl TerminalGrid {
         cursor_fg: Hsla,
         highlight_fg: Hsla,
     ) {
-        let previous_row_ops = (!style_changed).then(|| cache.row_ops.clone());
+        // Swap the previous row ops out instead of deep-cloning. This avoids
+        // copying every CachedRowPaintOps (with its Vecs of draw ops, background
+        // spans, and ShapedLine objects) on every paint pass. We replace with a
+        // correctly-sized default vec so rebuild_row can write into slots.
+        let previous_row_ops = if !style_changed && !cache.row_ops.is_empty() {
+            let replacement = vec![CachedRowPaintOps::default(); self.rows];
+            Some(std::mem::replace(&mut cache.row_ops, replacement))
+        } else {
+            None
+        };
+        // Take scratch buffers out of cache so the closure can borrow cache fields independently.
+        let mut scratch_bg = std::mem::take(&mut cache.scratch_bg_spans);
+        let mut scratch_ops = std::mem::take(&mut cache.scratch_draw_ops);
+
         // Build ops first using color_cache, then write to row_ops (field-split borrow).
         let mut rebuild_row = |row: usize| {
             if row >= self.rows {
@@ -2015,12 +2080,15 @@ impl TerminalGrid {
             let dirty_col_range = cache.dirty_col_ranges.get(row).copied().flatten();
 
             // Build the next ops, using color_cache (separate field from row_ops).
+            // Scratch buffers are reused across rows to avoid per-row heap allocations.
             let mut next_row_ops = if let Some(row_cells) = self.cells.get(row) {
-                self.rebuild_cached_row_ops(
+                self.rebuild_cached_row_ops_into(
                     row_cells.as_slice(),
                     cursor_fg,
                     highlight_fg,
                     &mut cache.color_cache,
+                    &mut scratch_bg,
+                    &mut scratch_ops,
                 )
             } else {
                 // Row is no longer present — clear stale ops.
@@ -2082,6 +2150,10 @@ impl TerminalGrid {
             }
         }
         add_span_row_ops_rebuild_us(t0.elapsed().as_micros() as u64);
+
+        // Return scratch buffers to cache for reuse next frame.
+        cache.scratch_bg_spans = scratch_bg;
+        cache.scratch_draw_ops = scratch_ops;
     }
 
     fn paint_with_row_cache(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
@@ -2196,17 +2268,22 @@ impl TerminalGrid {
             })
     }
 
-    fn push_pending_text_batch(current: &mut Option<TextBatch>, ops: &mut Vec<TextDrawOp>) {
-        if let Some(batch) = current.take() {
-            ops.push(TextDrawOp::Batch(batch));
+    fn push_pending_text_batch(
+        current: &mut Option<TextBatchBuilder>,
+        ops: &mut Vec<TextDrawOp>,
+    ) {
+        if let Some(builder) = current.take() {
+            ops.push(TextDrawOp::Batch(builder.finalize()));
         }
     }
 
     #[cfg(test)]
     fn collect_draw_ops(&self, cursor_fg: Hsla, highlight_fg: Hsla) -> Vec<TextDrawOp> {
         let mut ops = Vec::with_capacity(self.cell_count());
+        let mut scratch = Vec::new();
         for row_cells in self.cells.iter() {
-            ops.extend(self.collect_row_draw_ops(row_cells.as_ref(), cursor_fg, highlight_fg));
+            self.collect_row_draw_ops_into(row_cells.as_ref(), cursor_fg, highlight_fg, &mut scratch);
+            ops.extend(scratch.drain(..));
         }
         ops
     }
@@ -3077,7 +3154,8 @@ mod tests {
         fifth.bg = Hsla::transparent_black();
 
         let grid = test_grid(vec![first, second, third, fourth, fifth], None);
-        let spans = grid.build_row_background_spans(grid.cells[0].as_slice(), &mut HashMap::new());
+        let mut spans = Vec::new();
+        grid.build_row_background_spans_into(grid.cells[0].as_slice(), &mut HashMap::new(), &mut spans);
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].start_col, 0);
         assert_eq!(spans[0].end_col_exclusive, 2);
@@ -3097,7 +3175,8 @@ mod tests {
 
         let mut grid = test_grid(vec![default_bg_cell, ansi_bg_cell], None);
         grid.terminal_surface_bg = test_color(0.2, 0.2, 0.2);
-        let spans = grid.build_row_background_spans(grid.cells[0].as_slice(), &mut HashMap::new());
+        let mut spans = Vec::new();
+        grid.build_row_background_spans_into(grid.cells[0].as_slice(), &mut HashMap::new(), &mut spans);
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start_col, 1);
@@ -3113,7 +3192,8 @@ mod tests {
 
         let mut grid = test_grid(vec![default_bg_cell], None);
         grid.terminal_surface_bg = test_color(0.1, 0.1, 0.1);
-        let spans = grid.build_row_background_spans(grid.cells[0].as_slice(), &mut HashMap::new());
+        let mut spans = Vec::new();
+        grid.build_row_background_spans_into(grid.cells[0].as_slice(), &mut HashMap::new(), &mut spans);
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start_col, 0);
@@ -3127,7 +3207,8 @@ mod tests {
         half_block.bg = test_color(0.8, 0.4, 0.2);
 
         let grid = test_grid(vec![half_block], None);
-        let spans = grid.build_row_background_spans(grid.cells[0].as_slice(), &mut HashMap::new());
+        let mut spans = Vec::new();
+        grid.build_row_background_spans_into(grid.cells[0].as_slice(), &mut HashMap::new(), &mut spans);
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start_col, 0);

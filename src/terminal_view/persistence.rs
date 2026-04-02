@@ -512,8 +512,10 @@ impl TerminalView {
                 {
                     terminal.hydrate_output(buffer.as_bytes());
                 }
+                let pane_id = format!("%native-restored-{tab_id}-{}", pane_index + 1);
+                let cached_element_ids = PaneCachedElementIds::new(&pane_id);
                 tab.panes.push(TerminalPane {
-                    id: format!("%native-restored-{tab_id}-{}", pane_index + 1),
+                    id: pane_id,
                     left: pane.left,
                     top: pane.top,
                     width: pane.width.max(1),
@@ -523,6 +525,7 @@ impl TerminalView {
                     terminal,
                     render_cache: RefCell::new(TerminalPaneRenderCache::default()),
                     last_alternate_screen: Cell::new(false),
+                    cached_element_ids,
                 });
             }
 

@@ -80,6 +80,7 @@ fn tmux_hydration_warning_message(failures: &[String]) -> Option<String> {
 
 impl TerminalPane {
     fn from_tmux_state(state: &TmuxPaneState, terminal: Terminal, degraded: bool) -> Self {
+        let cached_element_ids = PaneCachedElementIds::new(&state.id);
         Self {
             id: state.id.clone(),
             left: state.left,
@@ -91,6 +92,7 @@ impl TerminalPane {
             terminal,
             render_cache: std::cell::RefCell::new(TerminalPaneRenderCache::default()),
             last_alternate_screen: std::cell::Cell::new(false),
+            cached_element_ids,
         }
     }
 }

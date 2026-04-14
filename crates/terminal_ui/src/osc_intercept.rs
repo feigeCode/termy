@@ -54,6 +54,9 @@ pub struct OscInterceptor {
     state: ParseState,
 }
 
+/// Maximum size for the OSC buffer to prevent unbounded memory growth from malformed input.
+const MAX_OSC_BUFFER: usize = 64 * 1024; // 64 KB
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ParseState {
     /// Normal passthrough mode
@@ -127,8 +130,13 @@ impl OscInterceptor {
                     } else if byte == 0x1B {
                         // ESC within OSC - might be ST (ESC \)
                         self.state = ParseState::OscEscape;
-                    } else {
+                    } else if self.buffer.len() < MAX_OSC_BUFFER {
                         self.buffer.push(byte);
+                    } else {
+                        // Buffer overflow - emit partial OSC and reset
+                        self.emit_osc_to_output(&mut output);
+                        self.buffer.clear();
+                        self.state = ParseState::Ground;
                     }
                 }
 
@@ -143,11 +151,16 @@ impl OscInterceptor {
                         }
                         self.buffer.clear();
                         self.state = ParseState::Ground;
-                    } else {
+                    } else if self.buffer.len() + 2 <= MAX_OSC_BUFFER {
                         // Not ST, add ESC to buffer and continue
                         self.buffer.push(0x1B);
                         self.buffer.push(byte);
                         self.state = ParseState::OscPayload;
+                    } else {
+                        // Buffer overflow - emit partial OSC and reset
+                        self.emit_osc_to_output(&mut output);
+                        self.buffer.clear();
+                        self.state = ParseState::Ground;
                     }
                 }
             }

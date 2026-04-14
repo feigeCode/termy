@@ -3859,8 +3859,8 @@ impl TerminalView {
                             }
                         }
                         // Working directory (OSC 7)
-                        TerminalEvent::WorkingDirectory(_path) => {
-                            // Future use: store for tab title, etc.
+                        TerminalEvent::WorkingDirectory(path) => {
+                            self.tabs[index].last_prompt_cwd = Some(path);
                         }
                     }
                 }

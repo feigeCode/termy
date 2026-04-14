@@ -46,6 +46,7 @@ impl CommandLifecycle {
     pub fn command_finished(&mut self, exit_code: Option<i32>) {
         self.last_exit_code = exit_code;
         self.phase = CommandPhase::Idle;
+        self.command_start = None;
     }
 
     /// Returns the duration since command started executing, if available

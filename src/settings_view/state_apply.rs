@@ -546,7 +546,7 @@ impl SettingsWindow {
                 if !parsed.is_finite() {
                     return Err("Minimum command duration must be finite".to_string());
                 }
-                let parsed = parsed.max(0.0);
+                let parsed = parsed.clamp(0.0, 3600.0);
                 self.config.notification_min_duration = parsed;
                 config::set_root_setting(
                     termy_config_core::RootSettingId::NotificationMinDuration,

@@ -22,9 +22,9 @@ use std::process::Command;
 use windows::Win32::Foundation::{HWND, POINT};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetForegroundWindow, IDYES,
-    MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_SEPARATOR, MF_STRING, MessageBoxW,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetForegroundWindow,
+    GetWindowThreadProcessId, IDYES, MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MessageBoxW, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
 };
 
 #[cfg(target_os = "windows")]
@@ -1267,10 +1267,14 @@ pub fn is_app_active() -> bool {
     #[cfg(target_os = "windows")]
     {
         // On Windows, check if our process owns the foreground window
-        // This is a simplification - in practice we'd check the window handle
         unsafe {
             let foreground = GetForegroundWindow();
-            !foreground.is_invalid()
+            if foreground.is_invalid() {
+                return false;
+            }
+            let mut foreground_pid: u32 = 0;
+            GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
+            foreground_pid == std::process::id()
         }
     }
 

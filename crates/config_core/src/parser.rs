@@ -754,7 +754,7 @@ impl AppConfig {
                         line_number,
                         key,
                         value,
-                        "a positive number of seconds",
+                        "a non-negative number of seconds",
                     ) {
                         config.notification_min_duration = parsed.max(0.0);
                     }

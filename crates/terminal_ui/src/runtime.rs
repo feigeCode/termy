@@ -914,7 +914,7 @@ impl NativeEventLoop {
             let mut state = NativeEventLoopState::default();
             let mut buf = [0u8; NATIVE_EVENT_LOOP_READ_BUFFER_SIZE];
             let poll_mode = PollMode::Level;
-            let mut interest = PollingEvent::readable(0);
+            let mut interest = PollingEvent::readable(NATIVE_EVENT_LOOP_READ_WRITE_TOKEN);
 
             if unsafe { self.pty.register(&self.poll, interest, poll_mode) }.is_err() {
                 return;

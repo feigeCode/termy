@@ -317,6 +317,7 @@ impl BoxDrawSegments {
 #[derive(Clone)]
 struct TextBatch {
     start_col: usize,
+    #[allow(dead_code)]
     row: usize,
     /// Text content. Stored as `SharedString` so that clones during text
     /// shaping are cheap refcount bumps instead of heap copies.

@@ -3,6 +3,7 @@ use gpui::{Keystroke, Modifiers};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalKeyboardMode {
+    application_cursor_keys: bool,
     disambiguate_escape_codes: bool,
     report_event_types: bool,
     report_alternate_keys: bool,
@@ -13,6 +14,7 @@ pub struct TerminalKeyboardMode {
 impl TerminalKeyboardMode {
     pub(crate) fn from_term_mode(mode: TermMode) -> Self {
         Self {
+            application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
             disambiguate_escape_codes: mode.contains(TermMode::DISAMBIGUATE_ESC_CODES),
             report_event_types: mode.contains(TermMode::REPORT_EVENT_TYPES),
             report_alternate_keys: mode.contains(TermMode::REPORT_ALTERNATE_KEYS),
@@ -62,7 +64,7 @@ pub fn keystroke_to_input(
     if !keyboard_mode.enhanced_reporting_active() {
         return match event_kind {
             TerminalKeyEventKind::Press | TerminalKeyEventKind::Repeat => {
-                basic_keystroke_to_input(keystroke, prompt_shortcuts_enabled, true)
+                basic_keystroke_to_input(keystroke, keyboard_mode, prompt_shortcuts_enabled, true)
             }
             TerminalKeyEventKind::Release => None,
         };
@@ -70,7 +72,7 @@ pub fn keystroke_to_input(
 
     enhanced_keystroke_to_input(keystroke, event_kind, keyboard_mode).or_else(|| match event_kind {
         TerminalKeyEventKind::Press | TerminalKeyEventKind::Repeat => {
-            basic_keystroke_to_input(keystroke, prompt_shortcuts_enabled, false)
+            basic_keystroke_to_input(keystroke, keyboard_mode, prompt_shortcuts_enabled, false)
         }
         TerminalKeyEventKind::Release => None,
     })
@@ -107,6 +109,7 @@ fn modifiers_are_empty(modifiers: Modifiers) -> bool {
 
 fn basic_keystroke_to_input(
     keystroke: &Keystroke,
+    keyboard_mode: TerminalKeyboardMode,
     prompt_shortcuts_enabled: bool,
     allow_prompt_shortcuts: bool,
 ) -> Option<Vec<u8>> {
@@ -143,12 +146,12 @@ fn basic_keystroke_to_input(
         "escape" => Some(vec![0x1b]),
         "backspace" => Some(vec![0x7f]),
         "delete" => Some(b"\x1b[3~".to_vec()),
-        "up" => Some(b"\x1b[A".to_vec()),
-        "down" => Some(b"\x1b[B".to_vec()),
-        "right" => Some(b"\x1b[C".to_vec()),
-        "left" => Some(b"\x1b[D".to_vec()),
-        "home" => Some(b"\x1b[H".to_vec()),
-        "end" => Some(b"\x1b[F".to_vec()),
+        "up" => Some(legacy_cursor_key_input('A', keyboard_mode, modifiers)),
+        "down" => Some(legacy_cursor_key_input('B', keyboard_mode, modifiers)),
+        "right" => Some(legacy_cursor_key_input('C', keyboard_mode, modifiers)),
+        "left" => Some(legacy_cursor_key_input('D', keyboard_mode, modifiers)),
+        "home" => Some(legacy_cursor_key_input('H', keyboard_mode, modifiers)),
+        "end" => Some(legacy_cursor_key_input('F', keyboard_mode, modifiers)),
         "pageup" => Some(b"\x1b[5~".to_vec()),
         "pagedown" => Some(b"\x1b[6~".to_vec()),
         "space" => Some(vec![b' ']),
@@ -193,6 +196,21 @@ fn basic_keystroke_to_input(
     }
 
     None
+}
+
+fn legacy_cursor_key_input(
+    suffix: char,
+    keyboard_mode: TerminalKeyboardMode,
+    modifiers: Modifiers,
+) -> Vec<u8> {
+    // Full-screen TUIs toggle DECCKM and expect SS3 cursor/home/end sequences
+    // only for unmodified keys; modified keys keep the existing legacy fallback.
+    let prefix = if modifiers_are_empty(modifiers) && keyboard_mode.application_cursor_keys {
+        "\x1bO"
+    } else {
+        "\x1b["
+    };
+    format!("{prefix}{suffix}").into_bytes()
 }
 
 fn modifier_or_control_sequence_base(
@@ -826,6 +844,13 @@ mod tests {
         }
     }
 
+    fn application_cursor_mode() -> TerminalKeyboardMode {
+        TerminalKeyboardMode {
+            application_cursor_keys: true,
+            ..TerminalKeyboardMode::default()
+        }
+    }
+
     #[test]
     fn enhanced_mode_reports_modifier_only_press() {
         let modifiers = Modifiers {
@@ -983,6 +1008,84 @@ mod tests {
                 true,
             ),
             Some(b"\x1b[Z".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_left_with_normal_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("left", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                TerminalKeyboardMode::default(),
+                true,
+            ),
+            Some(b"\x1b[D".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_left_with_application_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("left", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                application_cursor_mode(),
+                true,
+            ),
+            Some(b"\x1bOD".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_up_with_application_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("up", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                application_cursor_mode(),
+                true,
+            ),
+            Some(b"\x1bOA".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_home_with_normal_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("home", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                TerminalKeyboardMode::default(),
+                true,
+            ),
+            Some(b"\x1b[H".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_home_with_application_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("home", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                application_cursor_mode(),
+                true,
+            ),
+            Some(b"\x1bOH".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mode_reports_plain_end_with_application_cursor_keys() {
+        assert_eq!(
+            keystroke_to_input(
+                &keystroke("end", None, Modifiers::default()),
+                TerminalKeyEventKind::Press,
+                application_cursor_mode(),
+                true,
+            ),
+            Some(b"\x1bOF".to_vec())
         );
     }
 

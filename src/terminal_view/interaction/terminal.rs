@@ -313,12 +313,24 @@ impl TerminalView {
                 }
             }
             RuntimeKind::Native => {
-                for tab in &mut self.tabs {
-                    if !Self::repair_native_tab_active_pane_for_resize(tab) {
+                let native_tabs = self
+                    .tabs
+                    .iter()
+                    .filter_map(|tab| {
+                        let pane_count = tab.panes.len();
+                        let tab_id = tab.id;
+                        (pane_count > 0).then_some((tab_id, pane_count))
+                    })
+                    .collect::<Vec<_>>();
+                for (tab_id, pane_count) in native_tabs {
+                    if let Some(tab_index) = self.tab_index_by_id(tab_id)
+                        && let Some(tab) = self.tabs.get_mut(tab_index)
+                        && !Self::repair_native_tab_active_pane_for_resize(tab)
+                    {
                         continue;
                     }
                     let (cols, rows) = Self::terminal_grid_size_for_pane_count(
-                        tab.panes.len(),
+                        pane_count,
                         viewport_width,
                         viewport_height,
                         total_sidebar_width,
@@ -328,7 +340,7 @@ impl TerminalView {
                         cell_width,
                         cell_height,
                     );
-                    Self::sync_native_tab_pane_geometry(tab, cols, rows);
+                    self.sync_native_tab_pane_geometry(tab_id, cols, rows);
                 }
             }
         }

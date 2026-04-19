@@ -323,6 +323,72 @@ struct TerminalPaneLayout {
     gaps: TerminalPaneNeighborGaps,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct TerminalPaneDivider {
+    pane_id: String,
+    handle_id: SharedString,
+    axis: PaneResizeAxis,
+    edge: PaneResizeEdge,
+    line_frame: TerminalContentRect,
+    hit_frame: TerminalContentRect,
+    grip_frame: TerminalContentRect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativePaneRect {
+    left: u16,
+    top: u16,
+    width: u16,
+    height: u16,
+}
+
+impl NativePaneRect {
+    fn right(self) -> u16 {
+        self.left.saturating_add(self.width)
+    }
+
+    fn bottom(self) -> u16 {
+        self.top.saturating_add(self.height)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NativePaneLayoutTree {
+    root: NativePaneLayoutNode,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum NativePaneLayoutNode {
+    Leaf {
+        pane_id: String,
+    },
+    Split {
+        axis: PaneResizeAxis,
+        ratio: f32,
+        first: Box<NativePaneLayoutNode>,
+        second: Box<NativePaneLayoutNode>,
+    },
+}
+
+impl TerminalPaneDivider {
+    fn hit_distance(&self, x: f32, y: f32) -> Option<f32> {
+        if x < self.hit_frame.origin_x
+            || x > self.hit_frame.right()
+            || y < self.hit_frame.origin_y
+            || y > self.hit_frame.bottom()
+        {
+            return None;
+        }
+
+        let center_x = self.hit_frame.origin_x + (self.hit_frame.width * 0.5);
+        let center_y = self.hit_frame.origin_y + (self.hit_frame.height * 0.5);
+        Some(match self.axis {
+            PaneResizeAxis::Horizontal => (x - center_x).abs(),
+            PaneResizeAxis::Vertical => (y - center_y).abs(),
+        })
+    }
+}
+
 fn cell_ranges_overlap(start_a: u32, end_a: u32, start_b: u32, end_b: u32) -> bool {
     start_a < end_b && start_b < end_a
 }
@@ -1183,6 +1249,7 @@ struct NativePaneZoomSnapshot {
     active_pane_geometry: (u16, u16, u16, u16),
     active_pane_id: String,
     active_original_index: usize,
+    layout_tree: Option<NativePaneLayoutTree>,
 }
 impl TerminalTab {
     fn has_active_pane(&self) -> bool {
@@ -1534,6 +1601,7 @@ pub(crate) enum TabBarVisibility {
 pub struct TerminalView {
     tabs: Vec<TerminalTab>,
     native_pane_zoom_snapshots: HashMap<TabId, NativePaneZoomSnapshot>,
+    native_pane_layout_trees: HashMap<TabId, NativePaneLayoutTree>,
     next_tab_id: TabId,
     active_tab: usize,
     renaming_tab: Option<usize>,
@@ -1706,6 +1774,567 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
+    fn native_leaf_rect(
+        node: &NativePaneLayoutNode,
+        target_pane_id: &str,
+        rect: NativePaneRect,
+    ) -> Option<NativePaneRect> {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id } => (pane_id == target_pane_id).then_some(rect),
+            NativePaneLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let (first_rect, second_rect) = Self::native_split_rects(*axis, *ratio, rect);
+                Self::native_leaf_rect(first, target_pane_id, first_rect)
+                    .or_else(|| Self::native_leaf_rect(second, target_pane_id, second_rect))
+            }
+        }
+    }
+
+    fn native_tree_leaf_count(node: &NativePaneLayoutNode) -> usize {
+        match node {
+            NativePaneLayoutNode::Leaf { .. } => 1,
+            NativePaneLayoutNode::Split { first, second, .. } => {
+                Self::native_tree_leaf_count(first) + Self::native_tree_leaf_count(second)
+            }
+        }
+    }
+
+    fn native_tree_first_leaf_id(node: &NativePaneLayoutNode) -> Option<String> {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id } => Some(pane_id.clone()),
+            NativePaneLayoutNode::Split { first, .. } => Self::native_tree_first_leaf_id(first),
+        }
+    }
+
+    fn native_split_extent(axis: PaneResizeAxis, rect: NativePaneRect) -> u16 {
+        match axis {
+            PaneResizeAxis::Horizontal => rect.width,
+            PaneResizeAxis::Vertical => rect.height,
+        }
+    }
+
+    fn native_split_rects(
+        axis: PaneResizeAxis,
+        ratio: f32,
+        rect: NativePaneRect,
+    ) -> (NativePaneRect, NativePaneRect) {
+        let total = Self::native_split_extent(axis, rect);
+        let first_extent = if total <= 1 {
+            1
+        } else {
+            ((f32::from(total) * ratio.clamp(0.0, 1.0)).round() as u16)
+                .clamp(1, total.saturating_sub(1))
+        };
+        match axis {
+            PaneResizeAxis::Horizontal => (
+                NativePaneRect {
+                    width: first_extent,
+                    ..rect
+                },
+                NativePaneRect {
+                    left: rect.left.saturating_add(first_extent),
+                    width: total.saturating_sub(first_extent).max(1),
+                    ..rect
+                },
+            ),
+            PaneResizeAxis::Vertical => (
+                NativePaneRect {
+                    height: first_extent,
+                    ..rect
+                },
+                NativePaneRect {
+                    top: rect.top.saturating_add(first_extent),
+                    height: total.saturating_sub(first_extent).max(1),
+                    ..rect
+                },
+            ),
+        }
+    }
+
+    fn native_collect_leaf_rects(
+        node: &NativePaneLayoutNode,
+        rect: NativePaneRect,
+        rects: &mut HashMap<String, NativePaneRect>,
+    ) {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id } => {
+                rects.insert(pane_id.clone(), rect);
+            }
+            NativePaneLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let (first_rect, second_rect) = Self::native_split_rects(*axis, *ratio, rect);
+                Self::native_collect_leaf_rects(first, first_rect, rects);
+                Self::native_collect_leaf_rects(second, second_rect, rects);
+            }
+        }
+    }
+
+    fn native_coverage(intervals: &[(u16, u16)], start: u16, end: u16) -> u16 {
+        if intervals.is_empty() || start >= end {
+            return 0;
+        }
+        let mut merged = intervals.to_vec();
+        merged
+            .sort_unstable_by_key(|&(interval_start, interval_end)| (interval_start, interval_end));
+        let mut total = 0u16;
+        let mut current = merged[0];
+        for interval in merged.into_iter().skip(1) {
+            if interval.0 <= current.1 {
+                current.1 = current.1.max(interval.1);
+            } else {
+                total = total.saturating_add(current.1.saturating_sub(current.0));
+                current = interval;
+            }
+        }
+        total
+            .saturating_add(current.1.saturating_sub(current.0))
+            .min(end.saturating_sub(start))
+    }
+
+    fn native_tree_can_split_at_boundary(
+        panes: &[&TerminalPane],
+        rect: NativePaneRect,
+        axis: PaneResizeAxis,
+        boundary: u16,
+    ) -> bool {
+        let mut first_count = 0usize;
+        let mut second_count = 0usize;
+        let mut first_intervals = Vec::new();
+        let mut second_intervals = Vec::new();
+
+        for pane in panes {
+            let pane_rect = NativePaneRect {
+                left: pane.left,
+                top: pane.top,
+                width: pane.width,
+                height: pane.height,
+            };
+            match axis {
+                PaneResizeAxis::Horizontal => {
+                    if pane_rect.right() <= boundary {
+                        first_count += 1;
+                        first_intervals.push((
+                            pane_rect.top.max(rect.top),
+                            pane_rect.bottom().min(rect.bottom()),
+                        ));
+                    } else if pane_rect.left >= boundary {
+                        second_count += 1;
+                        second_intervals.push((
+                            pane_rect.top.max(rect.top),
+                            pane_rect.bottom().min(rect.bottom()),
+                        ));
+                    } else {
+                        return false;
+                    }
+                }
+                PaneResizeAxis::Vertical => {
+                    if pane_rect.bottom() <= boundary {
+                        first_count += 1;
+                        first_intervals.push((
+                            pane_rect.left.max(rect.left),
+                            pane_rect.right().min(rect.right()),
+                        ));
+                    } else if pane_rect.top >= boundary {
+                        second_count += 1;
+                        second_intervals.push((
+                            pane_rect.left.max(rect.left),
+                            pane_rect.right().min(rect.right()),
+                        ));
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if first_count == 0 || second_count == 0 {
+            return false;
+        }
+
+        match axis {
+            PaneResizeAxis::Horizontal => {
+                Self::native_coverage(&first_intervals, rect.top, rect.bottom()) >= rect.height
+                    && Self::native_coverage(&second_intervals, rect.top, rect.bottom())
+                        >= rect.height
+            }
+            PaneResizeAxis::Vertical => {
+                Self::native_coverage(&first_intervals, rect.left, rect.right()) >= rect.width
+                    && Self::native_coverage(&second_intervals, rect.left, rect.right())
+                        >= rect.width
+            }
+        }
+    }
+
+    fn native_infer_layout_tree_from_rects(
+        panes: &[&TerminalPane],
+        rect: NativePaneRect,
+    ) -> Option<NativePaneLayoutNode> {
+        if panes.len() == 1 {
+            return Some(NativePaneLayoutNode::Leaf {
+                pane_id: panes[0].id.clone(),
+            });
+        }
+
+        let right_boundaries = panes
+            .iter()
+            .map(|pane| pane.left.saturating_add(pane.width))
+            .filter(|boundary| *boundary > rect.left && *boundary < rect.right())
+            .collect::<Vec<_>>();
+        for boundary in right_boundaries {
+            if !Self::native_tree_can_split_at_boundary(
+                panes,
+                rect,
+                PaneResizeAxis::Horizontal,
+                boundary,
+            ) {
+                continue;
+            }
+            let (first_panes, second_panes): (Vec<_>, Vec<_>) = panes
+                .iter()
+                .copied()
+                .partition(|pane| pane.left.saturating_add(pane.width) <= boundary);
+            let first_rect = NativePaneRect {
+                width: boundary.saturating_sub(rect.left),
+                ..rect
+            };
+            let second_rect = NativePaneRect {
+                left: boundary,
+                width: rect.right().saturating_sub(boundary),
+                ..rect
+            };
+            let first = Self::native_infer_layout_tree_from_rects(&first_panes, first_rect)?;
+            let second = Self::native_infer_layout_tree_from_rects(&second_panes, second_rect)?;
+            return Some(NativePaneLayoutNode::Split {
+                axis: PaneResizeAxis::Horizontal,
+                ratio: f32::from(first_rect.width) / f32::from(rect.width.max(1)),
+                first: Box::new(first),
+                second: Box::new(second),
+            });
+        }
+
+        let bottom_boundaries = panes
+            .iter()
+            .map(|pane| pane.top.saturating_add(pane.height))
+            .filter(|boundary| *boundary > rect.top && *boundary < rect.bottom())
+            .collect::<Vec<_>>();
+        for boundary in bottom_boundaries {
+            if !Self::native_tree_can_split_at_boundary(
+                panes,
+                rect,
+                PaneResizeAxis::Vertical,
+                boundary,
+            ) {
+                continue;
+            }
+            let (first_panes, second_panes): (Vec<_>, Vec<_>) = panes
+                .iter()
+                .copied()
+                .partition(|pane| pane.top.saturating_add(pane.height) <= boundary);
+            let first_rect = NativePaneRect {
+                height: boundary.saturating_sub(rect.top),
+                ..rect
+            };
+            let second_rect = NativePaneRect {
+                top: boundary,
+                height: rect.bottom().saturating_sub(boundary),
+                ..rect
+            };
+            let first = Self::native_infer_layout_tree_from_rects(&first_panes, first_rect)?;
+            let second = Self::native_infer_layout_tree_from_rects(&second_panes, second_rect)?;
+            return Some(NativePaneLayoutNode::Split {
+                axis: PaneResizeAxis::Vertical,
+                ratio: f32::from(first_rect.height) / f32::from(rect.height.max(1)),
+                first: Box::new(first),
+                second: Box::new(second),
+            });
+        }
+
+        None
+    }
+
+    fn native_layout_tree_from_panes(panes: &[TerminalPane]) -> Option<NativePaneLayoutTree> {
+        let only = panes.first()?;
+        if panes.len() == 1 {
+            return Some(NativePaneLayoutTree {
+                root: NativePaneLayoutNode::Leaf {
+                    pane_id: only.id.clone(),
+                },
+            });
+        }
+        let cols = panes
+            .iter()
+            .map(|pane| pane.left.saturating_add(pane.width))
+            .max()
+            .unwrap_or(only.width)
+            .max(1);
+        let rows = panes
+            .iter()
+            .map(|pane| pane.top.saturating_add(pane.height))
+            .max()
+            .unwrap_or(only.height)
+            .max(1);
+        let pane_refs = panes.iter().collect::<Vec<_>>();
+        Self::native_infer_layout_tree_from_rects(
+            &pane_refs,
+            NativePaneRect {
+                left: 0,
+                top: 0,
+                width: cols,
+                height: rows,
+            },
+        )
+        .map(|root| NativePaneLayoutTree { root })
+    }
+
+    fn ensure_native_layout_tree_for_tab_id(&mut self, tab_id: TabId) -> bool {
+        if self.native_pane_layout_trees.contains_key(&tab_id) {
+            return true;
+        }
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        let Some(tree) = Self::native_layout_tree_from_panes(&tab.panes) else {
+            return false;
+        };
+        self.native_pane_layout_trees.insert(tab_id, tree);
+        true
+    }
+
+    fn apply_native_layout_tree_to_tab(&mut self, tab_id: TabId, cols: u16, rows: u16) -> bool {
+        let Some(tree) = self.native_pane_layout_trees.get(&tab_id).cloned() else {
+            return false;
+        };
+        let Some(tab_index) = self.tab_index_by_id(tab_id) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(tab_index) else {
+            return false;
+        };
+        let mut rects = HashMap::new();
+        Self::native_collect_leaf_rects(
+            &tree.root,
+            NativePaneRect {
+                left: 0,
+                top: 0,
+                width: cols.max(1),
+                height: rows.max(1),
+            },
+            &mut rects,
+        );
+        for pane in &mut tab.panes {
+            if let Some(rect) = rects.get(&pane.id).copied() {
+                pane.left = rect.left;
+                pane.top = rect.top;
+                pane.width = rect.width.max(1);
+                pane.height = rect.height.max(1);
+            }
+        }
+        true
+    }
+
+    fn native_replace_leaf_with_split(
+        node: &mut NativePaneLayoutNode,
+        target_pane_id: &str,
+        axis: PaneResizeAxis,
+        new_pane_id: &str,
+    ) -> bool {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id } if pane_id == target_pane_id => {
+                let existing = pane_id.clone();
+                *node = NativePaneLayoutNode::Split {
+                    axis,
+                    ratio: 0.5,
+                    first: Box::new(NativePaneLayoutNode::Leaf { pane_id: existing }),
+                    second: Box::new(NativePaneLayoutNode::Leaf {
+                        pane_id: new_pane_id.to_string(),
+                    }),
+                };
+                true
+            }
+            NativePaneLayoutNode::Leaf { .. } => false,
+            NativePaneLayoutNode::Split { first, second, .. } => {
+                Self::native_replace_leaf_with_split(first, target_pane_id, axis, new_pane_id)
+                    || Self::native_replace_leaf_with_split(
+                        second,
+                        target_pane_id,
+                        axis,
+                        new_pane_id,
+                    )
+            }
+        }
+    }
+
+    fn native_adjust_tree_split(
+        node: &mut NativePaneLayoutNode,
+        pane_id: &str,
+        axis: PaneResizeAxis,
+        edge: PaneResizeEdge,
+        divider_delta: i16,
+        rect: NativePaneRect,
+        min_extent: u16,
+    ) -> PaneResizeResult {
+        match node {
+            NativePaneLayoutNode::Leaf { .. } => PaneResizeResult::NoChange,
+            NativePaneLayoutNode::Split {
+                axis: split_axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let (first_rect, second_rect) = Self::native_split_rects(*split_axis, *ratio, rect);
+                let first_leaf_rect = Self::native_leaf_rect(first, pane_id, first_rect);
+                let second_leaf_rect = Self::native_leaf_rect(second, pane_id, second_rect);
+
+                if *split_axis == axis {
+                    let total = Self::native_split_extent(axis, rect).max(1);
+                    let first_extent = Self::native_split_extent(axis, first_rect);
+                    let touches_boundary = match axis {
+                        PaneResizeAxis::Horizontal => {
+                            (edge == PaneResizeEdge::Right
+                                && first_leaf_rect
+                                    .is_some_and(|leaf| leaf.right() == first_rect.right()))
+                                || (edge == PaneResizeEdge::Left
+                                    && second_leaf_rect
+                                        .is_some_and(|leaf| leaf.left == second_rect.left))
+                        }
+                        PaneResizeAxis::Vertical => {
+                            (edge == PaneResizeEdge::Bottom
+                                && first_leaf_rect
+                                    .is_some_and(|leaf| leaf.bottom() == first_rect.bottom()))
+                                || (edge == PaneResizeEdge::Top
+                                    && second_leaf_rect
+                                        .is_some_and(|leaf| leaf.top == second_rect.top))
+                        }
+                    };
+
+                    if touches_boundary {
+                        let next_first_extent = i32::from(first_extent) + i32::from(divider_delta);
+                        let next_second_extent = i32::from(total) - next_first_extent;
+                        if next_first_extent < i32::from(min_extent)
+                            || next_second_extent < i32::from(min_extent)
+                        {
+                            return PaneResizeResult::BlockedByMinimum;
+                        }
+                        *ratio = (next_first_extent as f32 / f32::from(total)).clamp(0.0, 1.0);
+                        return PaneResizeResult::Applied;
+                    }
+                }
+
+                let first_result = Self::native_adjust_tree_split(
+                    first,
+                    pane_id,
+                    axis,
+                    edge,
+                    divider_delta,
+                    first_rect,
+                    min_extent,
+                );
+                if first_result != PaneResizeResult::NoChange {
+                    return first_result;
+                }
+                Self::native_adjust_tree_split(
+                    second,
+                    pane_id,
+                    axis,
+                    edge,
+                    divider_delta,
+                    second_rect,
+                    min_extent,
+                )
+            }
+        }
+    }
+
+    fn native_remove_leaf_from_tree(
+        node: NativePaneLayoutNode,
+        pane_id: &str,
+    ) -> (Option<NativePaneLayoutNode>, Option<String>, bool) {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id: leaf_id } => {
+                if leaf_id == pane_id {
+                    (None, None, true)
+                } else {
+                    (
+                        Some(NativePaneLayoutNode::Leaf { pane_id: leaf_id }),
+                        None,
+                        false,
+                    )
+                }
+            }
+            NativePaneLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let original_first = *first;
+                let original_second = *second;
+                let (next_first, first_focus, removed) =
+                    Self::native_remove_leaf_from_tree(original_first.clone(), pane_id);
+                if removed {
+                    return match next_first {
+                        Some(next_first) => (
+                            Some(NativePaneLayoutNode::Split {
+                                axis,
+                                ratio,
+                                first: Box::new(next_first),
+                                second: Box::new(original_second),
+                            }),
+                            first_focus,
+                            true,
+                        ),
+                        None => {
+                            let focus_id = first_focus
+                                .or_else(|| Self::native_tree_first_leaf_id(&original_second));
+                            (Some(original_second), focus_id, true)
+                        }
+                    };
+                }
+
+                let (next_second, second_focus, removed) =
+                    Self::native_remove_leaf_from_tree(original_second.clone(), pane_id);
+                if removed {
+                    return match next_second {
+                        Some(next_second) => (
+                            Some(NativePaneLayoutNode::Split {
+                                axis,
+                                ratio,
+                                first: Box::new(original_first),
+                                second: Box::new(next_second),
+                            }),
+                            second_focus,
+                            true,
+                        ),
+                        None => {
+                            let focus_id = second_focus
+                                .or_else(|| Self::native_tree_first_leaf_id(&original_first));
+                            (Some(original_first), focus_id, true)
+                        }
+                    };
+                }
+
+                (
+                    Some(NativePaneLayoutNode::Split {
+                        axis,
+                        ratio,
+                        first: Box::new(original_first),
+                        second: Box::new(original_second),
+                    }),
+                    None,
+                    false,
+                )
+            }
+        }
+    }
+
     fn install_cli_availability_from_probe(is_cli_installed: bool) -> bool {
         !is_cli_installed
     }
@@ -2590,6 +3219,126 @@ impl TerminalView {
         gaps
     }
 
+    fn native_pane_dividers(&self, tab: &TerminalTab) -> Vec<TerminalPaneDivider> {
+        if tab.panes.len() <= 1 {
+            return Vec::new();
+        }
+
+        let layout_cell_size = self.layout_cell_size();
+        let layout_cell_width: f32 = layout_cell_size.width.into();
+        let layout_cell_height: f32 = layout_cell_size.height.into();
+        if layout_cell_width <= f32::EPSILON || layout_cell_height <= f32::EPSILON {
+            return Vec::new();
+        }
+
+        let (outer_padding_x, outer_padding_y) = self.effective_terminal_padding();
+        let max_right = tab
+            .panes
+            .iter()
+            .map(|pane| u32::from(pane.left).saturating_add(u32::from(pane.width)))
+            .max()
+            .unwrap_or(0);
+        let max_bottom = tab
+            .panes
+            .iter()
+            .map(|pane| u32::from(pane.top).saturating_add(u32::from(pane.height)))
+            .max()
+            .unwrap_or(0);
+        let mut dividers = Vec::new();
+
+        for pane in &tab.panes {
+            let frame = match TerminalContentRect::new(
+                outer_padding_x + (f32::from(pane.left) * layout_cell_width),
+                outer_padding_y + (f32::from(pane.top) * layout_cell_height),
+                f32::from(pane.width) * layout_cell_width,
+                f32::from(pane.height) * layout_cell_height,
+            ) {
+                Some(frame) => frame,
+                None => continue,
+            };
+
+            let gaps = Self::pane_neighbor_gaps(pane, &tab.panes);
+            let pane_right = u32::from(pane.left).saturating_add(u32::from(pane.width));
+            let pane_bottom = u32::from(pane.top).saturating_add(u32::from(pane.height));
+
+            if pane_right < max_right
+                && let Some(gap_cells) = gaps.right_cells
+            {
+                let gap_px = (gap_cells as f32) * layout_cell_width;
+                let center_x = frame.right() + (gap_px * 0.5);
+                let hit_width = gap_px.max(12.0);
+                let grip_height = (frame.height * 0.24).clamp(18.0, 84.0);
+                let grip_width = 4.0;
+                let line_frame =
+                    TerminalContentRect::new(center_x - 0.5, frame.origin_y, 1.0, frame.height);
+                let hit_frame = TerminalContentRect::new(
+                    center_x - (hit_width * 0.5),
+                    frame.origin_y,
+                    hit_width,
+                    frame.height,
+                );
+                let grip_frame = TerminalContentRect::new(
+                    center_x - (grip_width * 0.5),
+                    frame.origin_y + ((frame.height - grip_height) * 0.5),
+                    grip_width,
+                    grip_height,
+                );
+                if let (Some(line_frame), Some(hit_frame), Some(grip_frame)) =
+                    (line_frame, hit_frame, grip_frame)
+                {
+                    dividers.push(TerminalPaneDivider {
+                        pane_id: pane.id.clone(),
+                        handle_id: pane.cached_element_ids.resize_handle_right.clone(),
+                        axis: PaneResizeAxis::Horizontal,
+                        edge: PaneResizeEdge::Right,
+                        line_frame,
+                        hit_frame,
+                        grip_frame,
+                    });
+                }
+            }
+
+            if pane_bottom < max_bottom
+                && let Some(gap_cells) = gaps.bottom_cells
+            {
+                let gap_px = (gap_cells as f32) * layout_cell_height;
+                let center_y = frame.bottom() + (gap_px * 0.5);
+                let hit_height = gap_px.max(12.0);
+                let grip_width = (frame.width * 0.24).clamp(18.0, 84.0);
+                let grip_height = 4.0;
+                let line_frame =
+                    TerminalContentRect::new(frame.origin_x, center_y - 0.5, frame.width, 1.0);
+                let hit_frame = TerminalContentRect::new(
+                    frame.origin_x,
+                    center_y - (hit_height * 0.5),
+                    frame.width,
+                    hit_height,
+                );
+                let grip_frame = TerminalContentRect::new(
+                    frame.origin_x + ((frame.width - grip_width) * 0.5),
+                    center_y - (grip_height * 0.5),
+                    grip_width,
+                    grip_height,
+                );
+                if let (Some(line_frame), Some(hit_frame), Some(grip_frame)) =
+                    (line_frame, hit_frame, grip_frame)
+                {
+                    dividers.push(TerminalPaneDivider {
+                        pane_id: pane.id.clone(),
+                        handle_id: pane.cached_element_ids.resize_handle_bottom.clone(),
+                        axis: PaneResizeAxis::Vertical,
+                        edge: PaneResizeEdge::Bottom,
+                        line_frame,
+                        hit_frame,
+                        grip_frame,
+                    });
+                }
+            }
+        }
+
+        dividers
+    }
+
     fn terminal_pane_layout(
         &self,
         tab: &TerminalTab,
@@ -3086,6 +3835,7 @@ impl TerminalView {
         let mut view = Self {
             tabs: Vec::new(),
             native_pane_zoom_snapshots: HashMap::new(),
+            native_pane_layout_trees: HashMap::new(),
             next_tab_id: 1,
             active_tab: 0,
             renaming_tab: None,

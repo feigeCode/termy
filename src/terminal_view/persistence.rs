@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-const NATIVE_WORKSPACE_STATE_VERSION: u64 = 2;
+const NATIVE_WORKSPACE_STATE_VERSION: u64 = 3;
 const NATIVE_WORKSPACE_STATE_FILE: &str = "native-tabs.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,27 +19,41 @@ struct PersistedNativePane {
     buffer: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+enum PersistedNativeLayoutNode {
+    Leaf {
+        pane: usize,
+    },
+    Split {
+        axis: PaneResizeAxis,
+        ratio: f32,
+        first: Box<PersistedNativeLayoutNode>,
+        second: Box<PersistedNativeLayoutNode>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct PersistedNativeTab {
     panes: Vec<PersistedNativePane>,
+    layout_tree: Option<PersistedNativeLayoutNode>,
     active_pane: usize,
     pinned: bool,
     manual_title: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct PersistedNativeWorkspace {
     tabs: Vec<PersistedNativeTab>,
     active_tab: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct PersistedNamedLayout {
     name: String,
     workspace: PersistedNativeWorkspace,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 struct PersistedNativeWorkspaceState {
     last_session: Option<PersistedNativeWorkspace>,
     layouts: Vec<PersistedNamedLayout>,
@@ -55,6 +69,136 @@ struct PersistedNativeWorkspaceWriteRequest {
 }
 
 impl TerminalView {
+    fn persisted_layout_tree_from_native(
+        node: &NativePaneLayoutNode,
+        pane_indices: &HashMap<String, usize>,
+    ) -> Option<PersistedNativeLayoutNode> {
+        match node {
+            NativePaneLayoutNode::Leaf { pane_id } => Some(PersistedNativeLayoutNode::Leaf {
+                pane: *pane_indices.get(pane_id)?,
+            }),
+            NativePaneLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => Some(PersistedNativeLayoutNode::Split {
+                axis: *axis,
+                ratio: *ratio,
+                first: Box::new(Self::persisted_layout_tree_from_native(
+                    first,
+                    pane_indices,
+                )?),
+                second: Box::new(Self::persisted_layout_tree_from_native(
+                    second,
+                    pane_indices,
+                )?),
+            }),
+        }
+    }
+
+    fn native_layout_tree_from_persisted(
+        node: &PersistedNativeLayoutNode,
+        pane_ids: &[String],
+    ) -> Option<NativePaneLayoutNode> {
+        match node {
+            PersistedNativeLayoutNode::Leaf { pane } => {
+                let pane_id = pane_ids.get(*pane)?.clone();
+                Some(NativePaneLayoutNode::Leaf { pane_id })
+            }
+            PersistedNativeLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => Some(NativePaneLayoutNode::Split {
+                axis: *axis,
+                ratio: *ratio,
+                first: Box::new(Self::native_layout_tree_from_persisted(first, pane_ids)?),
+                second: Box::new(Self::native_layout_tree_from_persisted(second, pane_ids)?),
+            }),
+        }
+    }
+
+    fn persisted_layout_tree_to_value(node: PersistedNativeLayoutNode) -> Value {
+        match node {
+            PersistedNativeLayoutNode::Leaf { pane } => json!({
+                "kind": "leaf",
+                "pane": pane,
+            }),
+            PersistedNativeLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => json!({
+                "kind": "split",
+                "axis": match axis {
+                    PaneResizeAxis::Horizontal => "horizontal",
+                    PaneResizeAxis::Vertical => "vertical",
+                },
+                "ratio": ratio,
+                "first": Self::persisted_layout_tree_to_value(*first),
+                "second": Self::persisted_layout_tree_to_value(*second),
+            }),
+        }
+    }
+
+    fn parse_persisted_layout_tree_value(
+        value: &Value,
+    ) -> Result<PersistedNativeLayoutNode, String> {
+        let kind = value
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "layout tree node is missing 'kind'".to_string())?;
+        match kind {
+            "leaf" => {
+                let pane = value
+                    .get("pane")
+                    .and_then(Value::as_u64)
+                    .and_then(|raw| usize::try_from(raw).ok())
+                    .ok_or_else(|| "layout tree leaf is missing valid 'pane'".to_string())?;
+                Ok(PersistedNativeLayoutNode::Leaf { pane })
+            }
+            "split" => {
+                let axis = match value
+                    .get("axis")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "layout tree split is missing 'axis'".to_string())?
+                {
+                    "horizontal" => PaneResizeAxis::Horizontal,
+                    "vertical" => PaneResizeAxis::Vertical,
+                    other => {
+                        return Err(format!("layout tree split axis '{}' is invalid", other));
+                    }
+                };
+                let ratio = value
+                    .get("ratio")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| "layout tree split is missing 'ratio'".to_string())?
+                    as f32;
+                if !ratio.is_finite() {
+                    return Err("layout tree split ratio must be finite".to_string());
+                }
+                Ok(PersistedNativeLayoutNode::Split {
+                    axis,
+                    ratio,
+                    first: Box::new(Self::parse_persisted_layout_tree_value(
+                        value
+                            .get("first")
+                            .ok_or_else(|| "layout tree split is missing 'first'".to_string())?,
+                    )?),
+                    second: Box::new(Self::parse_persisted_layout_tree_value(
+                        value
+                            .get("second")
+                            .ok_or_else(|| "layout tree split is missing 'second'".to_string())?,
+                    )?),
+                })
+            }
+            other => Err(format!("layout tree node kind '{}' is invalid", other)),
+        }
+    }
+
     fn extract_persisted_buffer_line(
         grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
         line_idx: i32,
@@ -216,8 +360,8 @@ impl TerminalView {
         let tabs = self
             .tabs
             .iter()
-            .map(|tab| PersistedNativeTab {
-                panes: tab
+            .map(|tab| {
+                let panes = tab
                     .panes
                     .iter()
                     .map(|pane| PersistedNativePane {
@@ -227,10 +371,31 @@ impl TerminalView {
                         height: pane.height.max(1),
                         buffer: self.extract_persisted_buffer_text(&pane.terminal),
                     })
-                    .collect(),
-                active_pane: tab.active_pane_index().unwrap_or(0),
-                pinned: tab.pinned,
-                manual_title: tab.manual_title.clone(),
+                    .collect::<Vec<_>>();
+                let pane_indices = tab
+                    .panes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, pane)| (pane.id.clone(), index))
+                    .collect::<HashMap<_, _>>();
+                let layout_tree = self
+                    .native_pane_layout_trees
+                    .get(&tab.id)
+                    .and_then(|tree| {
+                        Self::persisted_layout_tree_from_native(&tree.root, &pane_indices)
+                    })
+                    .or_else(|| {
+                        Self::native_layout_tree_from_panes(&tab.panes).and_then(|tree| {
+                            Self::persisted_layout_tree_from_native(&tree.root, &pane_indices)
+                        })
+                    });
+                PersistedNativeTab {
+                    panes,
+                    layout_tree,
+                    active_pane: tab.active_pane_index().unwrap_or(0),
+                    pinned: tab.pinned,
+                    manual_title: tab.manual_title.clone(),
+                }
             })
             .collect::<Vec<_>>();
 
@@ -248,6 +413,7 @@ impl TerminalView {
                     "active_pane": tab.active_pane,
                     "pinned": tab.pinned,
                     "manual_title": tab.manual_title,
+                    "layout_tree": tab.layout_tree.map(Self::persisted_layout_tree_to_value),
                     "panes": tab.panes.into_iter().map(|pane| {
                         json!({
                             "left": pane.left,
@@ -350,8 +516,14 @@ impl TerminalView {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .filter(|title| !title.trim().is_empty());
+            let layout_tree = tab_value
+                .get("layout_tree")
+                .filter(|value| !value.is_null())
+                .map(Self::parse_persisted_layout_tree_value)
+                .transpose()?;
             tabs.push(PersistedNativeTab {
                 panes,
+                layout_tree,
                 active_pane,
                 pinned,
                 manual_title,
@@ -390,7 +562,7 @@ impl TerminalView {
                     layouts: Vec::new(),
                 })
             }
-            2 => {
+            2 | 3 => {
                 let last_session = root
                     .get("last_session")
                     .filter(|value| !value.is_null())
@@ -454,6 +626,7 @@ impl TerminalView {
         let predicted_title =
             Self::predicted_prompt_seed_title(&self.tab_title, predicted_prompt_cwd.as_deref());
         let mut restored_tabs = Vec::with_capacity(workspace.tabs.len());
+        let mut restored_layout_trees = HashMap::new();
 
         for persisted_tab in workspace.tabs {
             let first_pane = persisted_tab
@@ -537,6 +710,20 @@ impl TerminalView {
                 .ok_or_else(|| "restored tab has no panes".to_string())?;
             tab.pinned = persisted_tab.pinned;
             tab.manual_title = persisted_tab.manual_title;
+            let pane_ids = tab
+                .panes
+                .iter()
+                .map(|pane| pane.id.clone())
+                .collect::<Vec<_>>();
+            let layout_tree = persisted_tab
+                .layout_tree
+                .as_ref()
+                .and_then(|tree| Self::native_layout_tree_from_persisted(tree, &pane_ids))
+                .map(|root| NativePaneLayoutTree { root })
+                .or_else(|| Self::native_layout_tree_from_panes(&tab.panes));
+            if let Some(layout_tree) = layout_tree {
+                restored_layout_trees.insert(tab.id, layout_tree);
+            }
             restored_tabs.push(tab);
         }
 
@@ -545,6 +732,8 @@ impl TerminalView {
         }
 
         self.tabs = restored_tabs;
+        self.native_pane_layout_trees = restored_layout_trees;
+        self.native_pane_zoom_snapshots.clear();
         self.active_tab = workspace.active_tab.min(self.tabs.len().saturating_sub(1));
         self.mark_tab_strip_layout_dirty();
         self.sync_tab_strip_for_active_tab();
@@ -856,7 +1045,7 @@ mod tests {
     fn persisted_native_workspace_parser_accepts_named_layouts() {
         let state = TerminalView::parse_persisted_native_workspace_state(
             r#"{
-  "version": 2,
+  "version": 3,
   "last_session": null,
   "layouts": [
     {
@@ -884,6 +1073,65 @@ mod tests {
         assert_eq!(state.layouts[0].name, "Main");
         assert_eq!(state.layouts[0].workspace.tabs.len(), 1);
         assert!(!state.layouts[0].workspace.tabs[0].pinned);
+    }
+
+    #[test]
+    fn persisted_native_workspace_parser_reads_layout_tree() {
+        let state = TerminalView::parse_persisted_native_workspace_state(
+            r#"{
+  "version": 3,
+  "last_session": {
+    "active_tab": 0,
+    "tabs": [
+      {
+        "active_pane": 1,
+        "pinned": false,
+        "manual_title": null,
+        "layout_tree": {
+          "kind": "split",
+          "axis": "horizontal",
+          "ratio": 0.5,
+          "first": { "kind": "leaf", "pane": 0 },
+          "second": { "kind": "leaf", "pane": 1 }
+        },
+        "panes": [
+          { "left": 0, "top": 0, "width": 40, "height": 20 },
+          { "left": 40, "top": 0, "width": 40, "height": 20 }
+        ]
+      }
+    ]
+  },
+  "layouts": []
+}"#,
+        )
+        .expect("workspace state should parse");
+
+        let workspace = state
+            .last_session
+            .expect("state should include last session");
+        match workspace.tabs[0]
+            .layout_tree
+            .expect("layout tree should be present")
+        {
+            PersistedNativeLayoutNode::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                assert_eq!(axis, PaneResizeAxis::Horizontal);
+                assert_eq!(ratio, 0.5);
+                assert!(matches!(
+                    *first,
+                    PersistedNativeLayoutNode::Leaf { pane: 0 }
+                ));
+                assert!(matches!(
+                    *second,
+                    PersistedNativeLayoutNode::Leaf { pane: 1 }
+                ));
+            }
+            other => panic!("unexpected layout tree: {:?}", other),
+        }
     }
 
     #[test]

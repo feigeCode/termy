@@ -155,6 +155,8 @@ impl TerminalView {
             size.cols.max(1),
             size.rows.max(1),
         ));
+        self.native_pane_layout_trees.clear();
+        self.native_pane_zoom_snapshots.clear();
         self.apply_tmux_snapshot_rehydrate(snapshot);
         self.reset_tab_interaction_state();
         self.clear_selection();
@@ -166,6 +168,8 @@ impl TerminalView {
     fn commit_tmux_runtime_to_native(&mut self, native_tab: TerminalTab, cx: &mut Context<Self>) {
         self.runtime = RuntimeState::Native;
         self.tabs = vec![native_tab];
+        self.native_pane_layout_trees.clear();
+        self.native_pane_zoom_snapshots.clear();
         self.active_tab = 0;
         self.next_tab_id = self.tabs[0].id.saturating_add(1);
         self.refresh_tab_title(0);

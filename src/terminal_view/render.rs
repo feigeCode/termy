@@ -2337,7 +2337,9 @@ impl Render for TerminalView {
         let configured_cursor_style = self.terminal_cursor_style();
         let mut terminal_display_offset = 0usize;
         let divider_rgba = pane_divider_color(terminal_surface_bg, colors.foreground);
-        let divider_color: gpui::Hsla = divider_rgba.into();
+        let mut divider_line_rgba = divider_rgba;
+        divider_line_rgba.a = self.scaled_chrome_neutral_border_alpha(0.42);
+        let divider_line_color: gpui::Hsla = divider_line_rgba.into();
         let mut pane_layers = Vec::<AnyElement>::new();
         let mut pane_dividers = Vec::<AnyElement>::new();
         let mut pane_resize_handles = Vec::<AnyElement>::new();
@@ -2365,6 +2367,11 @@ impl Render for TerminalView {
             let multi_pane = active_tab.panes.len() > 1;
             let pane_focus_enabled =
                 multi_pane && pane_focus_config.is_some() && !command_palette_open;
+            let pane_divider_layouts = if multi_pane {
+                self.native_pane_dividers(active_tab)
+            } else {
+                Vec::new()
+            };
 
             for (pane, pane_font_size) in active_tab
                 .panes
@@ -2394,7 +2401,7 @@ impl Render for TerminalView {
                             preset.active_border_alpha * active_scale,
                         )
                     } else {
-                        (CellColorTransform::default(), 0.0)
+                        (CellColorTransform::default(), 0.18)
                     };
                 // Palette backdrop uses the same inactive-pane transform path to keep one
                 // consistent dimming model and avoid a separate full-screen color overlay.
@@ -2516,149 +2523,6 @@ impl Render for TerminalView {
                 let pane_width = pane_layout.content_frame.width;
                 let pane_height = pane_layout.content_frame.height;
 
-                if multi_pane
-                    && !pane_layout.extends_right_edge
-                    && let Some(gap_cells) = pane_layout.gaps.right_cells
-                {
-                    let gap_px = (gap_cells as f32) * pane_layout.cell_width;
-                    let divider_left = pane_frame_left + pane_frame_width + (gap_px * 0.5) - 0.5;
-                    let handle_width = gap_px.max(8.0);
-                    let handle_left = divider_left - ((handle_width - 1.0) * 0.5);
-                    let pane_id = pane.id.clone();
-
-                    // Visual states for right edge divider
-                    let is_dragging_right = self
-                        .pane_resize_drag
-                        .as_ref()
-                        .is_some_and(|d| d.pane_id == pane.id && d.edge == PaneResizeEdge::Right);
-                    let is_hovered_right = self
-                        .hovered_pane_divider
-                        .as_ref()
-                        .is_some_and(|h| h.pane_id == pane.id && h.edge == PaneResizeEdge::Right);
-                    let cursor_color_hsla: gpui::Hsla = colors.cursor.into();
-                    let blocked_color = gpui::Hsla {
-                        h: 0.0,
-                        s: 0.7,
-                        l: 0.5,
-                        a: 1.0,
-                    }; // Red
-                    let (right_divider_width, right_divider_color) =
-                        if is_dragging_right && self.pane_resize_blocked {
-                            (3.0, blocked_color)
-                        } else if is_dragging_right {
-                            (3.0, cursor_color_hsla)
-                        } else if is_hovered_right {
-                            (2.0, cursor_color_hsla)
-                        } else {
-                            (1.0, divider_color)
-                        };
-
-                    pane_dividers.push(
-                        div()
-                            .absolute()
-                            .left(px(divider_left - (right_divider_width - 1.0) * 0.5))
-                            .top(px(pane_frame_top))
-                            .w(px(right_divider_width))
-                            .h(px(pane_frame_height))
-                            .bg(right_divider_color)
-                            .into_any_element(),
-                    );
-                    pane_resize_handles.push(
-                        div()
-                            .id(pane.cached_element_ids.resize_handle_right.clone())
-                            .absolute()
-                            .left(px(handle_left))
-                            .top(px(pane_frame_top))
-                            .w(px(handle_width))
-                            .h(px(pane_frame_height))
-                            .cursor_col_resize()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
-                                    view.begin_pane_resize_drag(
-                                        pane_id.as_str(),
-                                        PaneResizeAxis::Horizontal,
-                                        PaneResizeEdge::Right,
-                                        event.position,
-                                    );
-                                    cx.stop_propagation();
-                                }),
-                            )
-                            .into_any_element(),
-                    );
-                }
-                if multi_pane
-                    && !pane_layout.extends_bottom_edge
-                    && let Some(gap_cells) = pane_layout.gaps.bottom_cells
-                {
-                    let gap_px = (gap_cells as f32) * pane_layout.cell_height;
-                    let divider_top = pane_frame_top + pane_frame_height + (gap_px * 0.5) - 0.5;
-                    let handle_height = gap_px.max(8.0);
-                    let handle_top = divider_top - ((handle_height - 1.0) * 0.5);
-                    let pane_id = pane.id.clone();
-
-                    // Visual states for bottom edge divider
-                    let is_dragging_bottom = self
-                        .pane_resize_drag
-                        .as_ref()
-                        .is_some_and(|d| d.pane_id == pane.id && d.edge == PaneResizeEdge::Bottom);
-                    let is_hovered_bottom = self
-                        .hovered_pane_divider
-                        .as_ref()
-                        .is_some_and(|h| h.pane_id == pane.id && h.edge == PaneResizeEdge::Bottom);
-                    let cursor_color_hsla: gpui::Hsla = colors.cursor.into();
-                    let blocked_color = gpui::Hsla {
-                        h: 0.0,
-                        s: 0.7,
-                        l: 0.5,
-                        a: 1.0,
-                    }; // Red
-                    let (bottom_divider_height, bottom_divider_color) =
-                        if is_dragging_bottom && self.pane_resize_blocked {
-                            (3.0, blocked_color)
-                        } else if is_dragging_bottom {
-                            (3.0, cursor_color_hsla)
-                        } else if is_hovered_bottom {
-                            (2.0, cursor_color_hsla)
-                        } else {
-                            (1.0, divider_color)
-                        };
-
-                    pane_dividers.push(
-                        div()
-                            .absolute()
-                            .left(px(pane_frame_left))
-                            .top(px(divider_top - (bottom_divider_height - 1.0) * 0.5))
-                            .w(px(pane_frame_width))
-                            .h(px(bottom_divider_height))
-                            .bg(bottom_divider_color)
-                            .into_any_element(),
-                    );
-                    pane_resize_handles.push(
-                        div()
-                            .id(pane.cached_element_ids.resize_handle_bottom.clone())
-                            .absolute()
-                            .left(px(pane_frame_left))
-                            .top(px(handle_top))
-                            .w(px(pane_frame_width))
-                            .h(px(handle_height))
-                            .cursor_row_resize()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
-                                    view.begin_pane_resize_drag(
-                                        pane_id.as_str(),
-                                        PaneResizeAxis::Vertical,
-                                        PaneResizeEdge::Bottom,
-                                        event.position,
-                                    );
-                                    cx.stop_propagation();
-                                }),
-                            )
-                            .into_any_element(),
-                    );
-                }
-
                 let link_hovered = is_active_pane && self.hovered_link.is_some();
                 pane_layers.push(
                     div()
@@ -2674,9 +2538,10 @@ impl Render for TerminalView {
                 );
 
                 if multi_pane && pane_active_border_alpha > f32::EPSILON {
-                    let mut accent = blend_rgb_only(colors.cursor, colors.foreground, 0.18);
-                    accent.a = self.scaled_chrome_alpha(pane_active_border_alpha);
-                    let accent_hsla: gpui::Hsla = accent.into();
+                    let mut border = blend_rgb_only(colors.cursor, colors.foreground, 0.32);
+                    border.a =
+                        self.scaled_chrome_alpha((pane_active_border_alpha * 0.72).max(0.16));
+                    let border_hsla: gpui::Hsla = border.into();
                     pane_focus_accents.push(
                         div()
                             .id(pane.cached_element_ids.focus_accent.clone())
@@ -2686,7 +2551,7 @@ impl Render for TerminalView {
                             .w(px(pane_frame_width))
                             .h(px(pane_frame_height))
                             .border_1()
-                            .border_color(accent_hsla)
+                            .border_color(border_hsla)
                             .into_any_element(),
                     );
                 }
@@ -2713,6 +2578,98 @@ impl Render for TerminalView {
                             .into_any_element(),
                     );
                 }
+            }
+
+            for divider in pane_divider_layouts {
+                let is_dragging = self.pane_resize_drag.as_ref().is_some_and(|drag| {
+                    drag.pane_id == divider.pane_id && drag.edge == divider.edge
+                });
+                let is_hovered = self.hovered_pane_divider.as_ref().is_some_and(|hover| {
+                    hover.pane_id == divider.pane_id && hover.edge == divider.edge
+                });
+                let pane_id = divider.pane_id.clone();
+                let axis = divider.axis;
+                let edge = divider.edge;
+                let cursor_color_hsla: gpui::Hsla = colors.cursor.into();
+                let blocked_color = gpui::Hsla {
+                    h: 0.1,
+                    s: 0.88,
+                    l: 0.58,
+                    a: 0.96,
+                };
+                let track_thickness = if is_dragging && self.pane_resize_blocked {
+                    4.0
+                } else if is_dragging {
+                    3.0
+                } else if is_hovered {
+                    2.0
+                } else {
+                    1.0
+                };
+                let track_color = if is_dragging && self.pane_resize_blocked {
+                    blocked_color
+                } else if is_dragging || is_hovered {
+                    cursor_color_hsla
+                } else {
+                    divider_line_color
+                };
+
+                pane_dividers.push(
+                    div()
+                        .absolute()
+                        .left(px(if divider.axis == PaneResizeAxis::Horizontal {
+                            divider.line_frame.origin_x
+                                - ((track_thickness - divider.line_frame.width) * 0.5)
+                        } else {
+                            divider.line_frame.origin_x
+                        }))
+                        .top(px(if divider.axis == PaneResizeAxis::Vertical {
+                            divider.line_frame.origin_y
+                                - ((track_thickness - divider.line_frame.height) * 0.5)
+                        } else {
+                            divider.line_frame.origin_y
+                        }))
+                        .w(px(if divider.axis == PaneResizeAxis::Horizontal {
+                            track_thickness
+                        } else {
+                            divider.line_frame.width
+                        }))
+                        .h(px(if divider.axis == PaneResizeAxis::Vertical {
+                            track_thickness
+                        } else {
+                            divider.line_frame.height
+                        }))
+                        .bg(track_color)
+                        .into_any_element(),
+                );
+                pane_resize_handles.push(
+                    div()
+                        .id(divider.handle_id.clone())
+                        .absolute()
+                        .left(px(divider.hit_frame.origin_x))
+                        .top(px(divider.hit_frame.origin_y))
+                        .w(px(divider.hit_frame.width))
+                        .h(px(divider.hit_frame.height))
+                        .when(axis == PaneResizeAxis::Horizontal, |el| {
+                            el.cursor_col_resize()
+                        })
+                        .when(axis == PaneResizeAxis::Vertical, |el| {
+                            el.cursor_row_resize()
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+                                view.begin_pane_resize_drag(
+                                    pane_id.as_str(),
+                                    axis,
+                                    edge,
+                                    event.position,
+                                );
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .into_any_element(),
+                );
             }
         }
 

@@ -122,7 +122,7 @@ impl TerminalView {
                                 .text_color(palette.close_button_hover_text)
                         })
                         .cursor_pointer()
-                        .child("PIN"),
+                        .child("📌"),
                 )
                 .into_any_element();
         }

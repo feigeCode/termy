@@ -180,12 +180,28 @@ impl TerminalView {
     }
 
     pub(in super::super) fn sync_native_tab_pane_geometry(
-        tab: &mut TerminalTab,
+        &mut self,
+        tab_id: TabId,
         cols: u16,
         rows: u16,
-    ) {
+    ) -> bool {
+        if self.native_pane_zoom_snapshots.contains_key(&tab_id) {
+            return false;
+        }
+        if self.ensure_native_layout_tree_for_tab_id(tab_id)
+            && self.apply_native_layout_tree_to_tab(tab_id, cols, rows)
+        {
+            return true;
+        }
+
+        let Some(tab_index) = self.tab_index_by_id(tab_id) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(tab_index) else {
+            return false;
+        };
         if tab.panes.is_empty() {
-            return;
+            return false;
         }
 
         let cols = cols.max(1);
@@ -198,7 +214,7 @@ impl TerminalView {
                 only.width = cols;
                 only.height = rows;
             }
-            return;
+            return true;
         }
 
         let old_cols = tab
@@ -248,6 +264,7 @@ impl TerminalView {
             pane.width = horizontal.end.saturating_sub(horizontal.start).max(1);
             pane.height = vertical.end.saturating_sub(vertical.start).max(1);
         }
+        false
     }
 
     pub(in super::super) fn should_emit_tmux_resize_error_toast(&mut self, now: Instant) -> bool {

@@ -349,6 +349,7 @@ impl TerminalView {
         let removed_agent_snapshot = self.agent_thread_archive_snapshot_for_tab(index);
         self.tabs.remove(index);
         self.native_pane_zoom_snapshots.remove(&removed_tab_id);
+        self.native_pane_layout_trees.remove(&removed_tab_id);
         self.mark_tab_strip_layout_dirty();
         if let Some((thread_id, title, current_command, status_label, status_detail)) =
             removed_agent_snapshot
@@ -745,6 +746,9 @@ impl TerminalView {
             tab.panes = panes;
             tab.active_pane_id = snapshot.active_pane_id;
             tab.assert_active_pane_invariant();
+            if let Some(layout_tree) = snapshot.layout_tree {
+                self.native_pane_layout_trees.insert(tab_id, layout_tree);
+            }
 
             self.clear_selection();
             self.clear_hovered_link();
@@ -794,6 +798,7 @@ impl TerminalView {
         tab.panes = vec![active_pane];
         tab.active_pane_id = active_pane_id.clone();
         tab.assert_active_pane_invariant();
+        let layout_tree = self.native_pane_layout_trees.remove(&tab_id);
 
         self.native_pane_zoom_snapshots.insert(
             tab_id,
@@ -802,6 +807,7 @@ impl TerminalView {
                 active_pane_geometry: active_geometry,
                 active_pane_id,
                 active_original_index: active_index,
+                layout_tree,
             },
         );
 
@@ -974,8 +980,37 @@ impl TerminalView {
         };
 
         tab.panes.insert(active_index + 1, split_pane);
-        tab.active_pane_id = pane_id;
+        tab.active_pane_id = pane_id.clone();
         tab.assert_active_pane_invariant();
+        let tab_id = tab.id;
+        let max_cols = tab
+            .panes
+            .iter()
+            .map(|pane| pane.left.saturating_add(pane.width))
+            .max()
+            .unwrap_or(split_size.2)
+            .max(1);
+        let max_rows = tab
+            .panes
+            .iter()
+            .map(|pane| pane.top.saturating_add(pane.height))
+            .max()
+            .unwrap_or(split_size.3)
+            .max(1);
+        if self.ensure_native_layout_tree_for_tab_id(tab_id)
+            && let Some(tree) = self.native_pane_layout_trees.get_mut(&tab_id)
+        {
+            let _ = Self::native_replace_leaf_with_split(
+                &mut tree.root,
+                active_pane_id.as_str(),
+                match axis {
+                    NativeSplitAxis::Vertical => PaneResizeAxis::Horizontal,
+                    NativeSplitAxis::Horizontal => PaneResizeAxis::Vertical,
+                },
+                pane_id.as_str(),
+            );
+            self.apply_native_layout_tree_to_tab(tab_id, max_cols, max_rows);
+        }
         self.clear_selection();
         self.clear_hovered_link();
         self.schedule_persist_native_workspace();
@@ -1265,16 +1300,68 @@ impl TerminalView {
 
     fn native_close_active_pane(&mut self, cx: &mut Context<Self>) -> bool {
         self.clear_native_zoom_snapshot_for_active_tab();
-        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
             return false;
         };
         if tab.panes.len() <= 1 {
             return false;
         }
+        let tab_id = tab.id;
         let Some(active_index) = tab.active_pane_index() else {
             return false;
         };
+        let active_pane_id = tab.active_pane_id.clone();
 
+        if self.ensure_native_layout_tree_for_tab_id(tab_id)
+            && let Some(tree) = self.native_pane_layout_trees.remove(&tab_id)
+        {
+            let (next_root, next_focus_id, removed) =
+                Self::native_remove_leaf_from_tree(tree.root, active_pane_id.as_str());
+            if removed && let Some(next_root) = next_root {
+                self.native_pane_layout_trees
+                    .insert(tab_id, NativePaneLayoutTree { root: next_root });
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    tab.panes.retain(|pane| pane.id != active_pane_id);
+                    let cols = tab
+                        .panes
+                        .iter()
+                        .map(|pane| pane.left.saturating_add(pane.width))
+                        .max()
+                        .unwrap_or(1)
+                        .max(1);
+                    let rows = tab
+                        .panes
+                        .iter()
+                        .map(|pane| pane.top.saturating_add(pane.height))
+                        .max()
+                        .unwrap_or(1)
+                        .max(1);
+                    let _ = tab;
+                    self.apply_native_layout_tree_to_tab(tab_id, cols, rows);
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.active_pane_id = next_focus_id
+                            .or_else(|| tab.panes.first().map(|pane| pane.id.clone()))
+                            .unwrap_or_default();
+                        if tab.panes.len() == 1
+                            && let Some(remaining_pane) = tab.panes.first_mut()
+                        {
+                            remaining_pane.pane_zoom_steps = 0;
+                        }
+                        tab.assert_active_pane_invariant();
+                    }
+                    self.clear_selection();
+                    self.clear_hovered_link();
+                    self.clear_terminal_scrollbar_marker_cache();
+                    self.schedule_persist_native_workspace();
+                    cx.notify();
+                    return true;
+                }
+            }
+        }
+
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return false;
+        };
         let removed = tab.panes.remove(active_index);
         Self::native_close_expand_neighbors(&mut tab.panes, &removed);
 

@@ -505,9 +505,9 @@ impl TerminalView {
             return Err("This thread's session is no longer open".to_string());
         };
 
-        if self.tabs.get(tab_index).is_some_and(|tab| tab.pinned) {
-            return Err("Pinned tabs must be unpinned before closing".to_string());
-        }
+        // if self.tabs.get(tab_index).is_some_and(|tab| tab.pinned) {
+        //     return Err("Pinned tabs must be unpinned before closing".to_string());
+        //  }
 
         if self.runtime_kind() == RuntimeKind::Native && self.tabs.len() <= 1 {
             return Err("Can't close the only open tab".to_string());

@@ -313,96 +313,24 @@ impl TerminalView {
     }
 
     fn pane_resize_hit_test(&self, position: gpui::Point<Pixels>) -> Option<PaneResizeDragState> {
-        const DIVIDER_HIT_MARGIN_PX: f32 = 8.0;
-
         let tab = self.tabs.get(self.active_tab)?;
-        let max_right_cells = tab
-            .panes
-            .iter()
-            .map(|pane| u32::from(pane.left).saturating_add(u32::from(pane.width)))
-            .max()
-            .unwrap_or(0);
-        let max_bottom_cells = tab
-            .panes
-            .iter()
-            .map(|pane| u32::from(pane.top).saturating_add(u32::from(pane.height)))
-            .max()
-            .unwrap_or(0);
-        let (padding_x, padding_y) = self.effective_terminal_padding();
-        let layout_cell_size = self.layout_cell_size();
-        let layout_cell_width: f32 = layout_cell_size.width.into();
-        let layout_cell_height: f32 = layout_cell_size.height.into();
         let (x, y) = self.terminal_content_position(position);
-        let mut best: Option<(f32, PaneResizeAxis, PaneResizeEdge, String)> = None;
-
-        for pane in &tab.panes {
-            let size = pane.terminal.size();
-            if size.cols == 0 || size.rows == 0 {
-                continue;
-            }
-
-            if layout_cell_width <= f32::EPSILON || layout_cell_height <= f32::EPSILON {
-                continue;
-            }
-
-            let left = padding_x + (f32::from(pane.left) * layout_cell_width);
-            let top = padding_y + (f32::from(pane.top) * layout_cell_height);
-            let right = left + (f32::from(pane.width) * layout_cell_width);
-            let bottom = top + (f32::from(pane.height) * layout_cell_height);
-            let inside = x >= left && x <= right && y >= top && y <= bottom;
-            if !inside {
-                continue;
-            }
-
-            let near_left = (x - left).abs() <= DIVIDER_HIT_MARGIN_PX && pane.left > 0;
-            let near_right = (x - right).abs() <= DIVIDER_HIT_MARGIN_PX
-                && (u32::from(pane.left) + u32::from(pane.width)) < max_right_cells;
-            let near_top = (y - top).abs() <= DIVIDER_HIT_MARGIN_PX && pane.top > 0;
-            let near_bottom = (y - bottom).abs() <= DIVIDER_HIT_MARGIN_PX
-                && (u32::from(pane.top) + u32::from(pane.height)) < max_bottom_cells;
-
-            if near_left || near_right {
-                let distance = (x - if near_left { left } else { right }).abs();
-                let edge = if near_left {
-                    PaneResizeEdge::Left
-                } else {
-                    PaneResizeEdge::Right
-                };
-                let candidate = (distance, PaneResizeAxis::Horizontal, edge, pane.id.clone());
-                if best
-                    .as_ref()
-                    .map(|current| candidate.0 < current.0)
-                    .unwrap_or(true)
-                {
-                    best = Some(candidate);
-                }
-            }
-            if near_top || near_bottom {
-                let distance = (y - if near_top { top } else { bottom }).abs();
-                let edge = if near_top {
-                    PaneResizeEdge::Top
-                } else {
-                    PaneResizeEdge::Bottom
-                };
-                let candidate = (distance, PaneResizeAxis::Vertical, edge, pane.id.clone());
-                if best
-                    .as_ref()
-                    .map(|current| candidate.0 < current.0)
-                    .unwrap_or(true)
-                {
-                    best = Some(candidate);
-                }
-            }
-        }
-
-        best.map(|(_, axis, edge, pane_id)| PaneResizeDragState {
-            pane_id,
-            axis,
-            edge,
-            start_x: x,
-            start_y: y,
-            applied_steps: 0,
-        })
+        self.native_pane_dividers(tab)
+            .into_iter()
+            .filter_map(|divider| {
+                divider
+                    .hit_distance(x, y)
+                    .map(|distance| (distance, divider))
+            })
+            .min_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, divider)| PaneResizeDragState {
+                pane_id: divider.pane_id,
+                axis: divider.axis,
+                edge: divider.edge,
+                start_x: x,
+                start_y: y,
+                applied_steps: 0,
+            })
     }
 
     pub(in crate::terminal_view) fn native_resize_pane_step(
@@ -422,26 +350,97 @@ impl TerminalView {
             return PaneResizeResult::NoChange;
         }
 
+        let (
+            tab_id,
+            total_cols,
+            total_rows,
+            target_id,
+            target_left,
+            target_top,
+            target_width,
+            target_height,
+        ) = {
+            let Some(tab) = self.tabs.get(self.active_tab) else {
+                return PaneResizeResult::NoChange;
+            };
+            let Some(target_index) = tab.panes.iter().position(|pane| pane.id == pane_id) else {
+                return PaneResizeResult::NoChange;
+            };
+            let Some(target) = tab.panes.get(target_index) else {
+                return PaneResizeResult::NoChange;
+            };
+            (
+                tab.id,
+                tab.panes
+                    .iter()
+                    .map(|pane| pane.left.saturating_add(pane.width))
+                    .max()
+                    .unwrap_or(target.width)
+                    .max(1),
+                tab.panes
+                    .iter()
+                    .map(|pane| pane.top.saturating_add(pane.height))
+                    .max()
+                    .unwrap_or(target.height)
+                    .max(1),
+                target.id.clone(),
+                target.left,
+                target.top,
+                target.width,
+                target.height,
+            )
+        };
+
+        if self.ensure_native_layout_tree_for_tab_id(tab_id)
+            && let Some(tree) = self.native_pane_layout_trees.get_mut(&tab_id)
+        {
+            let min_extent = match axis {
+                PaneResizeAxis::Horizontal => Self::native_min_extent_allowed(
+                    total_cols,
+                    Self::native_tree_leaf_count(&tree.root),
+                    Self::native_pane_min_extent_for_axis(PaneResizeAxis::Horizontal),
+                ),
+                PaneResizeAxis::Vertical => Self::native_min_extent_allowed(
+                    total_rows,
+                    Self::native_tree_leaf_count(&tree.root),
+                    Self::native_pane_min_extent_for_axis(PaneResizeAxis::Vertical),
+                ),
+            };
+            let result = Self::native_adjust_tree_split(
+                &mut tree.root,
+                target_id.as_str(),
+                axis,
+                edge,
+                divider_delta,
+                NativePaneRect {
+                    left: 0,
+                    top: 0,
+                    width: total_cols,
+                    height: total_rows,
+                },
+                min_extent,
+            );
+            if result != PaneResizeResult::NoChange {
+                self.apply_native_layout_tree_to_tab(tab_id, total_cols, total_rows);
+                return result;
+            }
+        }
+
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return PaneResizeResult::NoChange;
         };
-        let Some(target_index) = tab.panes.iter().position(|pane| pane.id == pane_id) else {
-            return PaneResizeResult::NoChange;
-        };
-        let Some(target) = tab.panes.get(target_index) else {
-            return PaneResizeResult::NoChange;
-        };
+        debug_assert_eq!(tab.id, tab_id);
 
         match axis {
             PaneResizeAxis::Horizontal => {
                 let boundary = match edge {
-                    PaneResizeEdge::Left => target.left,
-                    PaneResizeEdge::Right => target.left.saturating_add(target.width),
+                    PaneResizeEdge::Left => target_left,
+                    PaneResizeEdge::Right => target_left.saturating_add(target_width),
                     PaneResizeEdge::Top | PaneResizeEdge::Bottom => {
                         return PaneResizeResult::NoChange;
                     }
                 };
-                let mut spans = vec![(target.top, target.top.saturating_add(target.height))];
+                let mut spans = vec![(target_top, target_top.saturating_add(target_height))];
                 let mut left_indices = Vec::<usize>::new();
                 let mut right_indices = Vec::<usize>::new();
 
@@ -523,13 +522,13 @@ impl TerminalView {
             }
             PaneResizeAxis::Vertical => {
                 let boundary = match edge {
-                    PaneResizeEdge::Top => target.top,
-                    PaneResizeEdge::Bottom => target.top.saturating_add(target.height),
+                    PaneResizeEdge::Top => target_top,
+                    PaneResizeEdge::Bottom => target_top.saturating_add(target_height),
                     PaneResizeEdge::Left | PaneResizeEdge::Right => {
                         return PaneResizeResult::NoChange;
                     }
                 };
-                let mut spans = vec![(target.left, target.left.saturating_add(target.width))];
+                let mut spans = vec![(target_left, target_left.saturating_add(target_width))];
                 let mut top_indices = Vec::<usize>::new();
                 let mut bottom_indices = Vec::<usize>::new();
 

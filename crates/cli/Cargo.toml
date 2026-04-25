@@ -1,6 +1,6 @@
 [package]
 name = "termy_cli"
-version = "0.1.78"
+version = "0.1.79"
 edition = "2024"
 
 [lints]
@@ -16,6 +16,9 @@ dirs = "6.0"
 anyhow = "1.0"
 ratatui = "0.29"
 crossterm = "0.28"
+semver = "1.0"
+serde_json = "1.0"
+sha2 = "0.10"
 termy_config_core = { path = "../config_core" }
 termy_command_core = { path = "../command_core" }
 termy_cli_install_core = { path = "../cli_install_core" }

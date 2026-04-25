@@ -1,10 +1,13 @@
 use crate::config;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use termy_themes::{Rgb8, ThemeColors, normalize_theme_id};
+use termy_themes::{
+    ThemeColors, ThemeRegistryIndex, normalize_theme_id, parse_theme_colors_json, registry_file_url,
+};
 
 const DEFAULT_THEME_STORE_API_URL: &str = "https://api.termy.run";
-const DEFAULT_THEME_DEEPLINK_API_URL: &str = "https://termy.run/theme-api";
+const DEFAULT_THEME_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/termy-org/themes/main/index.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ThemeStoreTheme {
@@ -41,15 +44,23 @@ pub(crate) fn theme_store_api_base_url() -> String {
     std::env::var("THEME_STORE_API_URL").unwrap_or_else(|_| DEFAULT_THEME_STORE_API_URL.into())
 }
 
-/// Fetches themes from the API. Returns `(themes, from_cache)` where `from_cache` is `true`
-/// when the API was unreachable and a previously saved cache was used as a fallback.
-pub(crate) fn fetch_theme_store_themes_blocking(
-    api_base: &str,
-) -> Result<(Vec<ThemeStoreTheme>, bool), String> {
-    let base = api_base.trim_end_matches('/');
-    let url = format!("{base}/themes");
+pub(crate) fn theme_store_registry_url() -> String {
+    std::env::var("TERMY_THEME_REGISTRY_URL")
+        .or_else(|_| std::env::var("THEME_STORE_REGISTRY_URL"))
+        .unwrap_or_else(|_| DEFAULT_THEME_REGISTRY_URL.into())
+}
 
-    let fetch_result = ureq::get(&url).set("Accept", "application/json").call();
+/// Fetches themes from the repo registry. Returns `(themes, from_cache)` where `from_cache`
+/// is `true` when the registry was unreachable and a saved cache was used as a fallback.
+pub(crate) fn fetch_theme_store_themes_blocking(
+    registry_url: &str,
+) -> Result<(Vec<ThemeStoreTheme>, bool), String> {
+    let fetch_url = theme_registry_fetch_url(registry_url);
+    let fetch_result = ureq::get(&fetch_url)
+        .set("Accept", "application/json")
+        .set("Cache-Control", "no-cache")
+        .set("Pragma", "no-cache")
+        .call();
 
     let response = match fetch_result {
         Ok(response) => response,
@@ -63,31 +74,25 @@ pub(crate) fn fetch_theme_store_themes_blocking(
 
     let raw = response
         .into_string()
-        .map_err(|error| format!("Invalid theme store response: {error}"))?;
-
-    let payload: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("Invalid theme store response: {error}"))?;
-
-    let themes = payload
-        .as_array()
-        .ok_or_else(|| "Theme store response must be a JSON array".to_string())?;
-
-    let mut parsed = Vec::with_capacity(themes.len());
-    for theme in themes {
-        if let Some(parsed_theme) = parse_theme_value(theme) {
-            parsed.push(parsed_theme);
-        }
-    }
-
-    parsed.sort_unstable_by(|left, right| {
-        left.name
-            .to_ascii_lowercase()
-            .cmp(&right.name.to_ascii_lowercase())
-    });
+        .map_err(|error| format!("Invalid theme registry response: {error}"))?;
+    let parsed = parse_theme_store_payload(&raw, registry_url)?;
 
     save_theme_store_cache(&raw);
 
     Ok((parsed, false))
+}
+
+fn theme_registry_fetch_url(registry_url: &str) -> String {
+    if !registry_url.contains("raw.githubusercontent.com") {
+        return registry_url.to_string();
+    }
+
+    let cache_buster = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let separator = if registry_url.contains('?') { '&' } else { '?' };
+    format!("{registry_url}{separator}termy_cache_bust={cache_buster}")
 }
 
 fn theme_store_cache_path() -> Option<PathBuf> {
@@ -120,53 +125,22 @@ fn save_theme_store_cache(raw_json: &str) {
 fn load_theme_store_cache() -> Option<Vec<ThemeStoreTheme>> {
     let path = theme_store_cache_path()?;
     let contents = std::fs::read_to_string(path).ok()?;
-    let payload: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    let themes = payload.as_array()?;
-    let mut parsed: Vec<ThemeStoreTheme> = themes.iter().filter_map(parse_theme_value).collect();
+    let registry_url = theme_store_registry_url();
+    let parsed = parse_theme_store_payload(&contents, &registry_url).ok()?;
     if parsed.is_empty() {
         return None;
     }
-    parsed.sort_unstable_by(|left, right| {
-        left.name
-            .to_ascii_lowercase()
-            .cmp(&right.name.to_ascii_lowercase())
-    });
     Some(parsed)
 }
 
 pub(crate) fn fetch_theme_for_deeplink_blocking(slug: &str) -> Result<ThemeStoreTheme, String> {
     let slug = normalize_slug(slug)?;
-    let base = std::env::var("THEME_STORE_DEEPLINK_API_URL")
-        .unwrap_or_else(|_| DEFAULT_THEME_DEEPLINK_API_URL.into());
-    let url = format!("{}/themes/{}", base.trim_end_matches('/'), slug);
-    let response = ureq::get(&url)
-        .set("Accept", "application/json")
-        .call()
-        .map_err(|error| format!("Failed to fetch theme '{slug}': {error}"))?;
-
-    let payload: serde_json::Value = response
-        .into_json()
-        .map_err(|error| format!("Invalid theme response for '{slug}': {error}"))?;
-
-    parse_theme_value(&payload)
-        .ok_or_else(|| format!("Theme response for '{slug}' is missing required fields"))
-}
-
-pub(crate) fn fetch_auth_user_blocking(
-    api_base: &str,
-    session_token: &str,
-) -> Result<ThemeStoreAuthUser, String> {
-    let base = api_base.trim_end_matches('/');
-    let url = format!("{base}/auth/me");
-    let response = ureq::get(&url)
-        .set("Accept", "application/json")
-        .set("Authorization", &format!("Bearer {}", session_token.trim()))
-        .call()
-        .map_err(|error| format!("Failed to resolve authenticated user: {error}"))?;
-
-    response
-        .into_json::<ThemeStoreAuthUser>()
-        .map_err(|error| format!("Invalid authenticated user response: {error}"))
+    let registry_url = theme_store_registry_url();
+    let (themes, _) = fetch_theme_store_themes_blocking(&registry_url)?;
+    themes
+        .into_iter()
+        .find(|theme| theme.slug.eq_ignore_ascii_case(&slug))
+        .ok_or_else(|| format!("Theme '{slug}' was not found in the theme registry"))
 }
 
 pub(crate) fn logout_auth_session_blocking(
@@ -184,28 +158,6 @@ pub(crate) fn logout_auth_session_blocking(
         Err(ureq::Error::Status(401, _)) => Ok(()),
         Err(error) => Err(format!("Failed to logout from theme store: {error}")),
     }
-}
-
-pub(crate) fn load_auth_session() -> Option<ThemeStoreAuthSession> {
-    let path = auth_session_path()?;
-    let contents = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<ThemeStoreAuthSession>(&contents).ok()
-}
-
-pub(crate) fn persist_auth_session(session: &ThemeStoreAuthSession) -> Result<(), String> {
-    let Some(path) = auth_session_path() else {
-        return Err("Config path unavailable".to_string());
-    };
-    let Some(parent) = path.parent() else {
-        return Err("Invalid auth session path".to_string());
-    };
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("Failed to create auth session directory: {error}"))?;
-    let contents = serde_json::to_string_pretty(session)
-        .map_err(|error| format!("Failed to serialize auth session: {error}"))?;
-    std::fs::write(path, contents)
-        .map_err(|error| format!("Failed to write auth session: {error}"))?;
-    Ok(())
 }
 
 pub(crate) fn clear_auth_session() -> Result<(), String> {
@@ -441,61 +393,44 @@ fn parse_theme_value(theme: &serde_json::Value) -> Option<ThemeStoreTheme> {
     })
 }
 
-fn parse_theme_colors_json(contents: &str) -> Result<ThemeColors, String> {
-    let json: serde_json::Value =
-        serde_json::from_str(contents).map_err(|error| format!("Invalid JSON: {error}"))?;
-    let object = json
-        .as_object()
-        .ok_or_else(|| "Theme JSON must be an object".to_string())?;
+fn parse_theme_store_payload(
+    raw_json: &str,
+    registry_url: &str,
+) -> Result<Vec<ThemeStoreTheme>, String> {
+    let payload: serde_json::Value = serde_json::from_str(raw_json)
+        .map_err(|error| format!("Invalid theme registry response: {error}"))?;
 
-    let ansi = [
-        parse_required_color(object, "black")?,
-        parse_required_color(object, "red")?,
-        parse_required_color(object, "green")?,
-        parse_required_color(object, "yellow")?,
-        parse_required_color(object, "blue")?,
-        parse_required_color(object, "magenta")?,
-        parse_required_color(object, "cyan")?,
-        parse_required_color(object, "white")?,
-        parse_required_color(object, "bright_black")?,
-        parse_required_color(object, "bright_red")?,
-        parse_required_color(object, "bright_green")?,
-        parse_required_color(object, "bright_yellow")?,
-        parse_required_color(object, "bright_blue")?,
-        parse_required_color(object, "bright_magenta")?,
-        parse_required_color(object, "bright_cyan")?,
-        parse_required_color(object, "bright_white")?,
-    ];
+    let mut parsed: Vec<ThemeStoreTheme> = if payload.is_array() {
+        payload
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(parse_theme_value)
+            .collect()
+    } else {
+        let index: ThemeRegistryIndex = serde_json::from_value(payload)
+            .map_err(|error| format!("Invalid theme registry index: {error}"))?;
+        index
+            .themes
+            .into_iter()
+            .filter_map(|theme| {
+                let slug = normalize_slug(&theme.slug).ok()?;
+                Some(ThemeStoreTheme {
+                    name: theme.name.trim().to_string(),
+                    slug,
+                    description: theme.description,
+                    latest_version: Some(theme.latest_version),
+                    file_url: Some(registry_file_url(registry_url, &theme.file)),
+                })
+            })
+            .filter(|theme| !theme.name.is_empty())
+            .collect()
+    };
 
-    Ok(ThemeColors {
-        ansi,
-        foreground: parse_required_color(object, "foreground")?,
-        background: parse_required_color(object, "background")?,
-        cursor: parse_required_color(object, "cursor")?,
-    })
-}
-
-fn parse_required_color(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Rgb8, String> {
-    let value = object
-        .get(key)
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| format!("Theme JSON is missing '{key}'"))?;
-
-    parse_hex_color(value).ok_or_else(|| format!("Theme color '{key}' must be a #RRGGBB hex"))
-}
-
-fn parse_hex_color(value: &str) -> Option<Rgb8> {
-    let hex = value.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-
-    Some(Rgb8 {
-        r: u8::from_str_radix(&hex[0..2], 16).ok()?,
-        g: u8::from_str_radix(&hex[2..4], 16).ok()?,
-        b: u8::from_str_radix(&hex[4..6], 16).ok()?,
-    })
+    parsed.sort_unstable_by(|left: &ThemeStoreTheme, right: &ThemeStoreTheme| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+    Ok(parsed)
 }

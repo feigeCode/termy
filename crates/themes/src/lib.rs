@@ -13,7 +13,10 @@ mod tokyo_night;
 mod tomorrow_night;
 
 use std::sync::{OnceLock, RwLock};
-pub use termy_theme_core::{Rgb8, ThemeColors, normalize_theme_id};
+pub use termy_theme_core::{
+    Rgb8, ThemeColors, ThemeRegistryEntry, ThemeRegistryIndex, normalize_theme_id,
+    parse_theme_colors_json, registry_file_url,
+};
 
 pub trait ThemeProvider: Send + Sync {
     fn theme(&self, theme_id: &str) -> Option<ThemeColors>;

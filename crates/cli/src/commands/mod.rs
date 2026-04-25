@@ -8,6 +8,7 @@ pub mod list_themes;
 pub mod prettify_config;
 pub mod providers;
 pub mod show_config;
+pub mod theme_repo;
 pub mod tui;
 pub mod update;
 pub mod validate_config;

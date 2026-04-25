@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{env, net::SocketAddr, sync::Arc, time::Duration as StdDuration};
 
 use aws_config::BehaviorVersion;
@@ -18,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
+use termy_theme_core::{ThemeRegistryIndex, registry_file_url};
 use thiserror::Error;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
@@ -26,6 +29,8 @@ use uuid::Uuid;
 
 const SESSION_COOKIE_NAME: &str = "theme_store_session";
 const DEFAULT_THEME_FILE_NAME: &str = "theme.json";
+const DEFAULT_THEME_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/termy-org/themes/main/index.json";
 
 #[derive(Clone)]
 struct AppState {
@@ -35,6 +40,7 @@ struct AppState {
     http_client: Client,
     s3_client: S3Client,
     theme_schema: Arc<JSONSchema>,
+    theme_registry_url: String,
 }
 
 #[derive(Clone)]
@@ -89,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let storage = StorageConfig {
-        bucket: env::var("S3_BUCKET").map_err(|_| anyhow::anyhow!("S3_BUCKET must be set"))?,
+        bucket: env::var("S3_BUCKET").unwrap_or_default(),
         key_prefix: env::var("S3_KEY_PREFIX").unwrap_or_else(|_| "themes".to_string()),
         presign_ttl_seconds: env::var("S3_PRESIGN_TTL_SECONDS")
             .ok()
@@ -98,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(900),
     };
 
-    let s3_region = env::var("S3_REGION").map_err(|_| anyhow::anyhow!("S3_REGION must be set"))?;
+    let s3_region = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
     let s3_endpoint = env::var("S3_ENDPOINT").ok();
 
     let mut aws_loader =
@@ -135,6 +141,9 @@ async fn main() -> anyhow::Result<()> {
         http_client: Client::builder().build()?,
         s3_client,
         theme_schema,
+        theme_registry_url: env::var("TERMY_THEME_REGISTRY_URL")
+            .or_else(|_| env::var("THEME_STORE_REGISTRY_URL"))
+            .unwrap_or_else(|_| DEFAULT_THEME_REGISTRY_URL.to_string()),
     };
     let app = build_router(state);
 
@@ -169,11 +178,14 @@ fn build_router(state: AppState) -> Router {
             get(list_plugin_versions).post(publish_plugin_version),
         )
         .route("/themes/me", get(list_my_themes))
-        .route("/themes", get(list_themes).post(create_theme))
-        .route("/themes/{slug}", get(get_theme).patch(update_theme))
+        .route("/themes", get(list_themes).post(deprecated_theme_write))
+        .route(
+            "/themes/{slug}",
+            get(get_theme).patch(deprecated_theme_write),
+        )
         .route(
             "/themes/{slug}/versions",
-            get(list_theme_versions).post(publish_theme_version),
+            get(list_theme_versions).post(deprecated_theme_write),
         )
         .layer(cors)
         .with_state(state)
@@ -249,6 +261,52 @@ struct ThemeVersion {
     created_by: Option<String>,
     published_at: DateTime<Utc>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RegistryApiTheme {
+    id: Uuid,
+    name: String,
+    slug: String,
+    description: String,
+    latest_version: Option<String>,
+    file_key: Option<String>,
+    file_url: Option<String>,
+    github_username_claim: String,
+    github_user_id_claim: Option<i64>,
+    is_public: bool,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryApiThemeVersion {
+    id: Uuid,
+    theme_id: Uuid,
+    version: String,
+    file_key: String,
+    file_url: Option<String>,
+    changelog: String,
+    checksum_sha256: Option<String>,
+    created_by: Option<String>,
+    published_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+struct RegistryApiSnapshot {
+    themes: Vec<RegistryApiTheme>,
+    versions: Vec<RegistryApiThemeVersion>,
+}
+
+impl RegistryApiSnapshot {
+    fn theme_id_for_slug(&self, slug: &str) -> Option<Uuid> {
+        self.themes
+            .iter()
+            .find(|theme| theme.slug.eq_ignore_ascii_case(slug))
+            .map(|theme| theme.id)
+    }
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -421,8 +479,8 @@ struct PublishPluginVersionRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ThemeWithVersionsResponse {
-    theme: Theme,
-    versions: Vec<ThemeVersion>,
+    theme: RegistryApiTheme,
+    versions: Vec<RegistryApiThemeVersion>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1124,86 +1182,30 @@ async fn fetch_plugin_by_slug(pool: &PgPool, slug: &str) -> Result<PluginRegistr
     Ok(plugin)
 }
 
-async fn list_themes(State(state): State<AppState>) -> Result<Json<Vec<Theme>>, ApiError> {
-    let mut themes = sqlx::query_as::<_, Theme>(
-        r#"
-        SELECT
-            id,
-            name,
-            slug,
-            description,
-            latest_version,
-            file_key,
-            github_username_claim,
-            github_user_id_claim,
-            is_public,
-            created_at,
-            updated_at
-        FROM theme
-        WHERE is_public = TRUE
-        ORDER BY created_at DESC
-        "#,
-    )
-    .fetch_all(&state.db)
-    .await?;
-
-    for theme in &mut themes {
-        attach_theme_file_url(&state, theme).await?;
-    }
-
-    Ok(Json(themes))
+async fn list_themes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<RegistryApiTheme>>, ApiError> {
+    let registry = fetch_theme_registry(&state).await?;
+    Ok(Json(registry.themes))
 }
 
 async fn list_my_themes(
     State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<Theme>>, ApiError> {
-    let auth_user = require_auth_user(&state, &headers).await?;
-
-    let mut themes = sqlx::query_as::<_, Theme>(
-        r#"
-        SELECT
-            id,
-            name,
-            slug,
-            description,
-            latest_version,
-            file_key,
-            github_username_claim,
-            github_user_id_claim,
-            is_public,
-            created_at,
-            updated_at
-        FROM theme
-        WHERE
-            github_user_id_claim = $1
-            OR (
-                github_user_id_claim IS NULL
-                AND lower(github_username_claim) = lower($2)
-            )
-        ORDER BY created_at DESC
-        "#,
-    )
-    .bind(auth_user.github_user_id)
-    .bind(auth_user.github_login)
-    .fetch_all(&state.db)
-    .await?;
-
-    for theme in &mut themes {
-        attach_theme_file_url(&state, theme).await?;
-    }
-
-    Ok(Json(themes))
+) -> Result<Json<Vec<RegistryApiTheme>>, ApiError> {
+    let registry = fetch_theme_registry(&state).await?;
+    Ok(Json(registry.themes))
 }
 
 async fn get_theme(
     Path(slug): Path<String>,
     State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Theme>, ApiError> {
-    let mut theme = fetch_theme_by_slug(&state.db, &slug).await?;
-    ensure_can_read_theme(&theme, &state, &headers).await?;
-    attach_theme_file_url(&state, &mut theme).await?;
+) -> Result<Json<RegistryApiTheme>, ApiError> {
+    let registry = fetch_theme_registry(&state).await?;
+    let theme = registry
+        .themes
+        .into_iter()
+        .find(|theme| theme.slug.eq_ignore_ascii_case(&slug))
+        .ok_or_else(|| ApiError::NotFound("theme not found".to_string()))?;
     Ok(Json(theme))
 }
 
@@ -1509,38 +1511,95 @@ async fn publish_theme_version(
 async fn list_theme_versions(
     Path(slug): Path<String>,
     State(state): State<AppState>,
-    headers: HeaderMap,
 ) -> Result<Json<ThemeWithVersionsResponse>, ApiError> {
-    let mut theme = fetch_theme_by_slug(&state.db, &slug).await?;
-    ensure_can_read_theme(&theme, &state, &headers).await?;
+    let registry = fetch_theme_registry(&state).await?;
+    let theme_id = registry
+        .theme_id_for_slug(&slug)
+        .ok_or_else(|| ApiError::NotFound("theme not found".to_string()))?;
+    let versions = registry
+        .versions
+        .into_iter()
+        .filter(|version| version.theme_id == theme_id)
+        .collect::<Vec<_>>();
+    let theme = registry
+        .themes
+        .into_iter()
+        .find(|theme| theme.slug.eq_ignore_ascii_case(&slug))
+        .ok_or_else(|| ApiError::NotFound("theme not found".to_string()))?;
+    Ok(Json(ThemeWithVersionsResponse { theme, versions }))
+}
 
-    let mut versions = sqlx::query_as::<_, ThemeVersion>(
-        r#"
-        SELECT
-            id,
-            theme_id,
-            version,
-            file_key,
-            changelog,
-            checksum_sha256,
-            created_by,
-            published_at,
-            created_at
-        FROM theme_version
-        WHERE theme_id = $1
-        ORDER BY published_at DESC, created_at DESC
-        "#,
-    )
-    .bind(theme.id)
-    .fetch_all(&state.db)
-    .await?;
+async fn deprecated_theme_write() -> Result<Response, ApiError> {
+    let body = Json(ErrorBody {
+        error: "Theme publishing moved to the termy-org/themes GitHub repository. Use `termy-cli -export-theme` and open a pull request.".to_string(),
+    });
+    Ok((StatusCode::GONE, body).into_response())
+}
 
-    attach_theme_file_url(&state, &mut theme).await?;
-    for version in &mut versions {
-        attach_version_file_url(&state, version).await?;
+async fn fetch_theme_registry(state: &AppState) -> Result<RegistryApiSnapshot, ApiError> {
+    let response = state
+        .http_client
+        .get(&state.theme_registry_url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| ApiError::Storage(format!("failed to fetch theme registry: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(ApiError::Storage(format!(
+            "theme registry returned HTTP {}",
+            response.status()
+        )));
     }
 
-    Ok(Json(ThemeWithVersionsResponse { theme, versions }))
+    let index = response
+        .json::<ThemeRegistryIndex>()
+        .await
+        .map_err(|error| ApiError::Storage(format!("invalid theme registry JSON: {error}")))?;
+
+    let now = Utc::now();
+    let mut themes = Vec::new();
+    let mut versions = Vec::new();
+    for entry in index.themes {
+        let theme_id = Uuid::new_v4();
+        let file_url = registry_file_url(&state.theme_registry_url, &entry.file);
+        themes.push(RegistryApiTheme {
+            id: theme_id,
+            name: entry.name,
+            slug: entry.slug.clone(),
+            description: entry.description,
+            latest_version: Some(entry.latest_version.clone()),
+            file_key: Some(entry.file.clone()),
+            file_url: Some(file_url.clone()),
+            github_username_claim: "termy-org".to_string(),
+            github_user_id_claim: None,
+            is_public: true,
+            created_at: now,
+            updated_at: now,
+        });
+        versions.push(RegistryApiThemeVersion {
+            id: Uuid::new_v4(),
+            theme_id,
+            version: entry.latest_version,
+            file_key: entry.file,
+            file_url: Some(file_url),
+            changelog: String::new(),
+            checksum_sha256: entry.checksum_sha256,
+            created_by: Some("termy-org/themes".to_string()),
+            published_at: now,
+            created_at: now,
+        });
+    }
+
+    themes.sort_unstable_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then_with(|| left.slug.cmp(&right.slug))
+    });
+    versions.sort_unstable_by(|left, right| right.version.cmp(&left.version));
+
+    Ok(RegistryApiSnapshot { themes, versions })
 }
 
 async fn fetch_theme_by_slug(pool: &PgPool, slug: &str) -> Result<Theme, ApiError> {

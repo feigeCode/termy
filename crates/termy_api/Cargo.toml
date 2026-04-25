@@ -34,5 +34,6 @@ tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tower-http = { version = "0.6", features = ["cors"] }
+termy_theme_core = { path = "../theme_core" }
 url = "2.5"
 uuid = { version = "1.11", features = ["serde", "v4"] }

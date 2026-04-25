@@ -153,8 +153,7 @@ impl SettingsWindow {
             Self::build_searchable_setting_indices(&searchable_settings);
         let content_scroll_handle = ScrollHandle::new();
         let setting_scroll_anchors = Self::build_setting_scroll_anchors(&content_scroll_handle);
-        let theme_store_auth_session = theme_store::load_auth_session();
-        let mut view = Self {
+        let view = Self {
             active_section: SettingsSection::Appearance,
             config,
             config_path,
@@ -191,15 +190,12 @@ impl SettingsWindow {
             theme_store_loading: false,
             theme_store_error: None,
             theme_store_from_cache: false,
-            theme_store_auth_session,
+            theme_store_auth_session: None,
             theme_store_auth_loading: false,
             theme_store_auth_error: None,
             theme_store_installed_versions: theme_store::load_installed_theme_versions(),
         };
         view.focus_handle.focus(window, cx);
-        if view.theme_store_auth_session.is_some() {
-            view.refresh_theme_store_auth_user(cx);
-        }
 
         #[cfg(not(test))]
         {
@@ -276,6 +272,10 @@ impl SettingsWindow {
         theme_store::theme_store_api_base_url()
     }
 
+    fn theme_store_registry_url() -> String {
+        theme_store::theme_store_registry_url()
+    }
+
     fn ensure_theme_store_themes_loaded(&mut self, cx: &mut Context<Self>) {
         if self.theme_store_loaded || self.theme_store_loading {
             return;
@@ -291,12 +291,13 @@ impl SettingsWindow {
         self.theme_store_loading = true;
         self.theme_store_error = None;
         self.theme_store_from_cache = false;
-        let api_base = Self::theme_store_api_base_url();
+        let registry_url = Self::theme_store_registry_url();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result =
-                smol::unblock(move || theme_store::fetch_theme_store_themes_blocking(&api_base))
-                    .await;
+            let result = smol::unblock(move || {
+                theme_store::fetch_theme_store_themes_blocking(&registry_url)
+            })
+            .await;
 
             let _ = cx.update(|cx| {
                 this.update(cx, |view, cx| {
@@ -423,55 +424,6 @@ impl SettingsWindow {
         self.theme_store_installed_versions
             .insert(slug.trim().to_ascii_lowercase(), version.to_string());
         cx.notify();
-    }
-
-    fn refresh_theme_store_auth_user(&mut self, cx: &mut Context<Self>) {
-        if self.theme_store_auth_loading {
-            return;
-        }
-        let Some(session) = self.theme_store_auth_session.clone() else {
-            return;
-        };
-
-        self.theme_store_auth_loading = true;
-        self.theme_store_auth_error = None;
-        let api_base = Self::theme_store_api_base_url();
-
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let session_token = session.session_token.clone();
-            let result = smol::unblock(move || {
-                theme_store::fetch_auth_user_blocking(&api_base, &session_token).map(|user| {
-                    ThemeStoreAuthSession {
-                        session_token,
-                        user,
-                    }
-                })
-            })
-            .await;
-
-            let _ = cx.update(|cx| {
-                this.update(cx, |view, cx| {
-                    view.theme_store_auth_loading = false;
-                    match result {
-                        Ok(session) => {
-                            if let Err(error) = theme_store::persist_auth_session(&session) {
-                                log::error!("Failed to persist auth session: {}", error);
-                                view.theme_store_auth_error = Some(error);
-                            } else {
-                                view.theme_store_auth_error = None;
-                            }
-                            view.theme_store_auth_session = Some(session);
-                        }
-                        Err(error) => {
-                            log::error!("Failed to refresh theme store auth session: {}", error);
-                            view.theme_store_auth_error = Some(error);
-                        }
-                    }
-                    cx.notify();
-                })
-            });
-        })
-        .detach();
     }
 
     fn logout_theme_store_user(&mut self, cx: &mut Context<Self>) {

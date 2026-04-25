@@ -5,7 +5,7 @@ use termy_command_core::{
     default_resolved_keybinds, parse_keybind_directives_from_iter, resolve_keybinds,
 };
 use termy_config_core::{AppConfig, config_path};
-use termy_theme_core::{ANSI_COLOR_NAMES, format_hex};
+use termy_theme_core::{ANSI_COLOR_NAMES, ThemeColors, format_hex, parse_theme_colors_json};
 
 pub fn config_file_path() -> Result<PathBuf, String> {
     config_path().ok_or_else(|| "Could not determine config directory".to_string())
@@ -31,15 +31,12 @@ pub fn list_color_lines() -> Vec<String> {
     let theme_id = active_theme_id();
     let mut lines = vec![format!("Theme: {}", theme_id), String::new()];
 
-    let colors = match termy_themes::resolve_theme(&theme_id) {
-        Some(colors) => colors,
-        None => {
-            lines.push(format!("Unknown theme: {}", theme_id));
-            lines.push("Using terminal default fallback colors".to_string());
-            lines.push(String::new());
-            terminal_default_theme_colors()
-        }
-    };
+    let colors = active_theme_colors().unwrap_or_else(|error| {
+        lines.push(error);
+        lines.push("Using terminal default fallback colors".to_string());
+        lines.push(String::new());
+        terminal_default_theme_colors()
+    });
 
     lines.push(format!("foreground = {}", format_hex(colors.foreground)));
     lines.push(format!("background = {}", format_hex(colors.background)));
@@ -92,7 +89,22 @@ pub fn active_theme_id() -> String {
     load_config_for_providers().theme
 }
 
-fn load_config_for_providers() -> AppConfig {
+pub fn active_theme_colors() -> Result<ThemeColors, String> {
+    let config = load_config_for_providers();
+    let theme_id = config.theme.clone();
+    let mut colors = if theme_id.eq_ignore_ascii_case(termy_config_core::SHELL_DECIDE_THEME_ID) {
+        terminal_default_theme_colors()
+    } else {
+        load_installed_theme_colors(&theme_id)
+            .or_else(|| termy_themes::resolve_theme(&theme_id))
+            .ok_or_else(|| format!("Unknown theme: {}", theme_id))?
+    };
+
+    apply_custom_colors(&mut colors, &config.colors);
+    Ok(colors)
+}
+
+pub fn load_config_for_providers() -> AppConfig {
     if let Some(path) = config_path()
         && let Ok(contents) = std::fs::read_to_string(path)
     {
@@ -124,7 +136,7 @@ fn action_lines_for_capabilities(tmux_enabled: bool, install_cli_available: bool
         .collect()
 }
 
-fn terminal_default_theme_colors() -> termy_themes::ThemeColors {
+pub fn terminal_default_theme_colors() -> termy_themes::ThemeColors {
     use termy_themes::Rgb8;
 
     termy_themes::ThemeColors {
@@ -150,6 +162,42 @@ fn terminal_default_theme_colors() -> termy_themes::ThemeColors {
         background: Rgb8::new(0x1E, 0x1E, 0x1E),
         cursor: Rgb8::new(0xFF, 0xFF, 0xFF),
     }
+}
+
+fn load_installed_theme_colors(theme_id: &str) -> Option<ThemeColors> {
+    let normalized = termy_theme_core::normalize_theme_id(theme_id);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let config_path = config_path()?;
+    let theme_path = config_path
+        .parent()?
+        .join("themes")
+        .join(format!("{normalized}.json"));
+    let contents = std::fs::read_to_string(theme_path).ok()?;
+    parse_theme_colors_json(&contents).ok()
+}
+
+fn apply_custom_colors(colors: &mut ThemeColors, custom: &termy_config_core::CustomColors) {
+    if let Some(color) = custom.foreground {
+        colors.foreground = convert_config_color(color);
+    }
+    if let Some(color) = custom.background {
+        colors.background = convert_config_color(color);
+    }
+    if let Some(color) = custom.cursor {
+        colors.cursor = convert_config_color(color);
+    }
+    for (index, color) in custom.ansi.iter().enumerate() {
+        if let Some(color) = color {
+            colors.ansi[index] = convert_config_color(*color);
+        }
+    }
+}
+
+fn convert_config_color(color: termy_config_core::Rgb8) -> termy_theme_core::Rgb8 {
+    termy_theme_core::Rgb8::new(color.r, color.g, color.b)
 }
 
 fn keybind_lines_for_tmux_enabled(

@@ -716,7 +716,7 @@ impl SettingsWindow {
         let button_hover_text = self.contrasting_text_for_fill(accent_hover, bg_card);
         let button_border = self.accent_with_alpha(0.45);
         let install_hover_bg = self.accent_with_alpha(0.18);
-        let store_url = "https://termy.run/themes";
+        let store_url = "https://github.com/termy-org/themes";
         let query_text = self.theme_store_search_state.text().to_string();
         let has_query = !query_text.trim().is_empty();
         let is_search_active = self.theme_store_search_active;
@@ -880,7 +880,7 @@ impl SettingsWindow {
                     .border_color(border_color)
                     .text_sm()
                     .text_color(text_muted)
-                    .child("Loading themes from store...")
+                    .child("Loading themes from registry...")
                     .into_any_element(),
             );
         } else if let Some(error) = self.theme_store_error.clone() {
@@ -928,7 +928,7 @@ impl SettingsWindow {
                         .border_color(border_color)
                         .text_sm()
                         .text_color(text_muted)
-                        .child("Showing cached themes (API unavailable)")
+                        .child("Showing cached themes (registry unavailable)")
                         .into_any_element(),
                 );
             }

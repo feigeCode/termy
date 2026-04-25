@@ -7348,7 +7348,7 @@ dependencies = [
 
 [[package]]
 name = "termy"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7406,6 +7406,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "termy_theme_core",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -7436,7 +7437,7 @@ dependencies = [
 
 [[package]]
 name = "termy_cli"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "anyhow",
  "clap",
@@ -7445,6 +7446,9 @@ dependencies = [
  "crossterm",
  "dirs 6.0.0",
  "ratatui",
+ "semver",
+ "serde_json",
+ "sha2",
  "termy_cli_install_core",
  "termy_command_core",
  "termy_config_core",
@@ -7517,6 +7521,10 @@ dependencies = [
 [[package]]
 name = "termy_theme_core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "termy_themes"

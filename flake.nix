@@ -10,7 +10,7 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" ] (
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux"] (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -66,7 +66,7 @@
             homepage = "https://github.com/termy-org/termy";
             license = pkgs.lib.licenses.mit;
             mainProgram = "termy";
-            platforms = [ "x86_64-linux" ];
+            platforms = [ "x86_64-linux" "aarch64-linux"];
           };
         };
       in

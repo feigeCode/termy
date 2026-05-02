@@ -679,9 +679,9 @@ impl TerminalView {
                         tab_primary_extent: strip_width,
                         tab_cross_extent: tab_height,
                         tab_strokes: TabItemStrokeRects {
-                            top: chrome_layout.tab_strokes[index].top_boundary,
-                            bottom: chrome_layout.tab_strokes[index].bottom_boundary,
-                            left: Some(chrome_layout.tab_strokes[index].left),
+                            top: None,
+                            bottom: None,
+                            left: None,
                             right: None,
                         },
                         label,

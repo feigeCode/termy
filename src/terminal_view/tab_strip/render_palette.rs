@@ -10,9 +10,7 @@ pub(super) struct TabStripPalette {
     pub(super) active_tab_text: gpui::Rgba,
     pub(super) inactive_tab_text: gpui::Rgba,
     pub(super) close_button_bg: gpui::Rgba,
-    pub(super) close_button_border: gpui::Rgba,
     pub(super) close_button_hover_bg: gpui::Rgba,
-    pub(super) close_button_hover_border: gpui::Rgba,
     pub(super) close_button_hover_text: gpui::Rgba,
     pub(super) switch_hint_bg: gpui::Rgba,
     pub(super) switch_hint_border: gpui::Rgba,
@@ -40,23 +38,19 @@ impl TerminalView {
         let mut inactive_tab_bg = colors.foreground;
         inactive_tab_bg.a = 0.0;
         let mut active_tab_bg = colors.foreground;
-        active_tab_bg.a = self.scaled_chrome_surface_alpha(0.18);
+        active_tab_bg.a = self.scaled_chrome_surface_alpha(0.10);
         let mut hovered_tab_bg = colors.foreground;
-        hovered_tab_bg.a = self.scaled_chrome_surface_alpha(0.08);
+        hovered_tab_bg.a = self.scaled_chrome_surface_alpha(0.05);
         let mut active_tab_text = colors.foreground;
         active_tab_text.a = 0.95;
         let mut inactive_tab_text = colors.foreground;
-        inactive_tab_text.a = 0.58;
+        inactive_tab_text.a = 0.55;
         let mut close_button_bg = colors.foreground;
         close_button_bg.a = 0.0;
-        let mut close_button_border = colors.foreground;
-        close_button_border.a = 0.0;
         let mut close_button_hover_bg = colors.foreground;
-        close_button_hover_bg.a = self.scaled_chrome_surface_alpha(0.14);
-        let mut close_button_hover_border = colors.foreground;
-        close_button_hover_border.a = self.scaled_chrome_neutral_border_alpha(0.08);
+        close_button_hover_bg.a = self.scaled_chrome_surface_alpha(0.12);
         let mut close_button_hover_text = colors.foreground;
-        close_button_hover_text.a = 0.98;
+        close_button_hover_text.a = 1.0;
         let now = Instant::now();
         let hint_progress = self.tab_switch_hint_progress(now);
         let mut switch_hint_bg = colors.cursor;
@@ -70,15 +64,15 @@ impl TerminalView {
         let mut tabbar_new_tab_bg = colors.foreground;
         tabbar_new_tab_bg.a = 0.0;
         let mut tabbar_new_tab_hover_bg = colors.foreground;
-        tabbar_new_tab_hover_bg.a = self.scaled_chrome_surface_alpha(0.12);
+        tabbar_new_tab_hover_bg.a = self.scaled_chrome_surface_alpha(0.08);
         let mut tabbar_new_tab_border = colors.foreground;
         tabbar_new_tab_border.a = 0.0;
         let mut tabbar_new_tab_hover_border = colors.foreground;
-        tabbar_new_tab_hover_border.a = self.scaled_chrome_neutral_border_alpha(0.10);
+        tabbar_new_tab_hover_border.a = 0.0;
         let mut tabbar_new_tab_text = colors.foreground;
-        tabbar_new_tab_text.a = 0.9;
-        let mut tabbar_new_tab_hover_text = colors.cursor;
-        tabbar_new_tab_hover_text.a = 0.98;
+        tabbar_new_tab_text.a = 0.7;
+        let mut tabbar_new_tab_hover_text = colors.foreground;
+        tabbar_new_tab_hover_text.a = 1.0;
 
         TabStripPalette {
             tab_stroke_color,
@@ -88,9 +82,7 @@ impl TerminalView {
             active_tab_text,
             inactive_tab_text,
             close_button_bg,
-            close_button_border,
             close_button_hover_bg,
-            close_button_hover_border,
             close_button_hover_text,
             switch_hint_bg,
             switch_hint_border,

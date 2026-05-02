@@ -9,7 +9,7 @@ use super::hints::TabSwitchHintState;
 use super::layout::TabStripLayoutSnapshot;
 
 const TAB_TITLE_WIDTH_CACHE_MAX_ENTRIES: usize = 512;
-const TAB_INTERACTION_ANIMATION_DURATION: Duration = Duration::from_millis(140);
+const TAB_INTERACTION_ANIMATION_DURATION: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabStripOrientation {

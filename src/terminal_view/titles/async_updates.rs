@@ -21,7 +21,8 @@ impl TerminalView {
             return false;
         }
 
-        let explicit_title = Self::truncate_tab_title(&explicit_title);
+        let explicit_title =
+            Self::truncate_tab_title(&Self::shorten_shell_tab_title(&explicit_title));
         if self.tabs[index].explicit_title.as_deref() == Some(explicit_title.as_str()) {
             let was_prediction = self.tabs[index].explicit_title_is_prediction;
             self.tabs[index].explicit_title_is_prediction = false;
@@ -46,7 +47,9 @@ impl TerminalView {
 
         let tab = &mut self.tabs[index];
         tab.pending_command_token = tab.pending_command_token.wrapping_add(1);
-        tab.pending_command_title = Some(Self::truncate_tab_title(&command_title));
+        tab.pending_command_title = Some(Self::truncate_tab_title(
+            &Self::shorten_shell_tab_title(&command_title),
+        ));
         let token = tab.pending_command_token;
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {

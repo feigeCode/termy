@@ -23,6 +23,7 @@ pub(super) struct TabItemRenderInput {
     pub(super) drop_marker_side: Option<TabDropMarkerSide>,
     pub(super) open_anim_progress: Option<f32>,
     pub(super) hover_progress: f32,
+    #[allow(dead_code)]
     pub(super) press_progress: f32,
     pub(super) progress_state: ProgressState,
 }
@@ -99,8 +100,6 @@ impl TerminalView {
                         .justify_center()
                         .rounded(px(TAB_CLOSE_CHIP_RADIUS))
                         .bg(palette.close_button_bg)
-                        .border_1()
-                        .border_color(palette.close_button_border)
                         .text_color(close_text_color)
                         .text_size(px(7.5))
                         .font_weight(FontWeight::BOLD)
@@ -120,7 +119,6 @@ impl TerminalView {
                         .hover(move |style| {
                             style
                                 .bg(palette.close_button_hover_bg)
-                                .border_color(palette.close_button_hover_border)
                                 .text_color(palette.close_button_hover_text)
                         })
                         .cursor_pointer()
@@ -151,8 +149,6 @@ impl TerminalView {
                     .justify_center()
                     .rounded(px(TAB_CLOSE_CHIP_RADIUS))
                     .bg(palette.close_button_bg)
-                    .border_1()
-                    .border_color(palette.close_button_border)
                     .text_color(close_text_color)
                     .text_size(px(close_font_size))
                     .font_weight(FontWeight::MEDIUM)
@@ -181,7 +177,6 @@ impl TerminalView {
                     .hover(move |style| {
                         style
                             .bg(palette.close_button_hover_bg)
-                            .border_color(palette.close_button_hover_border)
                             .text_color(palette.close_button_hover_text)
                     })
                     .cursor_pointer()
@@ -267,11 +262,9 @@ impl TerminalView {
         if input.is_drag_source {
             hover_tab_bg.a = (hover_tab_bg.a + self.scaled_chrome_surface_alpha(0.06)).min(1.0);
         }
-        let press_offset_y = input.press_progress.clamp(0.0, 1.0) * 1.0;
-        let hover_offset_y = input.hover_progress.clamp(0.0, 1.0) * -1.0;
         let drag_offset_y = if input.is_drag_source { -1.0 } else { 0.0 };
         let visual_offset_y = if orientation == TabStripOrientation::Horizontal {
-            drag_offset_y + hover_offset_y + press_offset_y
+            drag_offset_y
         } else {
             0.0
         };
@@ -342,6 +335,7 @@ impl TerminalView {
                     .top(px(TAB_DROP_MARKER_INSET_Y))
                     .w(px(TAB_DROP_MARKER_WIDTH))
                     .h(px(marker_height))
+                    .rounded_full()
                     .bg(palette.tab_drop_marker_color)
             }
             TabStripOrientation::Vertical => {
@@ -359,22 +353,23 @@ impl TerminalView {
                         - (TAB_DROP_MARKER_INSET_Y * 2.0))
                         .max(0.0)))
                     .h(px(TAB_DROP_MARKER_WIDTH))
+                    .rounded_full()
                     .bg(palette.tab_drop_marker_color)
             }
         });
 
-        let title_trailing_padding = if orientation == TabStripOrientation::Horizontal {
+        let title_leading_padding = if orientation == TabStripOrientation::Horizontal {
             input.close_slot_width
         } else {
             0.0
         };
-        let trailing_accessory = (input.close_slot_width > 0.0)
+        let leading_accessory = (input.close_slot_width > 0.0)
             .then_some(accessory_slot)
             .map(|accessory| {
                 if orientation == TabStripOrientation::Horizontal {
                     div()
                         .absolute()
-                        .right(px(input.text_padding_x))
+                        .left(px(input.text_padding_x))
                         .top_0()
                         .bottom_0()
                         .w(px(input.close_slot_width))
@@ -395,7 +390,7 @@ impl TerminalView {
                     .min_w(px(0.0))
                     .h_full()
                     .relative()
-                    .pr(px(title_trailing_padding))
+                    .pl(px(title_leading_padding))
                     .child(if input.is_renaming {
                         self.render_inline_input_layer(
                             Font {
@@ -426,7 +421,7 @@ impl TerminalView {
                         title_text.child(input.label).into_any_element()
                     }),
             )
-            .children(trailing_accessory)
+            .children(leading_accessory)
             .children(trailing_divider_cover.map(|cover_color| {
                 div()
                     .absolute()

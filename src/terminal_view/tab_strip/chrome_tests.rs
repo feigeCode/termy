@@ -301,11 +301,10 @@ fn vertical_active_middle_suppresses_content_divider_only_across_active_span() {
         .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
         .collect();
 
-    // Active tab: top=32, bottom_edge=63, bottom divider starts at 64
-    // Top divider: 0 to 32, Bottom divider: 64 to 96
-    // No divider in 32..64
-    let active_start = 32;
-    let active_end = 64;
+    // Tabs are 32 tall with TAB_ITEM_GAP between rows; active row 1 starts after
+    // tab 0 + gap. Top divider ends at active_span.top, bottom resumes after it.
+    let active_start = 32 + TAB_ITEM_GAP as i32;
+    let active_end = active_start + 32;
     for y in 0..layout.content_height as i32 {
         if (active_start..active_end).contains(&y) {
             assert!(
@@ -358,9 +357,8 @@ fn vertical_active_last_suppresses_divider_for_last_tab_only() {
         .flat_map(|stroke| (stroke.y as i32)..((stroke.y + stroke.h) as i32))
         .collect();
 
-    // Divider should exist from 0 to just before active tab (y=32)
-    // Active tab starts at y=32, so divider should be suppressed from there
-    let active_start = 32;
+    // Active tab starts after tab 0 + TAB_ITEM_GAP; divider runs up to that point.
+    let active_start = 32 + TAB_ITEM_GAP as i32;
     for y in 0..layout.content_height as i32 {
         if y < active_start {
             assert!(

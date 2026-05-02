@@ -284,7 +284,7 @@ impl TerminalView {
             .h(px(TABBAR_HEIGHT))
             .flex()
             .relative()
-            .items_end()
+            .items_center()
             .gap(px(TAB_ITEM_GAP))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.on_tabs_content_mouse_move(TabStripOrientation::Horizontal, event, window, cx);

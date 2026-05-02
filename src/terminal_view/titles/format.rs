@@ -10,6 +10,36 @@ impl TerminalView {
         normalized
     }
 
+    /// Shorten a shell-sourced tab title to its working-directory basename.
+    /// Strips a leading `user@host:` prefix and returns the last path segment.
+    /// Non-path titles (running commands, custom labels) pass through unchanged.
+    pub(crate) fn shorten_shell_tab_title(title: &str) -> String {
+        let path_part = match title.split_once(':') {
+            Some((prefix, suffix))
+                if prefix.contains('@')
+                    && (suffix.starts_with('/') || suffix.starts_with('~')) =>
+            {
+                suffix
+            }
+            _ => title,
+        };
+
+        if !(path_part.starts_with('/') || path_part.starts_with('~')) {
+            return title.to_string();
+        }
+
+        let trimmed = path_part.trim_end_matches(|c: char| c == '/' || c == '\\');
+        let basename = trimmed
+            .rsplit(|c: char| c == '/' || c == '\\')
+            .next()
+            .unwrap_or("");
+        if basename.is_empty() {
+            path_part.to_string()
+        } else {
+            basename.to_string()
+        }
+    }
+
     fn is_path_like_tab_title(title: &str) -> bool {
         title.contains('/') || title.contains('\\')
     }

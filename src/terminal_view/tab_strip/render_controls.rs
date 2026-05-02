@@ -52,14 +52,13 @@ impl TerminalView {
         let corner_radius = TABBAR_NEW_TAB_BUTTON_RADIUS.min(button_size * 0.5);
         let icon_size = icon_size.min(button_size);
 
+        let _ = (border, hover_border);
         div()
             .id(id)
             .w(px(button_size))
             .h(px(button_size))
             .rounded(px(corner_radius))
             .bg(bg)
-            .border_1()
-            .border_color(border)
             .text_color(text)
             .cursor_pointer()
             .on_mouse_down(
@@ -69,12 +68,7 @@ impl TerminalView {
                     cx.stop_propagation();
                 }),
             )
-            .hover(move |style| {
-                style
-                    .bg(hover_bg)
-                    .border_color(hover_border)
-                    .text_color(hover_text)
-            })
+            .hover(move |style| style.bg(hover_bg).text_color(hover_text))
             .child(
                 div()
                     .size_full()

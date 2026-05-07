@@ -237,6 +237,15 @@ impl TmuxClient {
             .map(|_| ())
     }
 
+    pub fn send_command(&self, command: &str) -> Result<String> {
+        self.send_control_command_wait(command)
+            .map(|result| result.output)
+    }
+
+    pub fn send_command_async(&self, command: &str) -> Result<()> {
+        self.send_control_command_async(command)
+    }
+
     pub fn session_name(&self) -> &str {
         self.session_name.as_str()
     }
@@ -960,6 +969,20 @@ mod tests {
             split_horizontal_args("%7", None),
             vec!["split-window", "-t", "%7"]
         );
+    }
+
+    #[test]
+    fn send_command_on_disconnected_channel_returns_error() {
+        let client = test_tmux_client(TmuxShutdownMode::DetachOnly);
+        let result = client.send_command("list-windows");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn send_command_async_on_disconnected_channel_returns_error() {
+        let client = test_tmux_client(TmuxShutdownMode::DetachOnly);
+        let result = client.send_command_async("list-windows");
+        assert!(result.is_err());
     }
 
     #[cfg(unix)]

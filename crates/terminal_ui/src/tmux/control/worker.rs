@@ -1,7 +1,5 @@
 #[cfg(unix)]
-use std::fs::File;
-#[cfg(unix)]
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 
 #[cfg(unix)]
 use flume::{Receiver, Sender, TrySendError};
@@ -24,20 +22,26 @@ use super::{
 
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_control_threads(
-    mut child: std::process::Child,
-    child_stdin: File,
-    child_stdout: File,
+pub(crate) fn spawn_control_threads<W, R>(
+    child: Option<std::process::Child>,
+    child_stdin: W,
+    child_stdout: R,
     request_rx: Receiver<ControlRequest>,
     pending_tx: Sender<PendingCommand>,
     pending_rx: Receiver<PendingCommand>,
     notifications_tx: Sender<TmuxNotification>,
     fatal_exit_tx: Sender<Option<String>>,
     event_wakeup_tx: Option<Sender<()>>,
-) {
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+)
+where
+    W: Write + Send + 'static,
+    R: Read + Send + 'static,
+{
+    if let Some(mut child) = child {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
 
     std::thread::spawn(move || {
         let mut stdin = child_stdin;

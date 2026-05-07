@@ -13,6 +13,9 @@ use super::command::{
 };
 use super::control::{ControlRequest, NotificationCoalescer, try_enqueue_control_request};
 #[cfg(unix)]
+use std::io::{Read, Write};
+
+#[cfg(unix)]
 use super::control::{
     FATAL_EXIT_QUEUE_BOUND, NOTIFICATION_QUEUE_BOUND, PENDING_QUEUE_BOUND, REQUEST_QUEUE_BOUND,
     spawn_control_threads,
@@ -107,7 +110,7 @@ impl TmuxClient {
         let control_client_pid = child.id();
 
         spawn_control_threads(
-            child,
+            Some(child),
             child_stdin,
             child_stdout,
             request_rx,
@@ -147,6 +150,76 @@ impl TmuxClient {
         event_wakeup_tx: Option<Sender<()>>,
     ) -> Result<Self> {
         let _ = (config, cols, rows, initial_working_dir, event_wakeup_tx);
+        Err(anyhow!(
+            "tmux control mode is only supported on unix targets"
+        ))
+    }
+
+    #[cfg(unix)]
+    pub fn from_streams<W, R>(
+        stdin: W,
+        stdout: R,
+        session_name: String,
+        tmux_binary: String,
+        socket_target: TmuxSocketTarget,
+        event_wakeup_tx: Option<Sender<()>>,
+    ) -> Result<Self>
+    where
+        W: Write + Send + 'static,
+        R: Read + Send + 'static,
+    {
+        if session_name.trim().is_empty() {
+            return Err(anyhow!("tmux session name cannot be empty"));
+        }
+
+        let (request_tx, request_rx) = flume::bounded::<ControlRequest>(REQUEST_QUEUE_BOUND);
+        let (pending_tx, pending_rx) = flume::bounded(PENDING_QUEUE_BOUND);
+        let (notifications_tx, notifications_rx) =
+            flume::bounded::<TmuxNotification>(NOTIFICATION_QUEUE_BOUND);
+        let (fatal_exit_tx, fatal_exit_rx) =
+            flume::bounded::<Option<String>>(FATAL_EXIT_QUEUE_BOUND);
+
+        spawn_control_threads(
+            None,
+            stdin,
+            stdout,
+            request_rx,
+            pending_tx,
+            pending_rx,
+            notifications_tx,
+            fatal_exit_tx,
+            event_wakeup_tx,
+        );
+
+        Ok(Self {
+            tmux_binary,
+            session_name,
+            socket_target,
+            show_active_pane_border: false,
+            control_client_pid: 0,
+            shutdown_mode_on_drop: TmuxShutdownMode::DetachOnly,
+            shutdown_in_progress: AtomicBool::new(false),
+            shutdown_completed: AtomicBool::new(false),
+            request_tx,
+            notifications_rx,
+            fatal_exit_rx,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub fn from_streams<W, R>(
+        stdin: W,
+        stdout: R,
+        session_name: String,
+        tmux_binary: String,
+        socket_target: TmuxSocketTarget,
+        event_wakeup_tx: Option<Sender<()>>,
+    ) -> Result<Self>
+    where
+        W: std::io::Write + Send + 'static,
+        R: std::io::Read + Send + 'static,
+    {
+        let _ = (stdin, stdout, session_name, tmux_binary, socket_target, event_wakeup_tx);
         Err(anyhow!(
             "tmux control mode is only supported on unix targets"
         ))
@@ -361,6 +434,14 @@ impl TmuxClient {
     }
 
     fn shutdown_impl(&self, mode: TmuxShutdownMode) -> Result<()> {
+        // Stream-based clients (pid == 0) have no local process to teardown.
+        // Downgrade to detach-only to avoid running local tmux commands against
+        // a potentially unrelated or nonexistent session.
+        let mode = if self.control_client_pid == 0 {
+            TmuxShutdownMode::DetachOnly
+        } else {
+            mode
+        };
         run_shutdown_actions(
             mode,
             self.session_name.as_str(),
@@ -386,6 +467,9 @@ impl TmuxClient {
     }
 
     fn resolve_control_client_name_by_pid(&self) -> Result<Option<String>> {
+        if self.control_client_pid == 0 {
+            return Ok(None);
+        }
         let output =
             match self.run_tmux_command(&["list-clients", "-F", "#{client_pid}\t#{client_name}"]) {
                 Ok(output) => output,
@@ -876,6 +960,52 @@ mod tests {
             split_horizontal_args("%7", None),
             vec!["split-window", "-t", "%7"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_streams_creates_client_with_in_memory_streams() {
+        let stdin = Vec::<u8>::new();
+        let stdout = std::io::Cursor::new(Vec::<u8>::new());
+
+        let client = TmuxClient::from_streams(
+            stdin,
+            stdout,
+            "test-remote".to_string(),
+            "tmux".to_string(),
+            TmuxSocketTarget::Default,
+            None,
+        )
+        .expect("from_streams should succeed with valid streams");
+
+        assert_eq!(client.session_name(), "test-remote");
+        assert_eq!(client.control_client_pid, 0);
+        assert!(matches!(
+            client.shutdown_mode_on_drop,
+            TmuxShutdownMode::DetachOnly
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_streams_rejects_empty_session_name() {
+        let stdin = Vec::<u8>::new();
+        let stdout = std::io::Cursor::new(Vec::<u8>::new());
+
+        let result = TmuxClient::from_streams(
+            stdin,
+            stdout,
+            "  ".to_string(),
+            "tmux".to_string(),
+            TmuxSocketTarget::Default,
+            None,
+        );
+
+        let error = match result {
+            Err(e) => e,
+            Ok(_) => panic!("empty session name must be rejected"),
+        };
+        assert!(error.to_string().contains("cannot be empty"));
     }
 
     #[cfg(not(unix))]

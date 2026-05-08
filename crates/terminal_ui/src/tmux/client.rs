@@ -12,10 +12,8 @@ use super::command::{
     next_control_completion_token, send_keys_hex_command, tmux_command_line,
 };
 use super::control::{ControlRequest, NotificationCoalescer, try_enqueue_control_request};
-#[cfg(unix)]
 use std::io::{Read, Write};
 
-#[cfg(unix)]
 use super::control::{
     FATAL_EXIT_QUEUE_BOUND, NOTIFICATION_QUEUE_BOUND, PENDING_QUEUE_BOUND, REQUEST_QUEUE_BOUND,
     spawn_control_threads,
@@ -155,7 +153,6 @@ impl TmuxClient {
         ))
     }
 
-    #[cfg(unix)]
     pub fn from_streams<W, R>(
         stdin: W,
         stdout: R,
@@ -204,25 +201,6 @@ impl TmuxClient {
             notifications_rx,
             fatal_exit_rx,
         })
-    }
-
-    #[cfg(not(unix))]
-    pub fn from_streams<W, R>(
-        stdin: W,
-        stdout: R,
-        session_name: String,
-        tmux_binary: String,
-        socket_target: TmuxSocketTarget,
-        event_wakeup_tx: Option<Sender<()>>,
-    ) -> Result<Self>
-    where
-        W: std::io::Write + Send + 'static,
-        R: std::io::Read + Send + 'static,
-    {
-        let _ = (stdin, stdout, session_name, tmux_binary, socket_target, event_wakeup_tx);
-        Err(anyhow!(
-            "tmux control mode is only supported on unix targets"
-        ))
     }
 
     pub fn set_client_size(&self, cols: u16, rows: u16) -> Result<()> {
@@ -659,7 +637,9 @@ impl TmuxClient {
         let response = self
             .send_control_command_wait_with_timeout(command.as_str(), CONTROL_CAPTURE_TIMEOUT)
             .with_context(|| format!("tmux capture command failed: {command}"))?;
-        Ok(response.output)
+        let unescaped = unescape_tmux_payload(response.output.as_bytes());
+        String::from_utf8(unescaped)
+            .with_context(|| format!("tmux capture response is not valid UTF-8: {command}"))
     }
 
     fn run_control_status_args(&self, args: &[&str]) -> Result<()> {

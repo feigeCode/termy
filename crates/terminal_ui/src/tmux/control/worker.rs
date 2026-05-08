@@ -1,15 +1,10 @@
-#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
 
-#[cfg(unix)]
 use flume::{Receiver, Sender, TrySendError};
 
-#[cfg(unix)]
 use super::super::command::{command_with_completion_token, split_control_completion_token};
-#[cfg(unix)]
 use super::super::types::{TmuxControlError, TmuxNotification};
 
-#[cfg(unix)]
 use super::{
     channel::{
         ActiveControlCommand, ControlRequest, PendingCommand, TrackedPendingCommand,
@@ -20,7 +15,6 @@ use super::{
     parser::{ControlStateEvent, ControlStateMachine},
 };
 
-#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_control_threads<W, R>(
     child: Option<std::process::Child>,
